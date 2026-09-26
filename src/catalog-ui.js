@@ -410,12 +410,31 @@ function decorateConnectors(app) {
       connectorActions(app, entry, slot, chip);
       continue;
     }
+    const oneClick = Boolean(mcpListing(entry.id) && mcpBridge()?.signIn);
+    if (!record?.connected && oneClick && mcpPendingId === entry.id) {
+      // The consent page is open in the browser; the card waits for it.
+      const waiting = element('span', 'connector-chip');
+      waiting.append(element('span', 'status-dot pending'), element('span', 'connector-chip-text', 'Waiting for browser…'));
+      const cancel = element('button', 'button secondary', 'Cancel');
+      cancel.addEventListener('click', () => void cancelMcpSignIn());
+      slot.append(waiting, cancel);
+      continue;
+    }
     if (!record?.connected) {
       const connect = element('button', 'button secondary', 'Connect');
-      connect.addEventListener('click', () => void openConnectorDialog(app, entry));
+      // One-click connectors go straight to the provider's consent page; the others need the dialog.
+      connect.addEventListener('click', () => (oneClick
+        ? void startMcpSignIn(app, entry)
+        : void openConnectorDialog(app, entry)));
       slot.append(connect);
-      slot.append(element('span', 'connector-auth-hint', mcpListing(entry.id) ? 'One-click sign-in'
-        : (oauthAvailable(entry.id) ? 'OAuth or token' : 'Access token')));
+      if (oneClick) {
+        const more = element('button', 'connector-more', 'More options');
+        more.setAttribute('aria-label', `More ways to connect ${entry.name}`);
+        more.addEventListener('click', () => void openConnectorDialog(app, entry));
+        slot.append(more);
+      } else {
+        slot.append(element('span', 'connector-auth-hint', oauthAvailable(entry.id) ? 'OAuth or token' : 'Access token'));
+      }
       continue;
     }
     const chip = element('span', 'connector-chip');
@@ -501,17 +520,23 @@ function renderMcpSection(entry) {
   if (disconnect) disconnect.hidden = !server || pending;
 }
 
-async function startMcpSignIn(app) {
+// Starts the browser sign-in from the card (Connect) or from the dialog.
+async function startMcpSignIn(app, entry = activeConnector) {
   const mcp = mcpBridge();
-  const entry = activeConnector;
   if (!mcp?.signIn || !entry || mcpPendingId === entry.id) return;
+  // Starting a sign-in cancels any other one in main, so only one card waits at a time.
   mcpPendingId = entry.id;
-  renderMcpSection(entry);
+  decorateConnectors(app);
+  if (activeConnector === entry) renderMcpSection(entry);
   const report = (message, toast) => {
     if (activeConnector === entry) setMcpStatus(message);
     else if (toast) app.showToast(`${entry.name}: ${message}`);
   };
-  report(`Approve access in your browser. ScaleMax finishes connecting as soon as ${entry.name} redirects back (up to 5 minutes)…`, false);
+  if (activeConnector === entry) {
+    report(`Approve access in your browser. ScaleMax finishes connecting as soon as ${entry.name} redirects back (up to 5 minutes)…`, false);
+  } else {
+    app.showToast(`Approve ${entry.name} access in your browser…`);
+  }
   try {
     const result = await mcp.signIn({ connectorId: entry.id });
     if (!result?.ok) {
@@ -522,7 +547,7 @@ async function startMcpSignIn(app) {
     const server = result.data;
     if (server.lastStatus === 'ok') {
       report(`Connected. ${toolCountText(server.toolCount)} available in chat.`, false);
-      app.showToast(`${entry.name} connected`);
+      app.showToast(`${entry.name} connected · ${toolCountText(server.toolCount)} in chat`);
     } else {
       report(`Signed in, but connecting failed: ${server.lastError || 'unknown error'}`, true);
     }
@@ -798,7 +823,7 @@ function bindConnectors(app) {
     byId('connector-oauth-form')?.addEventListener('submit', (event) => void startConnectorOAuth(app, event));
     byId('connector-oauth-cancel')?.addEventListener('click', () => void cancelConnectorOAuth());
     byId('connector-oauth-forget')?.addEventListener('click', () => void forgetConnectorOAuth(app));
-    byId('connector-mcp-start')?.addEventListener('click', () => void startMcpSignIn(app));
+    byId('connector-mcp-start')?.addEventListener('click', () => void startMcpSignIn(app, activeConnector));
     byId('connector-mcp-cancel')?.addEventListener('click', () => void cancelMcpSignIn());
     byId('connector-mcp-disconnect')?.addEventListener('click', () => void disconnectMcp(app));
     byId('connector-register-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.registerUrl, 'Link'));

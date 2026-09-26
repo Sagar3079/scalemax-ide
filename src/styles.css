@@ -2335,6 +2335,23 @@ input[type="range"] {
   color: var(--sm-text-weak);
 }
 
+/* Text-style link to the connector dialog next to a one-click Connect button. */
+.connector-more {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--sm-text-weak);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.connector-more:hover {
+  color: var(--sm-text-strong);
+}
+
 .detail-content {
   display: flex;
   flex-direction: column;
