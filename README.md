@@ -21,7 +21,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
   - **Chat** — the chat-first workspace with Working/Coding modes and starting-point chips
   - **Workspace** — an IDE layout: file tree with filter and Git decorations, tabbed editor with syntax highlighting, Terminal / Git changes / Diff panel, resizable panes
   - **Assistant** — provider connection, model catalog with per-model toggles, system prompt, temperature, permissions and MCP servers
-  - **Experts & resources** — animated expert characters, prompt templates, your own custom experts and skills, community references and 40 connectors (OAuth sign-in or access token)
+  - **Experts & resources** — animated expert characters, prompt templates, your own custom experts and skills, community references and 40 connectors (one-click sign-in for 14 of them, otherwise OAuth with your own app or an access token)
   - **Automation** — once, hourly, daily, weekly, monthly or every-N-minutes schedules with run now, pause/resume, edit and run history
   - **Preferences & about** — theme, local data and app information
 - **Search across tasks** with an overlay, plus a collapsible sidebar
@@ -115,6 +115,8 @@ scalemax-ide/
 │   ├── oauth.cjs         # loopback OAuth 2.0 engine (PKCE, token exchange, refresh)
 │   ├── oauth-catalog.cjs # provider OAuth endpoints and rules (main process only)
 │   ├── mcp.cjs           # MCP client: stdio + Streamable HTTP servers
+│   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
+│   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
 │   ├── tool-loop.cjs     # chat tool-calling loop over MCP tools
 │   ├── state.cjs         # atomic, validated JSON state store
 │   └── workspace.cjs     # project folder access: list, read, write, Git, commands
@@ -124,6 +126,7 @@ scalemax-ide/
 │   ├── catalog-ui.js     # catalog filters, details, connectors and OAuth dialog
 │   ├── custom-ui.js      # create/edit custom experts and skills
 │   ├── mcp-ui.js         # MCP server management
+│   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)
 │   ├── avatars.js        # animated expert characters (SVG)
 │   ├── data.js           # experts, skills, community references, connectors
 │   ├── index.html        # single-page shell with all six views

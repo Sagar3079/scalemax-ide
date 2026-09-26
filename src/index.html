@@ -370,7 +370,7 @@
               <div id="community-list" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="connectors-title">
-              <div class="catalog-heading"><div><h2 id="connectors-title">40 connectors</h2></div><span class="small-label">OAuth or access token</span></div>
+              <div class="catalog-heading"><div><h2 id="connectors-title">40 connectors</h2></div><span class="small-label">One-click sign-in, OAuth or access token</span></div>
               <div id="connectors-list" class="catalog-grid"></div>
             </section>
           </div>
@@ -445,7 +445,18 @@
     <div class="dialog-body">
       <p id="connector-dialog-description" class="body-copy"></p>
       <p id="connector-current" class="connector-current" role="status" aria-live="polite" hidden></p>
-
+      <section id="connector-mcp-section" class="connector-section connector-recommended" aria-labelledby="connector-mcp-title" hidden>
+        <div class="connector-section-head"><h3 id="connector-mcp-title">One-click sign-in</h3><span class="badge">Recommended</span></div>
+        <p id="connector-mcp-copy" class="status-text"></p>
+        <div class="button-row">
+          <button id="connector-mcp-start" class="button primary" type="button">Sign in</button>
+          <button id="connector-mcp-cancel" class="button secondary" type="button" hidden>Cancel sign-in</button>
+          <button id="connector-mcp-disconnect" class="button danger" type="button" hidden>Disconnect</button>
+        </div>
+        <p id="connector-mcp-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+      </section>
+      <details id="connector-advanced" class="connector-advanced" open>
+      <summary id="connector-advanced-summary">Sign-in options</summary>
       <section id="connector-oauth-section" class="connector-section" aria-labelledby="connector-oauth-title" hidden>
         <div class="connector-section-head"><h3 id="connector-oauth-title">Sign in with OAuth</h3><span id="connector-oauth-badge" class="badge"></span></div>
         <p class="status-text">OAuth needs an app registration of your own with the provider. ScaleMax does not ship shared client IDs.</p>
@@ -494,6 +505,7 @@
           <p id="connector-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
         </form>
       </section>
+      </details>
     </div>
   </dialog>
 

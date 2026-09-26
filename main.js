@@ -303,7 +303,14 @@ const mcpChannels = {
   'mcp:save': (_event, input) => mcp.save(input),
   'mcp:remove': (_event, input) => mcp.remove(input),
   'mcp:test': (_event, input) => mcp.test(input),
-  'mcp:tools': (_event, input) => mcp.listTools(input)
+  'mcp:tools': (_event, input) => mcp.listTools(input),
+  // Zero-setup sign-in (MCP authorization + dynamic client registration). The renderer passes a
+  // connector id (resolved by lib/mcp-directory.cjs) or a saved server id, never a URL; only
+  // https consent pages reach shell.openExternal. Tokens never cross the bridge.
+  'mcp:oauth-start': (_event, input) => mcp.startOAuth(input, {
+    openExternal: (url) => shell.openExternal(url)
+  }),
+  'mcp:oauth-cancel': () => mcp.cancelOAuth()
 };
 
 for (const [channel, run] of Object.entries(mcpChannels)) {

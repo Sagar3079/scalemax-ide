@@ -158,7 +158,20 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * @param {{id: string}} input
      * @returns {Promise<{ok: boolean, data?: Array<{name: string, title: string, description: string, readOnly: boolean}>, error?: object}>}
      */
-    tools: (input) => ipcRenderer.invoke('mcp:tools', input)
+    tools: (input) => ipcRenderer.invoke('mcp:tools', input),
+
+    /**
+     * One-click sign-in: opens the service's consent page in the browser, registers ScaleMax
+     * automatically (no OAuth app, client ID or callback URL needed), then connects the server.
+     * Pass a connector id for the built-in directory, or the id of a saved HTTP server.
+     * Starting another sign-in cancels the one in progress. Tokens are never returned.
+     * @param {{connectorId: string} | {id: string}} input
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} the sanitized list entry
+     */
+    signIn: (input) => ipcRenderer.invoke('mcp:oauth-start', input),
+
+    /** @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
+    cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel')
   },
 
   dialog: {

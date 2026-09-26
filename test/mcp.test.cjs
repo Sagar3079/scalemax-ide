@@ -6,6 +6,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createMcpManager, McpError } = require('../lib/mcp.cjs');
+const { OAuthError } = require('../lib/oauth.cjs');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.cjs');
 const SECRET = 'sk-live-super-secret-value-123456';
@@ -202,6 +203,8 @@ test('save encrypts env secrets and list() exposes key names only', () => {
     connected: false,
     serverInfo: null,
     updatedAt: 1_700_000_000_000,
+    auth: null,
+    signInPending: false,
   });
   const record = store.snapshot().mcpServers['my-server'];
   assert.equal(record.schemaVersion, 1);
@@ -759,4 +762,256 @@ test('a tool call that never answers times out and is cancelled on the server', 
   assert.deepEqual(cancelled.body.params, { requestId: call.body.id, reason: 'Request timed out.' });
   // A timeout is not a dead session: the client stays connected.
   assert.equal(mcp.list()[0].connected, true);
+});
+
+// ---- One-click sign-in (MCP authorization) --------------------------------
+
+const TOKEN_1 = 'oauth-access-token-one-0001';
+const TOKEN_2 = 'oauth-access-token-two-0002';
+const REFRESH_1 = 'oauth-refresh-token-one-0001';
+const REFRESH_2 = 'oauth-refresh-token-two-0002';
+const NOTION_URL = 'https://mcp.notion.com/mcp';
+
+// An MCP server that only accepts `Authorization: Bearer <state.token>`.
+function protectedHandler() {
+  const inner = httpMcpHandler();
+  const state = { token: TOKEN_1, rejected: 0, seen: [] };
+  function handle(entry, res) {
+    state.seen.push(entry.headers.authorization || null);
+    if (entry.headers.authorization !== `Bearer ${state.token}`) {
+      if (entry.method !== 'DELETE') state.rejected += 1;
+      res.writeHead(401, { 'www-authenticate': 'Bearer resource_metadata="https://mcp.notion.com/.well-known/oauth-protected-resource/mcp"' });
+      res.end();
+      return;
+    }
+    inner.handle(entry, res);
+  }
+  return { state, handle, inner };
+}
+
+function signedInResult(overrides = {}) {
+  return {
+    required: true,
+    auth: {
+      type: 'oauth',
+      issuer: 'https://mcp.notion.com/',
+      resource: NOTION_URL,
+      authorizationEndpoint: 'https://mcp.notion.com/authorize',
+      tokenEndpoint: 'https://mcp.notion.com/token',
+      clientId: 'registered-client-1',
+      tokenAuth: 'none',
+      scope: 'default',
+      expiresAt: 1_700_000_000_000 + 3_600_000,
+      hasRefreshToken: true,
+      ...overrides.auth,
+    },
+    secrets: { clientSecret: '', accessToken: TOKEN_1, refreshToken: REFRESH_1, ...overrides.secrets },
+  };
+}
+
+// A stand-in for lib/mcp-oauth.cjs: records calls and plays the browser round trip.
+function fakeOAuthClient({ result = signedInResult(), refreshTo = { accessToken: TOKEN_2, refreshToken: REFRESH_2 } } = {}) {
+  const calls = { signIn: [], refresh: [] };
+  return {
+    calls,
+    client: {
+      async signIn(options) {
+        calls.signIn.push(options.serverUrl);
+        if (options.hang) return new Promise(() => {});
+        await options.openExternal('https://mcp.notion.com/authorize?client_id=registered-client-1');
+        if (calls.waitForCancel) {
+          await new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+            reject(new OAuthError('MCP sign-in was cancelled.', 'CANCELLED'));
+          }));
+        }
+        return typeof result === 'function' ? result() : result;
+      },
+      async refresh(auth, secrets) {
+        calls.refresh.push({ clientId: auth.clientId, refreshToken: secrets.refreshToken });
+        if (!refreshTo) throw new Error('invalid_grant');
+        return { ...refreshTo, expiresAt: 1_700_000_000_000 + 7_200_000 };
+      },
+    },
+  };
+}
+
+async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStore(), oauth = fakeOAuthClient(), clock } = {}) {
+  const handler = protectedHandler();
+  const server = await startHttpServer(handler.handle);
+  t.after(() => server.close());
+  const opened = [];
+  let current = 1_700_000_000_000;
+  const mcp = createMcpManager({
+    store,
+    safeStorage: storage,
+    now: clock || (() => current),
+    oauthClient: oauth.client,
+    // The directory's https URL is served by the local fake server.
+    fetchImpl: (url, init) => fetch(String(url).replace(NOTION_URL, server.url), init),
+  });
+  t.after(() => mcp.closeAll());
+  return {
+    mcp, store, handler, server, opened, oauth,
+    setNow: (value) => { current = value; },
+    openExternal: (url) => { opened.push(url); },
+  };
+}
+
+test('one-click sign-in registers, stores tokens encrypted, and connects the directory server', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp, store, handler } = setup;
+  const entry = await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.deepEqual(setup.oauth.calls.signIn, [NOTION_URL]);
+  assert.deepEqual(setup.opened, ['https://mcp.notion.com/authorize?client_id=registered-client-1']);
+  assert.equal(entry.id, 'notion');
+  assert.equal(entry.name, 'Notion');
+  assert.equal(entry.url, NOTION_URL);
+  assert.equal(entry.lastStatus, 'ok');
+  assert.equal(entry.toolCount, 1);
+  assert.deepEqual(entry.auth, {
+    type: 'oauth',
+    issuer: 'mcp.notion.com',
+    directoryId: 'notion',
+    expiresAt: 1_700_000_000_000 + 3_600_000,
+    hasRefreshToken: true,
+    signedInAt: 1_700_000_000_000,
+    storage: 'encrypted',
+  });
+  assert.equal(entry.signInPending, false);
+  assert.ok(handler.state.seen.every((value) => value === `Bearer ${TOKEN_1}`));
+
+  const record = store.snapshot().mcpServers.notion;
+  const decrypted = JSON.parse(Buffer.from(record.encryptedAuth, 'base64').toString().replace(/^enc:/, ''));
+  assert.deepEqual(decrypted, { clientSecret: '', accessToken: TOKEN_1, refreshToken: REFRESH_1 });
+  for (const secret of [TOKEN_1, REFRESH_1]) {
+    assert.equal(JSON.stringify(store.snapshot()).includes(secret), false);
+    assert.equal(JSON.stringify(mcp.list()).includes(secret), false);
+  }
+  assert.equal(JSON.stringify(mcp.list()).includes(record.encryptedAuth), false);
+
+  // Signing in again reuses the entry instead of adding a second one.
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.deepEqual(mcp.list().map((item) => item.id), ['notion']);
+
+  // Jira and Confluence share the Atlassian listing; unknown connectors are refused.
+  await assert.rejects(() => mcp.startOAuth({ connectorId: 'github' }, { openExternal: setup.openExternal }),
+    (error) => error.code === 'MCP_NOT_FOUND');
+  await assert.rejects(() => mcp.startOAuth({ connectorId: 'notion' }, {}), /browser opener is required/);
+});
+
+test('an expired access token is refreshed once, rotated, persisted, and the call retried', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp, store, handler, oauth } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  // The provider revokes the first token; only the refreshed one works now.
+  handler.state.token = TOKEN_2;
+  const result = await mcp.callTool({ id: 'notion', name: 'echo', arguments: { text: 'hi' } });
+  assert.match(result.text, /^echo:hi/);
+  assert.deepEqual(oauth.calls.refresh, [{ clientId: 'registered-client-1', refreshToken: REFRESH_1 }]);
+  const stored = JSON.parse(Buffer.from(store.snapshot().mcpServers.notion.encryptedAuth, 'base64').toString().replace(/^enc:/, ''));
+  assert.deepEqual(stored, { clientSecret: '', accessToken: TOKEN_2, refreshToken: REFRESH_2 });
+  assert.equal(mcp.list()[0].auth.expiresAt, 1_700_000_000_000 + 7_200_000);
+
+  // A restarted app decrypts the rotated tokens and connects without a new sign-in.
+  const restarted = createMcpManager({
+    store, safeStorage: ENCRYPTING_STORAGE, oauthClient: oauth.client, now: () => 1_700_000_000_000,
+    fetchImpl: (url, init) => fetch(String(url).replace(NOTION_URL, setup.server.url), init),
+  });
+  t.after(() => restarted.closeAll());
+  assert.equal((await restarted.test({ id: 'notion' })).ok, true);
+  assert.equal(oauth.calls.refresh.length, 1);
+});
+
+test('a refresh that fails asks for a new sign-in without leaking tokens', async (t) => {
+  const setup = await signInSetup(t, { oauth: fakeOAuthClient({ refreshTo: null }) });
+  const { mcp, handler } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  handler.state.token = 'something-else-entirely';
+  await assert.rejects(
+    () => mcp.test({ id: 'notion' }),
+    (error) => error.code === 'MCP_AUTH_REQUIRED' && /Sign in again/.test(error.message),
+  );
+  const [entry] = mcp.list();
+  assert.equal(entry.lastStatus, 'error');
+  assert.match(entry.lastError, /Sign in again/);
+});
+
+test('tokens are refreshed shortly before they expire', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp, handler, oauth } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  handler.state.token = TOKEN_2;
+  setup.setNow(1_700_000_000_000 + 3_600_000 - 30_000);
+  await mcp.test({ id: 'notion' });
+  assert.equal(oauth.calls.refresh.length, 1);
+  // Refreshed before the request: the server never saw the old token after the clock moved.
+  assert.equal(handler.state.rejected, 0);
+});
+
+test('renaming keeps the sign-in, changing the URL or removing the server drops it', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp, store } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  const renamed = mcp.save({ id: 'notion', name: 'Team Notion', transport: 'http', url: NOTION_URL });
+  assert.equal(renamed.auth.directoryId, 'notion');
+  assert.equal((await mcp.test({ id: 'notion' })).ok, true);
+  const moved = mcp.save({ id: 'notion', name: 'Team Notion', transport: 'http', url: setup.server.url });
+  assert.equal(moved.auth, null);
+  assert.equal(store.snapshot().mcpServers.notion.encryptedAuth, undefined);
+  assert.equal(mcp.remove({ id: 'notion' }).removed, true);
+  assert.equal(store.snapshot().mcpServers, undefined);
+});
+
+test('sign-in for a saved server, and a clear hint when an unsigned server needs one', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp } = setup;
+  const saved = mcp.save({ name: 'My Remote', transport: 'http', url: NOTION_URL });
+  await assert.rejects(
+    () => mcp.test({ id: saved.id }),
+    (error) => error.code === 'MCP_AUTH_REQUIRED' && /requires sign-in/.test(error.message),
+  );
+  const entry = await mcp.startOAuth({ id: saved.id }, { openExternal: setup.openExternal });
+  assert.equal(entry.id, 'my-remote');
+  assert.equal(entry.name, 'My Remote');
+  assert.equal(entry.lastStatus, 'ok');
+  // A stdio server cannot sign in.
+  const local = mcp.save(stdioInput());
+  await assert.rejects(() => mcp.startOAuth({ id: local.id }, { openExternal: setup.openExternal }), /Only remote/);
+});
+
+test("a user's own server with the directory id is left alone", async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp } = setup;
+  mcp.save(stdioInput({ id: 'notion', name: 'Local notes' }));
+  const entry = await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.equal(entry.id, 'notion-2');
+  const local = mcp.list().find((item) => item.id === 'notion');
+  assert.equal(local.transport, 'stdio');
+  assert.equal(local.auth, null);
+});
+
+test('cancelling a sign-in in progress rejects it and saves nothing', async (t) => {
+  const oauth = fakeOAuthClient();
+  oauth.calls.waitForCancel = true;
+  const setup = await signInSetup(t, { oauth });
+  const { mcp, store } = setup;
+  const running = mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  await waitFor(() => setup.opened.length === 1);
+  assert.deepEqual(mcp.cancelOAuth(), { cancelled: true });
+  await assert.rejects(running, (error) => error instanceof McpError && error.code === 'CANCELLED');
+  assert.equal(store.snapshot().mcpServers, undefined);
+  assert.deepEqual(mcp.cancelOAuth(), { cancelled: false });
+});
+
+test('without encryption the sign-in lasts for this session only', async (t) => {
+  const store = memoryStore();
+  const setup = await signInSetup(t, { storage: null, store });
+  const entry = await setup.mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.equal(entry.auth.storage, 'session');
+  assert.equal(entry.lastStatus, 'ok');
+  assert.equal(store.snapshot().mcpServers.notion.encryptedAuth, undefined);
+  assert.equal(JSON.stringify(store.snapshot()).includes(TOKEN_1), false);
+  const restarted = createMcpManager({ store, oauthClient: setup.oauth.client });
+  t.after(() => restarted.closeAll());
+  await assert.rejects(() => restarted.test({ id: 'notion' }), (error) => error.code === 'MCP_AUTH_REQUIRED');
 });

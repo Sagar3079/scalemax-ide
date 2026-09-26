@@ -1,5 +1,6 @@
 import { COMMUNITY_SKILLS, CONNECTORS } from './data.js';
 import { OAUTH_SUPPORT } from './oauth-catalog.js';
+import { MCP_SIGN_IN, MCP_LISTING_NAMES } from './mcp-directory.js';
 
 // Entries are read through the app so user-created experts and skills are included.
 const CATALOGS = [
@@ -300,6 +301,35 @@ let activeConnector = null;
 let activeOAuthConfig = null;
 // The connector whose browser sign-in is in progress; it keeps running if the dialog closes.
 let oauthPendingId = null;
+// MCP servers (sanitized list entries); one-click sign-ins are the ones with auth.directoryId.
+let mcpServers = [];
+// The connector whose one-click sign-in is in progress.
+let mcpPendingId = null;
+const MCP_CHANGED = 'scalemax:mcp-changed';
+
+function mcpBridge() {
+  return window.scalemaxAPI?.mcp || null;
+}
+
+function mcpListing(connectorId) {
+  return Object.hasOwn(MCP_SIGN_IN, connectorId) ? MCP_SIGN_IN[connectorId] : null;
+}
+
+/** The signed-in MCP server that serves this connector, or null. */
+function mcpServerFor(connectorId) {
+  const listing = mcpListing(connectorId);
+  return listing ? mcpServers.find((server) => server.auth?.directoryId === listing) || null : null;
+}
+
+function toolCountText(count) {
+  return `${count} tool${count === 1 ? '' : 's'}`;
+}
+
+function mcpConnectedLabel(server) {
+  if (server.lastStatus === 'error') return 'Signed in · connection failed';
+  if (server.lastStatus === 'ok') return `Connected · ${toolCountText(server.toolCount)} in chat`;
+  return 'Signed in';
+}
 
 const LOOPBACK_LABELS = {
   yes: 'Loopback redirect supported',
@@ -352,17 +382,40 @@ function connectedLabel(record) {
   return record.oauth ? `OAuth ${record.hint || 'token stored'}` : (record.hint || 'token stored');
 }
 
+function connectorActions(app, entry, slot, chip) {
+  const test = element('button', 'button secondary', 'Test');
+  test.addEventListener('click', () => void testConnector(app, entry));
+  const manage = element('button', 'button secondary', 'Manage');
+  manage.addEventListener('click', () => void openConnectorDialog(app, entry));
+  const remove = element('button', 'button danger', 'Disconnect');
+  remove.addEventListener('click', () => void disconnectConnector(app, entry));
+  slot.append(chip, test, manage, remove);
+}
+
 function decorateConnectors(app) {
   for (const slot of document.querySelectorAll('[data-connector-action]')) {
     const entry = CONNECTORS.find((item) => item.id === slot.dataset.connectorAction);
     if (!entry) continue;
     const record = connectorCredentials[entry.id];
+    const server = mcpServerFor(entry.id);
     slot.replaceChildren();
+    if (server) {
+      const chip = element('span', 'connector-chip');
+      chip.title = server.lastStatus === 'error' ? (server.lastError || 'Signed in, but the connection failed')
+        : `Signed in through the official ${MCP_LISTING_NAMES[server.auth.directoryId] || entry.name} MCP server`;
+      chip.append(
+        element('span', `status-dot ${connectorDotClass(server.lastStatus)}`),
+        element('span', 'connector-chip-text', mcpConnectedLabel(server)),
+      );
+      connectorActions(app, entry, slot, chip);
+      continue;
+    }
     if (!record?.connected) {
       const connect = element('button', 'button secondary', 'Connect');
       connect.addEventListener('click', () => void openConnectorDialog(app, entry));
       slot.append(connect);
-      slot.append(element('span', 'connector-auth-hint', oauthAvailable(entry.id) ? 'OAuth or token' : 'Access token'));
+      slot.append(element('span', 'connector-auth-hint', mcpListing(entry.id) ? 'One-click sign-in'
+        : (oauthAvailable(entry.id) ? 'OAuth or token' : 'Access token')));
       continue;
     }
     const chip = element('span', 'connector-chip');
@@ -374,13 +427,7 @@ function decorateConnectors(app) {
       element('span', `status-dot ${connectorDotClass(record.lastStatus)}`),
       element('span', 'connector-chip-text', connectedLabel(record)),
     );
-    const test = element('button', 'button secondary', 'Test');
-    test.addEventListener('click', () => void testConnector(app, entry));
-    const manage = element('button', 'button secondary', 'Manage');
-    manage.addEventListener('click', () => void openConnectorDialog(app, entry));
-    const remove = element('button', 'button danger', 'Disconnect');
-    remove.addEventListener('click', () => void disconnectConnector(app, entry));
-    slot.append(chip, test, manage, remove);
+    connectorActions(app, entry, slot, chip);
   }
 }
 
@@ -390,8 +437,19 @@ async function refreshConnectors(app) {
     const result = await bridge.list();
     connectorCredentials = result?.ok && result.data ? result.data : {};
   }
+  const mcp = mcpBridge();
+  if (mcp?.list) {
+    const result = await mcp.list();
+    mcpServers = result?.ok && Array.isArray(result.data) ? result.data : [];
+  }
   decorateConnectors(app);
   renderConnectorCurrent();
+  if (activeConnector) renderMcpSection(activeConnector);
+}
+
+// Tells the MCP view (and this one) that the server list changed.
+function announceMcpChange() {
+  window.dispatchEvent(new CustomEvent(MCP_CHANGED, { detail: { source: 'connectors' } }));
 }
 
 // The "currently connected" line at the top of the dialog.
@@ -399,10 +457,104 @@ function renderConnectorCurrent() {
   const node = byId('connector-current');
   if (!node) return;
   const record = activeConnector ? connectorCredentials[activeConnector.id] : null;
-  node.hidden = !record?.connected;
-  node.textContent = record?.connected
-    ? `Connected · ${connectedLabel(record)}${record.lastStatus === 'error' && record.lastError ? ` · ${record.lastError}` : ''}`
-    : '';
+  const server = activeConnector ? mcpServerFor(activeConnector.id) : null;
+  const parts = [];
+  if (server) parts.push(`${mcpConnectedLabel(server)}${server.lastStatus === 'error' && server.lastError ? ` · ${server.lastError}` : ''}`);
+  if (record?.connected) {
+    parts.push(`${server ? 'Token' : 'Connected'} · ${connectedLabel(record)}${record.lastStatus === 'error' && record.lastError ? ` · ${record.lastError}` : ''}`);
+  }
+  node.hidden = !parts.length;
+  node.textContent = parts.join('\n');
+}
+
+function setMcpStatus(message) {
+  setText('connector-mcp-status', message);
+}
+
+// One-click sign-in section; the advanced options collapse underneath when it is available.
+function renderMcpSection(entry) {
+  const section = byId('connector-mcp-section');
+  const advanced = byId('connector-advanced');
+  const listing = mcpListing(entry.id);
+  const available = Boolean(listing && mcpBridge()?.signIn);
+  if (section) section.hidden = !available;
+  setText('connector-advanced-summary', available
+    ? 'Advanced: use your own OAuth app or an access token'
+    : 'Sign-in options');
+  if (!available) {
+    if (advanced) advanced.open = true;
+    return;
+  }
+  const server = mcpServerFor(entry.id);
+  const pending = mcpPendingId === entry.id;
+  const name = MCP_LISTING_NAMES[listing] || entry.name;
+  setText('connector-mcp-copy', server
+    ? `Connected through the official ${name} MCP server. Its tools are offered in chat.`
+    : `Opens ${name} in your browser. Approve access and ScaleMax connects automatically: no app registration, `
+      + `keys or callback URL needed. ${name} tools then become available in chat.`);
+  setText('connector-mcp-start', server ? 'Sign in again' : `Sign in with ${entry.name}`);
+  const start = byId('connector-mcp-start');
+  if (start) start.disabled = pending;
+  const cancel = byId('connector-mcp-cancel');
+  if (cancel) cancel.hidden = !pending;
+  const disconnect = byId('connector-mcp-disconnect');
+  if (disconnect) disconnect.hidden = !server || pending;
+}
+
+async function startMcpSignIn(app) {
+  const mcp = mcpBridge();
+  const entry = activeConnector;
+  if (!mcp?.signIn || !entry || mcpPendingId === entry.id) return;
+  mcpPendingId = entry.id;
+  renderMcpSection(entry);
+  const report = (message, toast) => {
+    if (activeConnector === entry) setMcpStatus(message);
+    else if (toast) app.showToast(`${entry.name}: ${message}`);
+  };
+  report(`Approve access in your browser. ScaleMax finishes connecting as soon as ${entry.name} redirects back (up to 5 minutes)…`, false);
+  try {
+    const result = await mcp.signIn({ connectorId: entry.id });
+    if (!result?.ok) {
+      const cancelled = result?.error?.code === 'CANCELLED';
+      report(cancelled ? 'Sign-in cancelled.' : (result?.error?.message || 'Sign-in failed.'), !cancelled);
+      return;
+    }
+    const server = result.data;
+    if (server.lastStatus === 'ok') {
+      report(`Connected. ${toolCountText(server.toolCount)} available in chat.`, false);
+      app.showToast(`${entry.name} connected`);
+    } else {
+      report(`Signed in, but connecting failed: ${server.lastError || 'unknown error'}`, true);
+    }
+  } catch (error) {
+    report(error?.message || 'Sign-in failed.', true);
+  } finally {
+    if (mcpPendingId === entry.id) mcpPendingId = null;
+    await refreshConnectors(app);
+    announceMcpChange();
+  }
+}
+
+async function cancelMcpSignIn() {
+  await mcpBridge()?.cancelSignIn?.();
+}
+
+/** Removes the one-click sign-in (server entry and tokens). Returns false if it failed. */
+async function removeMcpServer(app, entry) {
+  const server = mcpServerFor(entry.id);
+  if (!server) return true;
+  const result = await mcpBridge().remove({ id: server.id });
+  if (!result?.ok) { app.showToast(result?.error?.message || 'Could not disconnect'); return false; }
+  return true;
+}
+
+async function disconnectMcp(app) {
+  const entry = activeConnector;
+  if (!entry) return;
+  if (!(await removeMcpServer(app, entry))) return;
+  setMcpStatus('Disconnected. The sign-in was removed from this device.');
+  await refreshConnectors(app);
+  announceMcpChange();
 }
 
 function setOAuthPending(pending) {
@@ -481,6 +633,11 @@ async function openConnectorDialog(app, entry) {
   setOAuthPending(pending);
   renderOAuthSection(entry, null);
   renderConnectorCurrent();
+  const advanced = byId('connector-advanced');
+  // With one-click sign-in available the other options start collapsed, unless one is in use.
+  if (advanced) advanced.open = !(mcpListing(entry.id) && mcpBridge()?.signIn) || Boolean(connectorCredentials[entry.id]?.connected) || pending;
+  setMcpStatus(mcpPendingId === entry.id ? `Waiting for the ${entry.name} sign-in to finish in your browser…` : '');
+  renderMcpSection(entry);
   if (!dialog.open) dialog.showModal();
   if (Object.hasOwn(OAUTH_SUPPORT, entry.id) && bridge.getOAuthConfig) {
     const result = await bridge.getOAuthConfig({ id: entry.id });
@@ -601,6 +758,16 @@ async function testConnector(app, entry) {
   const bridge = connectorBridge();
   if (!bridge) { app.showToast('Connector connections require the desktop app'); return; }
   app.showToast(`Testing ${entry.name}…`);
+  const server = mcpServerFor(entry.id);
+  if (server) {
+    const tested = await mcpBridge().test({ id: server.id });
+    await refreshConnectors(app);
+    announceMcpChange();
+    app.showToast(tested?.ok
+      ? `${entry.name} verified · ${toolCountText(tested.data.tools.length)}`
+      : `${entry.name}: ${tested?.error?.message || 'check failed'}`);
+    return;
+  }
   const result = await bridge.test({ id: entry.id });
   await refreshConnectors(app);
   const data = result?.data;
@@ -609,12 +776,18 @@ async function testConnector(app, entry) {
       : `${entry.name}: ${data?.message || result?.error?.message || 'check failed'}`);
 }
 
+// Removes every credential of the connector: the one-click sign-in and any stored token.
 async function disconnectConnector(app, entry) {
   const bridge = connectorBridge();
   if (!bridge) { app.showToast('Connector connections require the desktop app'); return; }
-  const result = await bridge.remove({ id: entry.id });
-  if (!result?.ok) { app.showToast(result?.error?.message || 'Could not disconnect'); return; }
+  const hadServer = Boolean(mcpServerFor(entry.id));
+  if (!(await removeMcpServer(app, entry))) return;
+  if (connectorCredentials[entry.id]?.connected || !hadServer) {
+    const result = await bridge.remove({ id: entry.id });
+    if (!result?.ok) { app.showToast(result?.error?.message || 'Could not disconnect'); return; }
+  }
   await refreshConnectors(app);
+  if (hadServer) announceMcpChange();
   app.showToast(`${entry.name} disconnected`);
 }
 
@@ -625,6 +798,9 @@ function bindConnectors(app) {
     byId('connector-oauth-form')?.addEventListener('submit', (event) => void startConnectorOAuth(app, event));
     byId('connector-oauth-cancel')?.addEventListener('click', () => void cancelConnectorOAuth());
     byId('connector-oauth-forget')?.addEventListener('click', () => void forgetConnectorOAuth(app));
+    byId('connector-mcp-start')?.addEventListener('click', () => void startMcpSignIn(app));
+    byId('connector-mcp-cancel')?.addEventListener('click', () => void cancelMcpSignIn());
+    byId('connector-mcp-disconnect')?.addEventListener('click', () => void disconnectMcp(app));
     byId('connector-register-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.registerUrl, 'Link'));
     byId('connector-redirect-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.redirectUri, 'Redirect URI'));
     // Closing the dialog leaves a browser sign-in running; "Cancel sign-in" stops it.
@@ -636,6 +812,10 @@ function bindConnectors(app) {
   // app.js re-renders the catalog with replaceChildren; re-decorate after each swap.
   const list = byId('connectors-list');
   if (list) new MutationObserver(() => decorateConnectors(app)).observe(list, { childList: true });
+  // Servers added or removed in the MCP view change what the connector cards show.
+  window.addEventListener(MCP_CHANGED, (event) => {
+    if (event.detail?.source !== 'connectors') void refreshConnectors(app);
+  });
   void refreshConnectors(app);
 }
 

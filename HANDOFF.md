@@ -46,9 +46,9 @@ Electron runtime issues (truncated installs, missing `path.txt`): `npm run repai
 Three tiers, textbook Electron:
 
 ```
-main.js (Node)             → 36 ipcMain.handle channels, all wrapped in {ok,data}/{ok,error} envelopes except app:* and store:*
-preload.js (contextBridge) → window.scalemaxAPI: 37 methods = 36 channels across 7 namespaces
-                              (app 2, store 2, provider 7, connectors 10, mcp 5, dialog 2, workspace 8) + getPlatform()
+main.js (Node)             → 38 ipcMain.handle channels, all wrapped in {ok,data}/{ok,error} envelopes except app:* and store:*
+preload.js (contextBridge) → window.scalemaxAPI: 39 methods = 38 channels across 7 namespaces
+                              (app 2, store 2, provider 7, connectors 10, mcp 7, dialog 2, workspace 8) + getPlatform()
 src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, webSecurity:true
 ```
 
@@ -59,14 +59,16 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `src/sm-tokens.css` | 3,911 | Design tokens: 3,791 `--sm-*` variables (light `:root` + `[data-theme="dark"]`), Assistant @font-face. **Generated — regenerate, don't hand-edit.** |
 | `src/styles.css` | ~2,470 | Component styles on the tokens (11 sections). Shell aliases `--sm-app-*` incl. `--sm-app-muted` (badges). |
 | `src/app.js` | ~1,760 | Renderer singleton `app`: tasks, chat (tool-call chips), catalogs, custom experts/skills rendering, automations, search, toasts; delegates the Workspace tab to `workspace-ui.js`. |
-| `lib/mcp.cjs` | ~1,700 | MCP client manager: stdio (newline JSON-RPC, process-group kill) + Streamable HTTP (JSON/SSE, session id, protocol header); encrypted env/header secrets; `chatTools()` for the tool loop. |
+| `lib/mcp.cjs` | ~2,070 | MCP client manager: stdio (newline JSON-RPC, process-group kill) + Streamable HTTP (JSON/SSE, session id, protocol header); encrypted env/header secrets; `chatTools()` for the tool loop; **one-click sign-in** (`startOAuth`/`cancelOAuth`, encrypted `encryptedAuth` tokens, Bearer header, refresh before expiry and once on 401). |
+| `lib/mcp-oauth.cjs` | ~430 | Zero-setup MCP authorization: 401 challenge → RFC 9728 resource metadata → RFC 8414/OpenID discovery → RFC 7591 dynamic client registration (public client when allowed) → PKCE S256 + RFC 8707 `resource` via `lib/oauth.cjs`; `refresh`. |
+| `lib/mcp-directory.cjs` | ~45 | Official remote MCP servers behind one-click connector sign-in (13 listings, 14 connectors; Jira + Confluence share Atlassian), each verified live. Renderer mirror `src/mcp-directory.js`, kept in sync by `test/mcp-directory.test.mjs`. |
 | `lib/connectors.cjs` | ~1,160 | Connector credentials (safeStorage), 24 validation endpoints, GitHub live fetch, **OAuth**: client configs (`connectorOAuthClients`), `startOAuth`, refresh, identity. |
 | `src/workspace-ui.js` | ~1,120 | Workspace tab: per-tab editor model, ARIA file tree + bounded filter crawl, splitters (persisted), panel tabs, Cmd/Ctrl+S, Tab/Shift+Tab, tokenizer + highlight overlay. Pure helpers are unit-tested. |
 | `src/workspace.css` | ~1,020 | Workspace IDE layout (toolbar, explorer, tabs, gutter/overlay, bottom panel, statusbar). |
 | `lib/provider.cjs` | ~710 | OpenAI-compatible client: ScaleMax preset (tries `/v1` then `/token/v1`), discover, `send`, internal `complete` (tools/tool_calls), 4 MB caps, 120 s timeout, redirects rejected, safeStorage keys. |
 | `lib/oauth.cjs` | ~690 | Loopback OAuth 2.0 engine: `authorize` (127.0.0.1 or localhost + ::1, state, PKCE S256, abort), `tokenRequest` (post/basic, form/json, 256 KB cap), `refresh`, `fetchIdentity`. |
 | `src/connector-catalog.js` | 662 | 40 connector setup guides. |
-| `src/catalog-ui.js` | ~660 | Catalog filters (built-in + custom), community cards, theme, exports, detail dialogs, connector dialog incl. **OAuth sign-in UI**. |
+| `src/catalog-ui.js` | ~840 | Catalog filters (built-in + custom), community cards, theme, exports, detail dialogs, connector dialog incl. **one-click sign-in** (recommended section) and the **OAuth / token** paths under "Advanced". |
 | `lib/oauth-catalog.cjs` | ~630 | Main-owned OAuth provider rules for 25 connectors (URLs, scopes, PKCE, secret mode, redirect host, identity endpoint, register/docs URLs), verified against provider docs 2026-09-26. |
 | `src/index.html` | ~585 | Shell: 6 views + search/detail/connector/custom/MCP dialogs + toast. Strict CSP (`connect-src 'none'`), no inline `style=`. |
 | `src/skill-catalog.js` | 521 | 30 builtin skill templates + 7 community repos. |
@@ -74,7 +76,7 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `main.js` | ~440 | Main process, IPC surface, state store, MCP manager + tool loop wiring, smoke / `SCALEMAX_USER_DATA` profile isolation, MCP shutdown on quit. |
 | `build/smoke-check.cjs` | ~410 | 42-check harness (+5 live). Spawns the MCP fixture with this Electron binary (`ELECTRON_RUN_AS_NODE`). |
 | `src/domain.mjs` | ~380 | Pure logic: settings/tasks/automations normalization, `nextRunAt` (once/hourly/daily/weekly/monthly/interval, DST-safe), `buildSystemPrompt` (built-in + custom), `searchItems` (incl. custom). |
-| `src/mcp-ui.js` | ~350 | MCP server cards + add/edit dialog (Assistant card 03). |
+| `src/mcp-ui.js` | ~400 | MCP server cards + add/edit dialog (Assistant card 03); Sign in / Sign in again / Cancel sign-in for https servers; saving a server that answers "requires sign-in" goes straight to the browser consent page. |
 | `lib/tool-loop.cjs` | ~280 | `createToolLoop({provider, mcp})`: offers MCP tools, runs tool calls (≤ 8 rounds, ≤ 8 calls/round), permission-aware, cancellable. |
 | `src/scheduler.js` | ~240 | Automation engine (30 s poll, catch-up once, no double runs, history). |
 | `src/custom-ui.js` | ~220 | Create/edit/delete custom experts (colour + prop picker with live avatar preview) and skills. |
@@ -85,12 +87,12 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `src/oauth-catalog.js` | ~30 | Renderer-side `OAUTH_SUPPORT` (id → loopback support); a test keeps it in sync with `lib/oauth-catalog.cjs`. |
 | `src/terminal.js`, `src/web-shim.js`, `src/data.js` | small | Console binding, browser bridge stand-in, catalog re-exports + 8 experts. |
 
-### IPC surface (36 channels, all paired with preload — recount script logic: every `ipcMain.handle('x:y'` plus channel-table keys)
+### IPC surface (38 channels, all paired with preload — recount script logic: every `ipcMain.handle('x:y'` plus channel-table keys)
 
 - `store:get` / `store:set` — PUBLIC_KEYS allowlist (`tasks, settings, automations, skillStates, connectorStates, currentTaskId, customExperts, customSkills`). `provider`, `connectors`, `connectorOAuthClients`, `mcpServers`, `user` are reserved (also refused by `lib/state.cjs`).
 - `provider:get/save/test/discover/send/cancel/clear` — `send` goes through the tool loop (MCP tools) when the provider is configured; `cancel` cancels the loop and the HTTP request.
 - `connector:list/save/remove/test/fetch` + `connector:oauth-config-save/-config-get/-start/-status/-disconnect` — tokens and client secrets never cross the bridge.
-- `mcp:list/save/remove/test/tools` — env/header values are write-only; tool calls only run inside chat.
+- `mcp:list/save/remove/test/tools` + `mcp:oauth-start/-cancel` — env/header values and sign-in tokens are write-only; `oauth-start` takes a connector id (resolved in main by `lib/mcp-directory.cjs`) or a saved server id, never a URL; tool calls only run inside chat.
 - `workspace:select/list/read/write/git-status/git-diff/run/cancel`, `dialog:open-folder/open-file`, `app:get-version/quit`.
 
 ### State
@@ -113,7 +115,8 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 
 **Skills (30 + custom + 7 community).** Install applies the template; **Run** sends the active editor file through it (verified live: structured review found an `eval` RCE). **+ New skill** creates custom templates (`{{input}}` supported).
 
-**Connectors (40).** Each card: **Connect** → dialog with two paths:
+**Connectors (40).** Each card: **Connect** → dialog with up to three paths:
+- **One-click sign-in** (recommended; 14 connectors: Notion, Linear, Sentry, Jira + Confluence (Atlassian), Stripe, Vercel, Cloudflare, Intercom, Supabase, Netlify, Airtable, Dropbox, Zapier). Sign in → the provider's consent page opens in the browser → approve → done. No app registration, client ID, secret or callback URL: ScaleMax registers itself with the service's official MCP server through dynamic client registration each time you sign in. The card then shows "Connected · N tools in chat" and the service's tools are offered to the model (same permission gating as any MCP server). Disconnect deletes the server entry and its tokens. The two paths below move under a collapsed "Advanced" block for these connectors.
 - **OAuth** (25 providers in `lib/oauth-catalog.cjs`): the user registers their own app (register link + exact redirect URI shown with copy buttons), enters client ID (+ secret when required; hidden for public clients such as Microsoft/Slack/Zoom; Shopify asks for the store domain) → **Sign in** opens the system browser → loopback callback on port 53682 (`127.0.0.1`, or `localhost` + `::1` where the provider only accepts localhost) → tokens encrypted, identity shown ("Signed in as …"), refresh tokens used automatically before expiry. Intercom (HTTPS-only redirects) honestly shows OAuth as unavailable. No shared client IDs ship with the app.
 - **Access token**: stored encrypted and validated against the provider where an endpoint exists (24 connectors: github, sentry, notion, slack, linear, airtable, asana, cloudflare, vercel, netlify, figma, intercom, hubspot, sendgrid, stripe, discord (bot), dropbox, zoom, google-drive/-calendar, gmail, onedrive, microsoft-teams, supabase); the rest report "no validation endpoint yet". Verified against the real services: all 24 endpoints reject an invalid token with 401/403 (Slack answers 200 `ok:false`, also reported as a rejected token); a valid GitHub token verifies and feeds live repo data into chat.
 - **Live data**: a chat message containing `github.com/owner/repo` pulls repo metadata + 10 open issues through the stored token.
@@ -145,6 +148,7 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 - Renderer isolated; the preload bridge is its only OS access. CSP: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`. Zero `innerHTML` (avatars are built with `createElementNS`); CSSOM styling only.
 - Secrets at rest (provider key, connector tokens, OAuth access/refresh tokens, OAuth client secrets, MCP env/header values) are `safeStorage`-encrypted, never returned to the renderer, never in errors or logs; session-only when encryption is unavailable.
 - **OAuth**: main owns every provider URL; the renderer only passes a connector id. Only `https:` authorize pages are opened; the callback server binds loopback only, checks the Host header and a 32-byte state (timing-safe), ignores stray requests, and closes before the flow settles; one flow at a time (new flow aborts the old); PKCE where supported; token responses capped at 256 KB; provider error codes are sanitized to `[a-z0-9_]`.
+- **One-click sign-in (MCP authorization)**: the directory URLs live in main; discovery refuses redirects, non-https endpoints, metadata whose `issuer` does not match, servers without PKCE S256, and resource metadata pointing at another origin. ScaleMax registers as a public client (`token_endpoint_auth_method: none`) where allowed, otherwise keeps the issued client secret encrypted with the tokens. Access/refresh tokens and client secrets live only in the safeStorage-encrypted `encryptedAuth` blob (session-only without encryption), are redacted from server error text, and never reach the renderer. One sign-in at a time (shared loopback port 53682).
 - **MCP**: a stdio server runs its command with the user's permissions — the add dialog warns and the renderer asks for confirmation when the command changes (UX consent; the main process does not prompt, consistent with the documented auto-approve trade-off below). Tool descriptions and results come from third-party servers and go to the model — treat them as untrusted (prompt-injection surface). Stdio servers run in their own process group and are killed on quit.
 - Workspace guard: canonical paths only (`/tmp` is a symlink on macOS — use `/private/tmp`), secret-path denylist, protected roots, 1 MiB caps.
 - Known accepted trade-off: main-process approvals are auto-granted (`approve: async () => true`); workspace commands and MCP tool calls do not prompt per call. Permission modes (`readonly`/`plan`) are the gate.
@@ -153,9 +157,9 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 
 ## 7. Verification (how to prove things work)
 
-**Unit** — `npm test` → **188 tests**: connectors 45, domain 28, provider 26, oauth 26, mcp 22, avatars 12, tool-loop 13, scheduler 6, workspace-ui 6, oauth-catalog 4. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
+**Unit** — `npm test` → **207 tests**: connectors 45, mcp 31, domain 28, provider 26, oauth 26, tool-loop 13, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
 
-**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **42 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (7 provider, 8 workspace, 2 dialog, 10 connector, 5 mcp), reserved keys incl. `connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
+**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **42 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (7 provider, 8 workspace, 2 dialog, 10 connector, 7 mcp), reserved keys incl. `connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
 
 **UI** — Playwright 1.60 is installed outside the repo at `~/Desktop/node_modules/playwright` (not a project dep). Launch pattern: `_electron.launch({ args: ['.'], cwd: repo, executablePath: '<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', env: { ...process.env, SCALEMAX_USER_DATA: '/private/tmp/…' } })`, then wait for `document.body.dataset.appReady === 'true'`. Payload capture: `const { default: app } = await import('./app.js')` in `win.evaluate`, wrap `app.getProviderBridge()`.
 
@@ -212,7 +216,8 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 ## 10. Known gaps / suggested next steps
 
 - **No streaming** — chat is request/response; the tool loop runs in main. Streaming would need an event channel (no `ipcMain.on` push channels exist yet).
-- **OAuth needs user app registrations** per provider; a real sign-in has been completed for GitHub only (live token refresh not yet exercised). Several providers only document `localhost` redirects (Slack requires PKCE to be enabled first; Atlassian/Asana/Shopify loopback support is uncertain — see `redirectNote` in `lib/oauth-catalog.cjs`). OAuth `test()` uses the identity endpoint; for Slack/Linear/Shopify an identity field is required because they answer 200 on bad tokens.
+- **One-click sign-in covers 14 connectors only.** GitHub, Google (Drive/Calendar/Gmail), Microsoft (OneDrive/Teams), Slack, HubSpot, Zoom, Discord, Shopify, Salesforce, Asana and Figma have no usable dynamic client registration (checked live 2026-09-26: Figma refuses it with 403, Asana offers it only on its legacy SSE endpoint, the rest have none). Making them one-click needs ScaleMax-owned app registrations with each provider (public client IDs where the provider supports PKCE without a secret; a small token-broker backend for providers that insist on a client secret). GitHub can become one-click through the device flow once the owner enables Device Flow on the ScaleMax OAuth app and approves shipping its client ID.
+- **OAuth needs user app registrations** per provider (the Advanced path); a real sign-in has been completed for GitHub only (live token refresh not yet exercised). Several providers only document `localhost` redirects (Slack requires PKCE to be enabled first; Atlassian/Asana/Shopify loopback support is uncertain — see `redirectNote` in `lib/oauth-catalog.cjs`). OAuth `test()` uses the identity endpoint; for Slack/Linear/Shopify an identity field is required because they answer 200 on bad tokens.
 - **MCP**: tools only (no resources, prompts, sampling or elicitation); no per-call approval prompt; a hanging server can delay a chat turn up to ~90 s (initialize + tools/list timeouts).
 - **Automations only run while the window is open** (renderer scheduler).
 - **Connector fetch is GitHub-only.**
@@ -229,12 +234,13 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 3. Native `<dialog>` paints in the top layer — `showToast()` re-parents the toast into any open dialog.
 4. `--sm-bg-*` are component-scoped; use `--sm-app-*` for shell surfaces.
 5. CSP blocks inline `style=` in HTML; CSSOM in JS is fine.
-6. The smoke check asserts exact bridge counts (7 provider, 8 workspace, 2 dialog, 10 connector, 5 mcp) — update `build/smoke-check.cjs` when adding bridge methods.
+6. The smoke check asserts exact bridge counts (7 provider, 8 workspace, 2 dialog, 10 connector, 7 mcp) — update `build/smoke-check.cjs` when adding bridge methods.
 7. `store:set` returns `true`/`false`; `persist()` falls back to localStorage on `false`.
 8. Renderer = ES modules, main = CommonJS; `package.json` has no `"type"` (Node prints a harmless module-type warning when tests import `src/*.js`).
 9. `sm-tokens.css` is generated.
 10. `npm test` must keep explicit globs (fixture server under `test/fixtures/`).
-11. The OAuth callback port is fixed at 53682 (registered redirect URIs depend on it).
+11. The OAuth callback port is fixed at 53682 (registered redirect URIs depend on it; one-click sign-ins register `http://127.0.0.1:53682/callback` too, so only one browser sign-in can run at a time).
+15. `lib/mcp-directory.cjs` (main) and `src/mcp-directory.js` (renderer) must stay in sync — `test/mcp-directory.test.mjs` enforces it. Re-verify a listing live before adding it: it must answer 401, publish resource + authorization-server metadata with a `registration_endpoint` and PKCE S256, accept the registration, and serve a real consent page for the resulting authorize URL.
 12. `lib/oauth-catalog.cjs` (main) and `src/oauth-catalog.js` (renderer) must stay in sync — `test/oauth-catalog.test.mjs` enforces it.
 13. Workspace element ids used by app.js/terminal.js/smoke-check must stay: `workspace-open/refresh/path/status`, `file-tree`, `editor-tab/title/path/save/status/input/gutter`, `git-refresh/status/files/diff`, `terminal-form/command/run/cancel/output`.
 14. The old `REPO_ANALYSIS.md` one level up is outdated; `PROJECT_SUMMARY.md` is an older log. This file is the source of truth.
@@ -259,6 +265,13 @@ Also fixed: `npm test` hang (fixture picked up by `node --test`), CSP-blocked in
 ### After session 3
 
 Rebuilt and scanned the dmg, booted the packaged app live, probed every connector/OAuth endpoint against the real services (fixing two messages), verified GitHub with a real token and completed a real GitHub OAuth sign-in (see §7).
+
+Then **one-click connector sign-in** (users no longer have to register an OAuth app or copy a callback URL): `lib/mcp-oauth.cjs`, `lib/mcp-directory.cjs` + `src/mcp-directory.js`, OAuth sign-ins in `lib/mcp.cjs` (encrypted tokens, refresh, 401 retry), `tokenExtraFields` in `lib/oauth.cjs` (RFC 8707 `resource` on token and refresh requests), `mcp:oauth-start/-cancel` + preload `mcp.signIn/cancelSignIn`, the recommended section in the connector dialog (other paths under "Advanced"), Sign in buttons in the MCP view, 19 new tests. Verified live (2026-09-26):
+- Probed 18 official remote MCP servers. 13 accepted a real dynamic registration of ScaleMax and served a real consent or login page for the resulting authorize URL in headless Chromium (Notion, Linear, Sentry, Atlassian, Stripe, Vercel, Cloudflare, Intercom, Supabase, Netlify, Airtable, Dropbox, Zapier). Figma refused registration (403); Asana v2, GitHub, HubSpot and Slack offer no registration.
+- In the real app (throwaway profile, `shell.openExternal` captured): all 40 connector dialogs show the right layout; the one-click button for Notion, Jira, Linear and Stripe opened the provider's real consent/login page, showed the pending state, and Cancel left nothing saved; 0 console errors.
+- 207/207 unit, 42/42 smoke, 47/47 live smoke.
+- Not yet verified: a completed one-click sign-in with a real account (needs the owner to approve in the browser), and a live token refresh.
+- GitHub device flow: the owner's OAuth app (`ScaleMax IDE (local)`) currently answers `device_flow_disabled`.
 
 ### Suggested next session
 

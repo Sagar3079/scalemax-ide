@@ -9,6 +9,12 @@ let servers = [];
 const toolCache = new Map();
 const expanded = new Set();
 const busy = new Set();
+// Shared with the connector cards (src/catalog-ui.js), which show one-click sign-ins.
+const MCP_CHANGED = 'scalemax:mcp-changed';
+
+function announceChange() {
+  window.dispatchEvent(new CustomEvent(MCP_CHANGED, { detail: { source: 'mcp' } }));
+}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -50,6 +56,7 @@ function commandLine(server) {
 }
 
 function statusText(server) {
+  if (server.signInPending) return 'Waiting for the sign-in in your browser…';
   if (busy.has(server.id)) return 'Connecting…';
   if (server.lastStatus === 'ok') return `${server.toolCount} tool${server.toolCount === 1 ? '' : 's'}${server.connected ? ' · connected' : ''}`;
   if (server.lastStatus === 'error') return server.lastError || 'Connection failed';
@@ -115,11 +122,21 @@ function renderServers() {
       const keys = [...(server.envKeys || []), ...(server.headerKeys || [])];
       status.append(element('span', 'mcp-secret-keys', `Secrets: ${keys.join(', ')}${server.secretStorage === 'session' ? ' (this session only)' : ''}`));
     }
+    if (server.auth) {
+      status.append(element('span', 'mcp-secret-keys',
+        `Signed in via ${server.auth.issuer}${server.auth.storage === 'session' ? ' (this session only)' : ''}`));
+    }
     const actions = element('div', 'mcp-server-actions');
-    for (const [action, label] of [['test', 'Test'], ['tools', expanded.has(server.id) ? 'Hide tools' : 'Tools'], ['edit', 'Edit'], ['remove', 'Remove']]) {
+    const buttons = [['test', 'Test'], ['tools', expanded.has(server.id) ? 'Hide tools' : 'Tools']];
+    if (server.signInPending) buttons.push(['cancelsignin', 'Cancel sign-in']);
+    else if (server.transport === 'http' && server.url?.startsWith('https://')) {
+      buttons.push(['signin', server.auth ? 'Sign in again' : 'Sign in']);
+    }
+    buttons.push(['edit', 'Edit'], ['remove', 'Remove']);
+    for (const [action, label] of buttons) {
       const button = element('button', `button ${action === 'remove' ? 'danger' : 'secondary'} compact`, label);
       button.dataset.mcpAction = action;
-      button.disabled = busy.has(server.id) && action !== 'tools';
+      button.disabled = busy.has(server.id) && action !== 'tools' && action !== 'cancelsignin';
       if (action === 'tools') button.setAttribute('aria-expanded', String(expanded.has(server.id)));
       actions.append(button);
     }
@@ -162,6 +179,35 @@ async function testServer(app, id, { quiet = false } = {}) {
     app.showToast(result?.ok
       ? `${server?.name || 'Server'}: ${result.data.tools.length} tool${result.data.tools.length === 1 ? '' : 's'} available`
       : `${server?.name || 'Server'}: ${result?.error?.message || 'connection failed'}`);
+  }
+  return result;
+}
+
+// Browser sign-in for a saved HTTP server (MCP authorization with automatic app registration).
+async function signInServer(app, id) {
+  const api = bridge();
+  if (!api?.signIn) return null;
+  busy.add(id);
+  const pending = api.signIn({ id });
+  // The list entry now reports signInPending.
+  await refreshServers(app);
+  let result;
+  try {
+    result = await pending;
+  } finally {
+    busy.delete(id);
+  }
+  if (result?.ok) toolCache.delete(id);
+  await refreshServers(app);
+  announceChange();
+  const server = servers.find((item) => item.id === id);
+  const name = server?.name || 'Server';
+  if (!result?.ok) {
+    if (result?.error?.code !== 'CANCELLED') app.showToast(`${name}: ${result?.error?.message || 'sign-in failed'}`);
+  } else if (result.data.lastStatus === 'ok') {
+    app.showToast(`${name}: signed in · ${result.data.toolCount} tool${result.data.toolCount === 1 ? '' : 's'} available`);
+  } else {
+    app.showToast(`${name}: signed in, but connecting failed: ${result.data.lastError || 'unknown error'}`);
   }
   return result;
 }
@@ -264,6 +310,11 @@ async function saveServer(app, event) {
       renderServers();
       byId('mcp-dialog')?.close();
       app.showToast(`${saved.data.name}: ${count} tool${count === 1 ? '' : 's'} available`);
+    } else if (tested?.error?.code === 'MCP_AUTH_REQUIRED' && input.transport === 'http' && bridge()?.signIn) {
+      // The server wants a sign-in: continue straight into the browser consent page.
+      byId('mcp-dialog')?.close();
+      app.showToast(`${saved.data.name} needs sign-in. Approve access in your browser…`);
+      await signInServer(app, saved.data.id);
     } else {
       setStatus(`Saved, but the connection failed: ${tested?.error?.message || 'unknown error'}`);
     }
@@ -281,6 +332,7 @@ async function removeServer(app, server) {
   toolCache.delete(server.id);
   expanded.delete(server.id);
   await refreshServers(app);
+  announceChange();
   app.showToast(`${server.name} removed`);
   return true;
 }
@@ -310,6 +362,8 @@ async function handleListClick(app, event) {
   if (!server) return;
   const action = button.dataset.mcpAction;
   if (action === 'test') await testServer(app, server.id);
+  else if (action === 'signin') await signInServer(app, server.id);
+  else if (action === 'cancelsignin') await bridge()?.cancelSignIn?.();
   else if (action === 'toggle') await toggleServer(app, server);
   else if (action === 'edit') openDialog(server);
   else if (action === 'remove') await removeServer(app, server);
@@ -342,5 +396,9 @@ export function bindMcpUi(app) {
     if (await removeServer(app, server)) close();
   });
   byId('mcp-list')?.addEventListener('click', (event) => void handleListClick(app, event));
+  // One-click sign-ins from the connector cards add or remove servers here.
+  window.addEventListener(MCP_CHANGED, (event) => {
+    if (event.detail?.source !== 'mcp') void refreshServers(app);
+  });
   void refreshServers(app);
 }

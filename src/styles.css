@@ -2242,6 +2242,7 @@ input[type="range"] {
   color: var(--sm-palette-green-9);
   font-size: 12px;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .connector-section {
@@ -2289,6 +2290,39 @@ input[type="range"] {
 #connector-redirect-note {
   margin-bottom: 12px;
 }
+
+/* One-click sign-in (official MCP server with automatic app registration). */
+.connector-section.connector-recommended {
+  border-color: var(--sm-palette-green-3);
+  padding-bottom: 12px;
+}
+
+.connector-recommended .button-row {
+  margin-top: 10px;
+}
+
+.connector-recommended .badge {
+  color: var(--sm-palette-green-9);
+  background: var(--sm-palette-green-1);
+}
+
+.connector-advanced {
+  margin-top: 12px;
+}
+
+.connector-advanced > summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 4px 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sm-text-medium);
+}
+
+.connector-advanced > summary:hover {
+  color: var(--sm-text-strong);
+}
+
 
 .button.compact {
   height: 22px;
