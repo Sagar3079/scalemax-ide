@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';script-src 'self';style-src 'self';img-src 'self' data:;connect-src 'none';object-src 'none';base-uri 'none';form-action 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>ScaleMax — Local AI workspace</title>
+  <link rel="stylesheet" href="sm-tokens.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div id="app-shell">
+    <header id="titlebar">
+      <button id="panel-toggle-btn" class="titlebar-btn" type="button" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true" title="Toggle sidebar">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
+      </button>
+      <span class="titlebar-title">ScaleMax</span>
+      <button id="search-btn" class="titlebar-search" type="button" aria-haspopup="dialog" aria-controls="search-dialog">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
+        <span>Search workspace</span>
+      </button>
+      <span id="app-status" class="status-label" role="status" aria-live="polite" aria-atomic="true">Provider not configured</span>
+    </header>
+
+    <div id="app-body">
+      <aside id="sidebar" aria-label="Workspace sidebar">
+        <div id="brand">
+          <span class="brand-mark" aria-hidden="true">S</span>
+          <div class="brand-text">
+            <span class="brand-name">ScaleMax</span>
+            <span class="brand-caption">Your work. Your workspace.</span>
+          </div>
+        </div>
+
+        <button id="new-task-btn" class="new-task-btn" type="button">
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+          <span>New task</span>
+        </button>
+
+        <nav id="sidebar-nav" class="sm-sidebar-nav" aria-label="Main navigation">
+          <div class="sm-sidebar-nav__section">
+            <h2 class="sm-sidebar-nav__section-title">Workspace</h2>
+            <button class="sidebar-item sm-sidebar-nav__item active" data-view="chat" type="button" aria-controls="view-chat" aria-current="page">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z" /><path d="M7 10h8M7 14h5" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Chat</span></span>
+            </button>
+            <button class="sidebar-item sm-sidebar-nav__item" data-view="workspace" type="button" aria-controls="view-workspace">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Workspace</span></span>
+            </button>
+            <button class="sidebar-item sm-sidebar-nav__item" data-view="assistant" type="button" aria-controls="view-assistant">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" /><circle cx="15" cy="17" r="3" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Assistant</span></span>
+            </button>
+            <button class="sidebar-item sm-sidebar-nav__item" data-view="experts" type="button" aria-controls="view-experts">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Experts &amp; resources</span></span>
+            </button>
+            <button class="sidebar-item sm-sidebar-nav__item" data-view="automation" type="button" aria-controls="view-automation">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Automation</span></span>
+            </button>
+            <button class="sidebar-item sm-sidebar-nav__item" data-view="more" type="button" aria-controls="view-more">
+              <span class="sm-sidebar-nav__item-icon" aria-hidden="true"><svg focusable="false" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg></span>
+              <span class="sm-sidebar-nav__item-content"><span class="sm-sidebar-nav__item-title">Preferences &amp; about</span></span>
+            </button>
+          </div>
+        </nav>
+
+        <section id="tasks-section" class="sm-sidebar-nav__section" aria-labelledby="tasks-title">
+          <div class="sm-sidebar-nav__section-title tasks-heading">
+            <h2 id="tasks-title">Your tasks</h2>
+            <span id="task-count" class="count" role="status" aria-live="polite" aria-label="Task count">0</span>
+          </div>
+          <div id="tasks-list" aria-label="Saved tasks"></div>
+        </section>
+
+        <div id="sidebar-bottom">
+          <div class="local-mark" aria-hidden="true">
+            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+          </div>
+          <div class="user-meta">
+            <div id="user-name" class="user-name">Local workspace</div>
+            <div id="user-email" class="user-email">Provider not configured</div>
+          </div>
+        </div>
+      </aside>
+
+      <main id="main-content" tabindex="-1">
+        <div id="global-error" class="notice danger-notice" role="alert" aria-atomic="true" hidden></div>
+
+        <section id="view-chat" class="view active" aria-labelledby="welcome-title">
+          <div class="view-toolbar">
+            <span class="eyebrow">Workspace <span aria-hidden="true">/</span> Chat</span>
+            <div class="button-row">
+              <button id="export-task-btn" class="button secondary" type="button">Export task</button>
+              <button id="delete-task-btn" class="button danger" type="button">Delete task</button>
+            </div>
+          </div>
+          <div class="sm-home-page">
+            <header class="sm-home-header">
+              <div class="sm-home-header__title-wrap">
+                <h1 id="welcome-title" class="sm-home-header__title">What will you work on next?</h1>
+                <p class="sm-home-header__slogan">Think it through. Build it out. Work with AI on your terms.</p>
+              </div>
+            </header>
+
+            <div id="mode-switch" class="sm-scene-tabs" role="group" aria-label="Task mode">
+              <button class="mode-btn sm-scene-tabs__pill sm-scene-tabs__pill--active" data-mode="working" type="button" aria-pressed="true">Working</button>
+              <button class="mode-btn sm-scene-tabs__pill" data-mode="coding" type="button" aria-pressed="false">Coding</button>
+            </div>
+
+            <div class="sm-home-composer">
+              <div id="chat-messages" class="chat-transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
+              <div id="chat-card" class="sm-home-composer__card">
+                <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step…"></textarea>
+                <div id="attachment-row" class="attachment-row" hidden>
+                  <span id="attachment-status" class="attachment-chip"></span>
+                  <button id="remove-attachment-btn" class="button secondary" type="button" hidden>Remove</button>
+                </div>
+                <div id="chat-toolbar" class="sm-home-composer__toolbar">
+                  <button id="attach-btn" class="button secondary" type="button">Attach file</button>
+                  <span id="context-chips" class="context-chips"></span>
+                  <span id="model-pill" class="model-pill">No model selected</span>
+                  <div class="button-row send-actions">
+                    <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
+                    <button id="send-btn" class="button primary" type="button">
+                      Send message
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="starter-section">
+              <span class="small-label">Start with a direction</span>
+              <div id="tag-row" class="tag-row" role="group" aria-label="Task starting points">
+                <button class="tag-chip" data-tag="daily" type="button">Daily development</button>
+                <button class="tag-chip" data-tag="web" type="button">Websites</button>
+                <button class="tag-chip" data-tag="apps" type="button">Agent apps</button>
+                <button class="tag-chip" data-tag="skills" type="button">Skill development</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-workspace" class="view" aria-labelledby="workspace-title">
+          <div class="workspace-page">
+            <header class="workspace-header">
+              <div>
+                <span class="eyebrow">Local tools</span>
+                <h1 id="workspace-title" class="page-title">Your workspace, in focus.</h1>
+              </div>
+              <div class="button-row">
+                <button id="workspace-open" class="button primary" type="button">Open folder</button>
+                <button id="workspace-refresh" class="button secondary" type="button">Refresh files</button>
+              </div>
+            </header>
+            <div class="workspace-location">
+              <span class="small-label">Folder</span>
+              <span id="workspace-path" class="path-text">No folder selected</span>
+              <span id="workspace-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Open a local folder to begin.</span>
+            </div>
+
+            <div class="workspace-main">
+              <section class="file-panel" aria-labelledby="files-title">
+                <header class="panel-header"><h2 id="files-title">Files</h2><span class="small-label">Local project</span></header>
+                <div id="file-tree" aria-label="Project files"></div>
+              </section>
+              <section class="editor-panel" aria-labelledby="editor-title">
+                <header class="panel-header">
+                  <div class="editor-tab" id="editor-tab">
+                    <h2 id="editor-title" class="editor-tab-name">Editor</h2>
+                    <span id="editor-path" class="editor-tab-path">No file selected</span>
+                  </div>
+                  <button id="editor-save" class="button primary" type="button" aria-describedby="editor-status">Save file</button>
+                </header>
+                <div class="editor-body">
+                  <pre id="editor-gutter" class="editor-gutter" aria-hidden="true">1</pre>
+                  <textarea id="editor-input" rows="16" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Select a file to view and edit its contents." aria-describedby="editor-status"></textarea>
+                </div>
+                <p id="editor-status" class="panel-footer status-text" role="status" aria-live="polite" aria-atomic="true">Choose a file before editing or saving.</p>
+              </section>
+            </div>
+
+            <div class="workspace-tools">
+              <section class="tool-panel" aria-labelledby="git-title">
+                <header class="panel-header"><h2 id="git-title">Git changes</h2><button id="git-refresh" class="button secondary" type="button">Refresh Git</button></header>
+                <div class="panel-body">
+                  <p id="git-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Open a repository to review its changes.</p>
+                  <div id="git-files" aria-label="Changed files"></div>
+                  <pre id="git-diff" class="code-output diff-output" tabindex="0" aria-label="Git diff"></pre>
+                </div>
+              </section>
+              <section class="tool-panel" aria-labelledby="terminal-title">
+                <header class="panel-header"><h2 id="terminal-title">Command console</h2><span class="badge">Native approval</span></header>
+                <div class="panel-body console-body">
+                  <pre id="terminal-output" class="code-output console-output" role="log" aria-label="Command output" aria-live="polite" aria-relevant="additions text" tabindex="0"></pre>
+                  <form id="terminal-form" class="console-form">
+                    <span class="console-prompt" aria-hidden="true">$</span>
+                    <input id="terminal-command" type="text" placeholder="Enter a non-interactive command" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                    <button id="terminal-run" class="button primary" type="submit">Run</button>
+                    <button id="terminal-cancel" class="button secondary" type="button">Cancel</button>
+                  </form>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-assistant" class="view" aria-labelledby="assistant-title">
+          <div class="page">
+            <header class="page-header">
+              <div><span class="eyebrow">Make it your own</span><h1 id="assistant-title" class="page-title">One assistant. Your provider.</h1><p class="page-sub">Connect an OpenAI-compatible endpoint and choose how your assistant works.</p></div>
+            </header>
+            <form id="provider-form" class="settings-card" aria-labelledby="provider-title">
+              <div class="card-heading"><span class="section-number" aria-hidden="true">01</span><div><h2 id="provider-title">Provider connection</h2></div></div>
+
+              <div class="form-group">
+                <label for="provider-kind">Provider</label>
+                <select id="provider-kind">
+                  <option value="scalemax" selected>ScaleMax (preconfigured)</option>
+                  <option value="custom">Custom OpenAI-compatible endpoint</option>
+                </select>
+              </div>
+
+              <div class="form-group" id="provider-base-url-group" hidden>
+                <label for="provider-base-url">API base URL</label>
+                <input id="provider-base-url" type="url" value="https://api.openai.com/v1" autocomplete="off" spellcheck="false" autocapitalize="off" />
+              </div>
+
+              <div class="form-group" id="provider-detected-group">
+                <label for="provider-detected-base">Endpoint</label>
+                <p id="provider-detected-base" class="path-text">Not connected</p>
+              </div>
+
+              <div class="form-group">
+                <label for="provider-api-key">API key</label>
+                <input id="provider-api-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="sm_live_…" />
+              </div>
+
+              <div class="form-group" id="provider-model-text-group">
+                <label for="provider-model">Provider model ID</label>
+                <input id="provider-model" type="text" placeholder="Exact model ID" autocomplete="off" spellcheck="false" autocapitalize="off" />
+              </div>
+
+              <div class="form-group" id="provider-model-select-group" hidden>
+                <label id="model-picker-label">Model for chat</label>
+                <div class="picker" id="model-picker">
+                  <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label">Choose a model</button>
+                  <div id="model-picker-list" class="picker-list" role="listbox" aria-labelledby="model-picker-label" hidden></div>
+                </div>
+              </div>
+
+              <div class="button-row">
+                <button id="provider-save" class="button primary" type="submit">Save provider</button>
+                <span class="test-control">
+                  <button id="provider-test" class="button secondary" type="button">Test connection</button>
+                  <span id="provider-test-dot" class="status-dot" role="status" aria-label="Connection status"></span>
+                </span>
+                <button id="provider-clear" class="button danger" type="button">Clear provider</button>
+              </div>
+              <p id="provider-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Provider not configured.</p>
+
+              <section id="provider-models-section" hidden aria-labelledby="provider-models-title">
+                <div class="catalog-heading"><div><h3 id="provider-models-title">Available models</h3></div><span id="provider-models-count" class="small-label"></span></div>
+                <div id="provider-models"></div>
+              </section>
+            </form>
+
+            <form id="assistant-form" class="settings-card" aria-labelledby="behavior-title">
+              <div class="card-heading"><span class="section-number" aria-hidden="true">02</span><div><h2 id="behavior-title">Assistant behavior</h2></div></div>
+              <div class="form-group">
+                <label for="system-prompt">System prompt</label>
+                <textarea id="system-prompt" rows="5" placeholder="Describe how you want the assistant to respond."></textarea>
+              </div>
+              <div class="form-group">
+                <label for="temperature">Temperature</label>
+                <div class="range-row"><input id="temperature" type="range" min="0" max="2" step="0.1" value="0.7" /><output id="temperature-value" for="temperature" aria-live="polite">0.7</output></div>
+                <label class="checkbox-label" for="temperature-enabled"><input id="temperature-enabled" type="checkbox" /><span>Send temperature with requests</span></label>
+              </div>
+              <div class="form-group">
+                <label for="permission-select">Local tool permissions</label>
+                <select id="permission-select">
+                  <option value="readonly">Read-only</option>
+                  <option value="ask" selected>Ask before changes</option>
+                  <option value="auto-write">Auto-approve file writes</option>
+                  <option value="full">Full access — no prompts</option>
+                  <option value="plan">Plan only — no tools</option>
+                </select>
+              </div>
+              <div class="button-row"><button id="assistant-save" class="button primary" type="submit">Save assistant settings</button></div>
+            </form>
+          </div>
+        </section>
+
+        <section id="view-experts" class="view" aria-labelledby="catalog-title">
+          <div class="page page-wide">
+            <header class="page-header"><div><span class="eyebrow">A useful starting point</span><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Explore roles, prompt templates, reference repositories, and setup guides.</p></div></header>
+            <div class="catalog-filters">
+              <div class="form-group"><label for="catalog-search">Search the catalog</label><input id="catalog-search" type="search" placeholder="Search by name or purpose" autocomplete="off" /></div>
+              <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
+              <span id="catalog-count" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span>
+            </div>
+            <p class="notice">Selecting an expert or installing a skill applies its prompt to your chat requests. Connecting a service stores its access token encrypted on this device and verifies it against the provider; setup guides and reference repos are reading material.</p>
+            <section class="catalog-section" aria-labelledby="experts-title">
+              <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><span class="small-label">Prompt context</span></div>
+              <div id="experts-grid" class="catalog-grid"></div>
+            </section>
+            <section class="catalog-section" aria-labelledby="skills-title">
+              <div class="catalog-heading"><div><h2 id="skills-title">30 templates</h2></div><span class="small-label">Prompt library</span></div>
+              <div id="skills-list" class="catalog-grid"></div>
+            </section>
+            <section class="catalog-section" aria-labelledby="community-title">
+              <div class="catalog-heading"><div><h2 id="community-title">7 external reference repos</h2></div><span class="small-label">Community references</span></div>
+              <div id="community-list" class="catalog-grid"></div>
+            </section>
+            <section class="catalog-section" aria-labelledby="connectors-title">
+              <div class="catalog-heading"><div><h2 id="connectors-title">40 setup guides</h2></div><span class="small-label">Connector guides</span></div>
+              <div id="connectors-list" class="catalog-grid"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-automation" class="view" aria-labelledby="automation-title">
+          <div class="page">
+            <header class="page-header"><div><span class="eyebrow">A rhythm for recurring work</span><h1 id="automation-title" class="page-title">Put your prompts on a schedule.</h1><p class="page-sub">Create recurring AI tasks with clear, explicit consent.</p></div></header>
+            <div class="notice warning-notice" id="automation-consent"><strong>Runs only while this window is open.</strong> Schedules send prompts to your configured provider and may incur charges. Creating a schedule consents to these recurring requests. Existing schedules from earlier versions remain paused until you explicitly enable them.</div>
+            <p id="scheduler-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Keep this window open for enabled schedules to run.</p>
+            <form id="automation-form" class="settings-card" aria-labelledby="automation-form-title" aria-describedby="automation-consent">
+              <div class="card-heading"><span class="section-number" aria-hidden="true">+</span><div><h2 id="automation-form-title">New schedule</h2></div></div>
+              <div class="form-group"><label for="automation-name">Schedule name</label><input id="automation-name" type="text" placeholder="Give this recurring task a name" required /></div>
+              <div class="form-group"><label for="automation-prompt">Prompt to send</label><textarea id="automation-prompt" rows="4" placeholder="Write the instructions to send to your provider." required></textarea></div>
+              <div class="form-row">
+                <div class="form-group"><label for="automation-schedule">Repeat</label><select id="automation-schedule"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
+                <div class="form-group"><label for="automation-time">Local time</label><input id="automation-time" type="time" value="09:00" required /></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group"><label for="automation-weekday">Day of the week</label><select id="automation-weekday"><option value="0">Sunday</option><option value="1" selected>Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
+                <div class="form-group"><label for="automation-monthday">Day of the month</label><input id="automation-monthday" type="number" min="1" max="31" value="1" step="1" /></div>
+              </div>
+              <div class="button-row"><button id="automation-submit" class="button primary" type="submit">Consent &amp; create schedule</button></div>
+            </form>
+            <section aria-labelledby="schedules-title"><div class="catalog-heading"><h2 id="schedules-title">Your schedules</h2><span class="small-label">Local to this workspace</span></div><div id="automation-list"></div></section>
+          </div>
+        </section>
+
+        <section id="view-more" class="view" aria-labelledby="more-title">
+          <div class="page">
+            <header class="page-header"><div><span class="eyebrow">The workspace details</span><h1 id="more-title" class="page-title">Simple by design. Yours by default.</h1><p class="page-sub">Appearance, local data, and a little about ScaleMax.</p></div></header>
+            <section class="settings-card" aria-labelledby="appearance-title">
+              <h2 id="appearance-title">Appearance</h2>
+              <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></div>
+            </section>
+            <section class="settings-card" aria-labelledby="data-title">
+              <h2 id="data-title">Your data stays yours</h2>
+              <p class="body-copy">There is no cloud sign-in. Task history and settings are stored as plain local data on this device, not as encrypted records. Keep exports somewhere you trust.</p>
+              <p class="body-copy">API keys are protected separately in an encrypted secret store when available, or kept only for the current session. Messages and explicitly attached files are sent to the provider you configure.</p>
+              <div class="button-row"><button id="export-data-btn" class="button secondary" type="button">Export local data</button></div>
+            </section>
+            <section class="settings-card about-card" aria-labelledby="about-title">
+              <span class="brand-mark" aria-hidden="true">S</span>
+              <div><h2 id="about-title">ScaleMax</h2><p class="body-copy">A focused place for local work and provider-powered AI.</p><p id="about-version" class="status-text" role="status" aria-live="polite">Version information is supplied by the app.</p></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer id="statusbar">
+      <span id="statusbar-provider" class="statusbar-item" role="status" aria-live="polite" aria-atomic="true">Provider not configured</span>
+      <span class="statusbar-spacer"></span>
+      <span id="statusbar-model" class="statusbar-item">No model</span>
+    </footer>
+  </div>
+
+  <dialog id="search-dialog" aria-labelledby="search-title">
+    <div class="dialog-header"><div><span class="eyebrow">Find your next step</span><h2 id="search-title">Search workspace</h2></div><button id="search-close" class="button secondary" type="button">Close</button></div>
+    <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus /></div>
+    <div id="search-results" aria-label="Search results" aria-live="polite"></div>
+  </dialog>
+
+  <dialog id="connector-dialog" aria-labelledby="connector-dialog-title">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Connect a service</span><h2 id="connector-dialog-title">Connect</h2></div>
+      <button id="connector-dialog-close" class="button secondary" type="button">Close</button>
+    </div>
+    <form id="connector-form" class="dialog-body">
+      <p id="connector-dialog-description" class="body-copy"></p>
+      <div class="form-group">
+        <label for="connector-token">Access token</label>
+        <input id="connector-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="Paste the token" />
+        <p id="connector-token-hint" class="status-text"></p>
+      </div>
+      <div class="button-row">
+        <button id="connector-save" class="button primary" type="submit">Connect</button>
+        <button id="connector-cancel" class="button secondary" type="button">Cancel</button>
+      </div>
+      <p id="connector-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+    </form>
+  </dialog>
+
+  <dialog id="detail-dialog" aria-labelledby="detail-title">
+    <div class="dialog-header">
+      <div><span id="detail-kind" class="eyebrow">Details</span><h2 id="detail-title">Details</h2></div>
+      <button id="detail-close" class="button secondary" type="button">Close</button>
+    </div>
+    <div class="dialog-body">
+      <p id="detail-description" class="body-copy"></p>
+      <div id="detail-content" class="detail-content"></div>
+    </div>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="web-shim.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

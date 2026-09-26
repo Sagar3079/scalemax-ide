@@ -1,0 +1,44 @@
+{
+  "name": "scalemax-ide",
+  "version": "1.0.0",
+  "description": "ScaleMax IDE — your AI-powered development workspace",
+  "main": "main.js",
+  "author": "ScaleMax",
+  "license": "MIT",
+  "scripts": {
+    "prestart": "node build/electron-runtime.cjs --check",
+    "repair:electron": "node build/electron-runtime.cjs --repair",
+    "check:electron": "node build/electron-runtime.cjs --check",
+    "start": "electron .",
+    "test": "node --test",
+    "build": "electron-builder --mac",
+    "build:dir": "electron-builder --mac --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.scalemax.ide",
+    "productName": "ScaleMax",
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icons/icon.icns"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ]
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
