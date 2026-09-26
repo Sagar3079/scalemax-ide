@@ -84,7 +84,81 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * @param {{id: string, action: string, params: {[key: string]: string}}} input
      * @returns {Promise<{ok: boolean, data?: object, error?: object}>} bounded, sanitized provider data; the token is never returned
      */
-    fetch: (input) => ipcRenderer.invoke('connector:fetch', input)
+    fetch: (input) => ipcRenderer.invoke('connector:fetch', input),
+
+    /**
+     * Saves the OAuth app registration for a connector. The client secret is write-only:
+     * omit it to keep the stored one, pass '' to clear it. shop is required for Shopify.
+     * @param {{id: string, clientId: string, clientSecret?: string, shop?: string}} input
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} the getOAuthConfig shape; the secret is never returned
+     */
+    saveOAuthConfig: (input) => ipcRenderer.invoke('connector:oauth-config-save', input),
+
+    /**
+     * Reads the OAuth setup for a connector: registration hints plus what is stored.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {id: string, supported: boolean, configured?: boolean, clientId?: string, hasSecret?: boolean, secretStorage?: string, shop?: string|null, secret?: string, needsShop?: boolean, redirectUri?: string, loopback?: string, redirectNote?: string, registerUrl?: string, docsUrl?: string, scopes?: string}, error?: object}>}
+     *          data.supported is false when the connector has no OAuth sign-in
+     */
+    getOAuthConfig: (input) => ipcRenderer.invoke('connector:oauth-config-get', input),
+
+    /**
+     * Opens the provider sign-in page in the system browser and resolves once the
+     * loopback callback has been exchanged for tokens. Starting another sign-in cancels
+     * the one in progress.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} sanitized list entry; tokens are never returned
+     */
+    startOAuth: (input) => ipcRenderer.invoke('connector:oauth-start', input),
+
+    /**
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {id: string, pending: boolean, connected: boolean, oauth: boolean, identity: string|null, expiresAt: number|null, expired: boolean, hasRefreshToken: boolean, lastError: string|null}, error?: object}>}
+     */
+    oauthStatus: (input) => ipcRenderer.invoke('connector:oauth-status', input),
+
+    /**
+     * Cancels a pending sign-in and removes the stored tokens. forgetClient also deletes
+     * the saved client ID and secret; pendingOnly only cancels the sign-in in progress
+     * and keeps any existing connection.
+     * @param {{id: string, forgetClient?: boolean, pendingOnly?: boolean}} input
+     * @returns {Promise<{ok: boolean, data?: {removed: boolean, clientForgotten: boolean, cancelled?: boolean}, error?: object}>}
+     */
+    disconnectOAuth: (input) => ipcRenderer.invoke('connector:oauth-disconnect', input)
+  },
+
+  mcp: {
+    /**
+     * Lists configured MCP servers. Env and header values are never returned, only their names.
+     * @returns {Promise<{ok: boolean, data?: Array<{id: string, name: string, transport: 'stdio'|'http', command: string|null, args: string[], cwd: string|null, url: string|null, enabled: boolean, envKeys: string[], headerKeys: string[], secretStorage: string, lastStatus: string, lastError: string|null, toolCount: number, connected: boolean, serverInfo: object|null, updatedAt: number}>, error?: object}>}
+     */
+    list: () => ipcRenderer.invoke('mcp:list'),
+
+    /**
+     * Adds or updates a server. Omit env/headers on update to keep the stored values.
+     * @param {{id?: string, name: string, transport: 'stdio'|'http', command?: string, args?: string[], cwd?: string, url?: string, env?: {[key: string]: string}, headers?: {[key: string]: string}, enabled?: boolean}} input
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} the sanitized list entry
+     */
+    save: (input) => ipcRenderer.invoke('mcp:save', input),
+
+    /**
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {removed: boolean}, error?: object}>}
+     */
+    remove: (input) => ipcRenderer.invoke('mcp:remove', input),
+
+    /**
+     * Connects, initializes and lists tools.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {ok: true, serverInfo: object, protocolVersion: string, tools: Array<{name: string, title: string, description: string, readOnly: boolean}>}, error?: object}>}
+     */
+    test: (input) => ipcRenderer.invoke('mcp:test', input),
+
+    /**
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: Array<{name: string, title: string, description: string, readOnly: boolean}>, error?: object}>}
+     */
+    tools: (input) => ipcRenderer.invoke('mcp:tools', input)
   },
 
   dialog: {

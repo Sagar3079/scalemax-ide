@@ -8,6 +8,8 @@
   <title>ScaleMax — Local AI workspace</title>
   <link rel="stylesheet" href="sm-tokens.css" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="experts.css" />
+  <link rel="stylesheet" href="workspace.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -27,7 +29,7 @@
     <div id="app-body">
       <aside id="sidebar" aria-label="Workspace sidebar">
         <div id="brand">
-          <span class="brand-mark" aria-hidden="true">S</span>
+          <span class="brand-mark" aria-hidden="true"><svg focusable="false" viewBox="0 0 22 22" fill="none"><path d="M11 1.5 19.5 6.25v9.5L11 20.5l-8.5-4.75v-9.5L11 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m11 6 3.5 5L11 16l-3.5-5L11 6Z" fill="currentColor"/></svg></span>
           <div class="brand-text">
             <span class="brand-name">ScaleMax</span>
             <span class="brand-caption">Your work. Your workspace.</span>
@@ -123,6 +125,7 @@
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
                   <button id="attach-btn" class="button secondary" type="button">Attach file</button>
                   <span id="context-chips" class="context-chips"></span>
+                  <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
                   <span id="model-pill" class="model-pill">No model selected</span>
                   <div class="button-row send-actions">
                     <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
@@ -148,66 +151,105 @@
         </section>
 
         <section id="view-workspace" class="view" aria-labelledby="workspace-title">
-          <div class="workspace-page">
-            <header class="workspace-header">
-              <div>
-                <span class="eyebrow">Local tools</span>
-                <h1 id="workspace-title" class="page-title">Your workspace, in focus.</h1>
+          <div class="ws">
+            <header class="ws-toolbar">
+              <h1 id="workspace-title" class="sr-only">Workspace</h1>
+              <div class="ws-crumb" aria-label="Current folder">
+                <svg class="ws-crumb-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+                <span id="workspace-path" class="ws-crumb-path">No folder selected</span>
               </div>
-              <div class="button-row">
-                <button id="workspace-open" class="button primary" type="button">Open folder</button>
-                <button id="workspace-refresh" class="button secondary" type="button">Refresh files</button>
+              <span id="workspace-status" class="ws-toolbar-status" role="status" aria-live="polite" aria-atomic="true">Open a local folder to begin.</span>
+              <div class="ws-toolbar-actions">
+                <button id="workspace-refresh" class="button secondary compact" type="button" title="Reload the file tree">Refresh</button>
+                <button id="workspace-open" class="button primary compact" type="button">Open folder</button>
               </div>
             </header>
-            <div class="workspace-location">
-              <span class="small-label">Folder</span>
-              <span id="workspace-path" class="path-text">No folder selected</span>
-              <span id="workspace-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Open a local folder to begin.</span>
-            </div>
 
-            <div class="workspace-main">
-              <section class="file-panel" aria-labelledby="files-title">
-                <header class="panel-header"><h2 id="files-title">Files</h2><span class="small-label">Local project</span></header>
-                <div id="file-tree" aria-label="Project files"></div>
-              </section>
-              <section class="editor-panel" aria-labelledby="editor-title">
-                <header class="panel-header">
-                  <div class="editor-tab" id="editor-tab">
-                    <h2 id="editor-title" class="editor-tab-name">Editor</h2>
-                    <span id="editor-path" class="editor-tab-path">No file selected</span>
+            <div class="ws-body">
+              <aside class="ws-explorer" aria-labelledby="files-title">
+                <div class="ws-pane-header">
+                  <h2 id="files-title">Explorer</h2>
+                  <button id="workspace-collapse" class="ws-icon-button" type="button" aria-label="Collapse all folders" title="Collapse all folders">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m7 15 5-5 5 5" /><path d="M5 5h14" /></svg>
+                  </button>
+                </div>
+                <div class="ws-filter">
+                  <label for="workspace-filter" class="sr-only">Filter files by name</label>
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
+                  <input id="workspace-filter" type="search" placeholder="Filter files by name" autocomplete="off" spellcheck="false" />
+                </div>
+                <div id="file-tree" class="ws-tree" role="tree" aria-label="Project files"></div>
+              </aside>
+
+              <div id="ws-splitter-explorer" class="ws-splitter ws-splitter-v" role="separator" aria-orientation="vertical" aria-label="Resize the explorer" aria-controls="file-tree" tabindex="0"></div>
+
+              <div class="ws-center">
+                <section class="ws-editor" aria-labelledby="editor-title">
+                  <div id="editor-tabs" class="ws-tabs" role="tablist" aria-label="Open files"></div>
+                  <div id="editor-tab" class="ws-editor-head">
+                    <div class="ws-editor-file">
+                      <h2 id="editor-title">Editor</h2>
+                      <span id="editor-path" class="ws-editor-path">No file selected</span>
+                    </div>
+                    <button id="editor-save" class="button secondary compact" type="button" aria-describedby="editor-status" title="Save (⌘S)">Save</button>
                   </div>
-                  <button id="editor-save" class="button primary" type="button" aria-describedby="editor-status">Save file</button>
-                </header>
-                <div class="editor-body">
-                  <pre id="editor-gutter" class="editor-gutter" aria-hidden="true">1</pre>
-                  <textarea id="editor-input" rows="16" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Select a file to view and edit its contents." aria-describedby="editor-status"></textarea>
-                </div>
-                <p id="editor-status" class="panel-footer status-text" role="status" aria-live="polite" aria-atomic="true">Choose a file before editing or saving.</p>
-              </section>
+                  <div class="ws-editor-body">
+                    <pre id="editor-gutter" class="ws-gutter" aria-hidden="true">1</pre>
+                    <div class="ws-code">
+                      <pre id="editor-highlight" class="ws-highlight" aria-hidden="true"></pre>
+                      <textarea id="editor-input" class="ws-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="File contents" aria-describedby="editor-status"></textarea>
+                    </div>
+                    <div id="workspace-empty" class="ws-empty">
+                      <svg class="ws-empty-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+                      <h3 id="workspace-empty-title">Open a project folder</h3>
+                      <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this Mac.</p>
+                      <button id="workspace-open-empty" class="button primary" type="button">Open folder</button>
+                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>Tab</kbd> indent · <kbd>⇧Tab</kbd> outdent</p>
+                    </div>
+                  </div>
+                </section>
+
+                <div id="ws-splitter-panel" class="ws-splitter ws-splitter-h" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" aria-controls="ws-panel" tabindex="0"></div>
+
+                <section id="ws-panel" class="ws-panel" aria-label="Workspace tools">
+                  <div class="ws-panel-tabs">
+                    <div role="tablist" aria-label="Workspace panels" class="ws-panel-tablist">
+                      <button id="ws-tab-terminal" class="ws-panel-tab" type="button" role="tab" aria-selected="true" aria-controls="ws-view-terminal" data-panel="terminal">Terminal</button>
+                      <button id="ws-tab-git" class="ws-panel-tab" type="button" role="tab" aria-selected="false" aria-controls="ws-view-git" data-panel="git" tabindex="-1">Git changes <span id="ws-git-count" class="ws-count" hidden></span></button>
+                      <button id="ws-tab-diff" class="ws-panel-tab" type="button" role="tab" aria-selected="false" aria-controls="ws-view-diff" data-panel="diff" tabindex="-1">Diff</button>
+                    </div>
+                    <button id="git-refresh" class="button secondary compact" type="button">Refresh Git</button>
+                  </div>
+                  <div class="ws-panel-views">
+                    <div id="ws-view-terminal" class="ws-panel-view" role="tabpanel" aria-labelledby="ws-tab-terminal" data-panel-view="terminal">
+                      <pre id="terminal-output" class="ws-terminal-output" role="log" aria-label="Command output" aria-live="polite" aria-relevant="additions text" tabindex="0"></pre>
+                      <form id="terminal-form" class="ws-terminal-form">
+                        <span class="ws-prompt" aria-hidden="true">$</span>
+                        <label for="terminal-command" class="sr-only">Command</label>
+                        <input id="terminal-command" type="text" placeholder="Run a non-interactive command in the project folder" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                        <button id="terminal-run" class="button primary compact" type="submit">Run</button>
+                        <button id="terminal-cancel" class="button secondary compact" type="button">Cancel</button>
+                      </form>
+                    </div>
+                    <div id="ws-view-git" class="ws-panel-view" role="tabpanel" aria-labelledby="ws-tab-git" data-panel-view="git" hidden>
+                      <p id="git-status" class="status-text" role="status" aria-live="polite">Open a repository to review its changes.</p>
+                      <div id="git-files" class="ws-git-files" aria-label="Changed files"></div>
+                    </div>
+                    <div id="ws-view-diff" class="ws-panel-view" role="tabpanel" aria-labelledby="ws-tab-diff" data-panel-view="diff" hidden>
+                      <pre id="git-diff" class="code-output diff-output ws-diff" tabindex="0" aria-label="Git diff"></pre>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
 
-            <div class="workspace-tools">
-              <section class="tool-panel" aria-labelledby="git-title">
-                <header class="panel-header"><h2 id="git-title">Git changes</h2><button id="git-refresh" class="button secondary" type="button">Refresh Git</button></header>
-                <div class="panel-body">
-                  <p id="git-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Open a repository to review its changes.</p>
-                  <div id="git-files" aria-label="Changed files"></div>
-                  <pre id="git-diff" class="code-output diff-output" tabindex="0" aria-label="Git diff"></pre>
-                </div>
-              </section>
-              <section class="tool-panel" aria-labelledby="terminal-title">
-                <header class="panel-header"><h2 id="terminal-title">Command console</h2><span class="badge">Native approval</span></header>
-                <div class="panel-body console-body">
-                  <pre id="terminal-output" class="code-output console-output" role="log" aria-label="Command output" aria-live="polite" aria-relevant="additions text" tabindex="0"></pre>
-                  <form id="terminal-form" class="console-form">
-                    <span class="console-prompt" aria-hidden="true">$</span>
-                    <input id="terminal-command" type="text" placeholder="Enter a non-interactive command" autocomplete="off" autocapitalize="off" spellcheck="false" required />
-                    <button id="terminal-run" class="button primary" type="submit">Run</button>
-                    <button id="terminal-cancel" class="button secondary" type="button">Cancel</button>
-                  </form>
-                </div>
-              </section>
-            </div>
+            <footer class="ws-statusbar">
+              <span id="editor-status" class="ws-status-main" role="status" aria-live="polite">Choose a file before editing or saving.</span>
+              <span class="ws-status-spacer"></span>
+              <span id="editor-location" class="ws-status-item">Ln 1, Col 1</span>
+              <span id="editor-language" class="ws-status-item">Plain text</span>
+              <span id="editor-branch" class="ws-status-item">No branch</span>
+            </footer>
           </div>
         </section>
 
@@ -280,7 +322,7 @@
               <div class="form-group">
                 <label for="temperature">Temperature</label>
                 <div class="range-row"><input id="temperature" type="range" min="0" max="2" step="0.1" value="0.7" /><output id="temperature-value" for="temperature" aria-live="polite">0.7</output></div>
-                <label class="checkbox-label" for="temperature-enabled"><input id="temperature-enabled" type="checkbox" /><span>Send temperature with requests</span></label>
+                <label class="checkbox-label" for="temperature-enabled"><input id="temperature-enabled" type="checkbox" /><span>Send temperature with requests (moving the slider turns this on; off uses the provider default)</span></label>
               </div>
               <div class="form-group">
                 <label for="permission-select">Local tool permissions</label>
@@ -292,8 +334,17 @@
                   <option value="plan">Plan only — no tools</option>
                 </select>
               </div>
-              <div class="button-row"><button id="assistant-save" class="button primary" type="submit">Save assistant settings</button></div>
+              <div class="button-row"><button id="assistant-save" class="button primary" type="submit">Save assistant settings</button><span id="assistant-saved" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
             </form>
+
+            <section id="mcp-card" class="settings-card" aria-labelledby="mcp-title">
+              <div class="card-heading mcp-heading">
+                <span class="section-number" aria-hidden="true">03</span>
+                <div class="mcp-heading-text"><h2 id="mcp-title">Tools from MCP servers</h2><p class="status-text">Enabled Model Context Protocol servers offer their tools to the model in chat. ScaleMax runs each tool call and lists it under the reply. Read-only permission offers only tools marked read-only; Plan only offers none.</p></div>
+                <button id="mcp-add-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="mcp-dialog">Add server</button>
+              </div>
+              <div id="mcp-list" class="mcp-list" aria-label="MCP servers"></div>
+            </section>
           </div>
         </section>
 
@@ -305,13 +356,13 @@
               <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
               <span id="catalog-count" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
-            <p class="notice">Selecting an expert or installing a skill applies its prompt to your chat requests. Connecting a service stores its access token encrypted on this device and verifies it against the provider; setup guides and reference repos are reading material.</p>
+            <p class="notice">Selecting an expert or installing a skill applies its prompt to your chat requests. Connecting a service (OAuth sign-in with your own app registration, or an access token) stores the credential encrypted on this device and verifies it with the provider where a validation endpoint exists; reference repos are reading material.</p>
             <section class="catalog-section" aria-labelledby="experts-title">
-              <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><span class="small-label">Prompt context</span></div>
+              <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt context</span><button id="add-expert-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New expert</button></div></div>
               <div id="experts-grid" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="skills-title">
-              <div class="catalog-heading"><div><h2 id="skills-title">30 templates</h2></div><span class="small-label">Prompt library</span></div>
+              <div class="catalog-heading"><div><h2 id="skills-title">30 templates</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt library</span><button id="add-skill-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New skill</button></div></div>
               <div id="skills-list" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="community-title">
@@ -319,7 +370,7 @@
               <div id="community-list" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="connectors-title">
-              <div class="catalog-heading"><div><h2 id="connectors-title">40 setup guides</h2></div><span class="small-label">Connector guides</span></div>
+              <div class="catalog-heading"><div><h2 id="connectors-title">40 connectors</h2></div><span class="small-label">OAuth or access token</span></div>
               <div id="connectors-list" class="catalog-grid"></div>
             </section>
           </div>
@@ -335,14 +386,17 @@
               <div class="form-group"><label for="automation-name">Schedule name</label><input id="automation-name" type="text" placeholder="Give this recurring task a name" required /></div>
               <div class="form-group"><label for="automation-prompt">Prompt to send</label><textarea id="automation-prompt" rows="4" placeholder="Write the instructions to send to your provider." required></textarea></div>
               <div class="form-row">
-                <div class="form-group"><label for="automation-schedule">Repeat</label><select id="automation-schedule"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
-                <div class="form-group"><label for="automation-time">Local time</label><input id="automation-time" type="time" value="09:00" required /></div>
+                <div class="form-group"><label for="automation-schedule">Repeat</label><select id="automation-schedule"><option value="once">Once</option><option value="hourly">Hourly</option><option value="daily" selected>Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="interval">Every N minutes</option></select></div>
+                <div class="form-group" data-automation-field="time"><label for="automation-time">Local time <span class="small-label" id="automation-time-hint"></span></label><input id="automation-time" type="time" value="09:00" /></div>
+                <div class="form-group" data-automation-field="date" hidden><label for="automation-date">Date</label><input id="automation-date" type="date" /></div>
+                <div class="form-group" data-automation-field="interval" hidden><label for="automation-interval">Every (minutes)</label><input id="automation-interval" type="number" min="1" max="525600" step="1" value="60" /></div>
               </div>
               <div class="form-row">
-                <div class="form-group"><label for="automation-weekday">Day of the week</label><select id="automation-weekday"><option value="0">Sunday</option><option value="1" selected>Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
-                <div class="form-group"><label for="automation-monthday">Day of the month</label><input id="automation-monthday" type="number" min="1" max="31" value="1" step="1" /></div>
+                <div class="form-group" data-automation-field="weekday" hidden><label for="automation-weekday">Day of the week</label><select id="automation-weekday"><option value="0">Sunday</option><option value="1" selected>Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
+                <div class="form-group" data-automation-field="monthday" hidden><label for="automation-monthday">Day of the month</label><input id="automation-monthday" type="number" min="1" max="31" value="1" step="1" /></div>
               </div>
-              <div class="button-row"><button id="automation-submit" class="button primary" type="submit">Consent &amp; create schedule</button></div>
+              <input id="automation-edit-id" type="hidden" value="" />
+              <div class="button-row"><button id="automation-submit" class="button primary" type="submit">Consent &amp; create schedule</button><button id="automation-cancel-edit" class="button secondary" type="button" hidden>Cancel edit</button></div>
             </form>
             <section aria-labelledby="schedules-title"><div class="catalog-heading"><h2 id="schedules-title">Your schedules</h2><span class="small-label">Local to this workspace</span></div><div id="automation-list"></div></section>
           </div>
@@ -362,7 +416,7 @@
               <div class="button-row"><button id="export-data-btn" class="button secondary" type="button">Export local data</button></div>
             </section>
             <section class="settings-card about-card" aria-labelledby="about-title">
-              <span class="brand-mark" aria-hidden="true">S</span>
+              <span class="brand-mark" aria-hidden="true"><svg focusable="false" viewBox="0 0 22 22" fill="none"><path d="M11 1.5 19.5 6.25v9.5L11 20.5l-8.5-4.75v-9.5L11 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m11 6 3.5 5L11 16l-3.5-5L11 6Z" fill="currentColor"/></svg></span>
               <div><h2 id="about-title">ScaleMax</h2><p class="body-copy">A focused place for local work and provider-powered AI.</p><p id="about-version" class="status-text" role="status" aria-live="polite">Version information is supplied by the app.</p></div>
             </section>
           </div>
@@ -388,18 +442,128 @@
       <div><span class="eyebrow">Connect a service</span><h2 id="connector-dialog-title">Connect</h2></div>
       <button id="connector-dialog-close" class="button secondary" type="button">Close</button>
     </div>
-    <form id="connector-form" class="dialog-body">
+    <div class="dialog-body">
       <p id="connector-dialog-description" class="body-copy"></p>
+      <p id="connector-current" class="connector-current" role="status" aria-live="polite" hidden></p>
+
+      <section id="connector-oauth-section" class="connector-section" aria-labelledby="connector-oauth-title" hidden>
+        <div class="connector-section-head"><h3 id="connector-oauth-title">Sign in with OAuth</h3><span id="connector-oauth-badge" class="badge"></span></div>
+        <p class="status-text">OAuth needs an app registration of your own with the provider. ScaleMax does not ship shared client IDs.</p>
+        <ol class="connector-steps">
+          <li><span>Register an OAuth app:</span> <span id="connector-register-url" class="path-text"></span> <button id="connector-register-copy" class="button secondary compact" type="button">Copy link</button></li>
+          <li><span>Add this redirect URI:</span> <code id="connector-redirect-uri" class="path-text"></code> <button id="connector-redirect-copy" class="button secondary compact" type="button">Copy</button></li>
+          <li><span>Paste the app's credentials below, then sign in. Your browser opens the provider's consent page.</span></li>
+        </ol>
+        <p id="connector-redirect-note" class="notice"></p>
+        <form id="connector-oauth-form" novalidate>
+          <div class="form-group">
+            <label for="connector-client-id">Client ID</label>
+            <input id="connector-client-id" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="The app's client ID" />
+          </div>
+          <div class="form-group" id="connector-client-secret-group">
+            <label for="connector-client-secret">Client secret <span id="connector-secret-mode" class="small-label"></span></label>
+            <input id="connector-client-secret" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="The app's client secret" />
+          </div>
+          <p id="connector-secret-none" class="status-text" hidden>This provider's desktop sign-in is a public client, so no client secret is used.</p>
+          <div class="form-group" id="connector-shop-group" hidden>
+            <label for="connector-shop">Store domain</label>
+            <input id="connector-shop" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="your-store.myshopify.com" />
+          </div>
+          <div class="button-row">
+            <button id="connector-oauth-start" class="button primary" type="submit">Sign in</button>
+            <button id="connector-oauth-cancel" class="button secondary" type="button" hidden>Cancel sign-in</button>
+            <button id="connector-oauth-forget" class="button danger" type="button" hidden>Forget app settings</button>
+          </div>
+          <p id="connector-oauth-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+        </form>
+      </section>
+      <p id="connector-oauth-unavailable" class="notice" hidden></p>
+
+      <section class="connector-section" aria-labelledby="connector-token-title">
+        <div class="connector-section-head"><h3 id="connector-token-title">Use an access token</h3></div>
+        <form id="connector-form">
+          <div class="form-group">
+            <label for="connector-token">Access token</label>
+            <input id="connector-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="Paste the token" />
+            <p id="connector-token-hint" class="status-text"></p>
+          </div>
+          <div class="button-row">
+            <button id="connector-save" class="button primary" type="submit">Connect</button>
+            <button id="connector-cancel" class="button secondary" type="button">Cancel</button>
+          </div>
+          <p id="connector-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+        </form>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="custom-dialog" aria-labelledby="custom-dialog-title">
+    <div class="dialog-header">
+      <div><span id="custom-dialog-kind" class="eyebrow">Your own expert</span><h2 id="custom-dialog-title">New expert</h2></div>
+      <button id="custom-close" class="button secondary" type="button">Close</button>
+    </div>
+    <form id="custom-form" class="dialog-body" novalidate>
+      <input id="custom-kind" type="hidden" value="expert" />
+      <input id="custom-edit-id" type="hidden" value="" />
+      <div class="custom-form-top">
+        <div id="custom-avatar-preview" class="custom-avatar-preview" aria-hidden="true"></div>
+        <div class="custom-form-fields">
+          <div class="form-group"><label for="custom-name">Name</label><input id="custom-name" type="text" maxlength="64" autocomplete="off" required /></div>
+          <div class="form-row">
+            <div class="form-group" data-custom-field="expert"><label for="custom-role">Role</label><input id="custom-role" type="text" maxlength="64" autocomplete="off" placeholder="Engineering, Legal, Support…" /></div>
+            <div class="form-group"><label for="custom-category">Category</label><input id="custom-category" type="text" maxlength="64" autocomplete="off" placeholder="Custom" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group"><label for="custom-description">Short description</label><input id="custom-description" type="text" maxlength="500" autocomplete="off" placeholder="One line shown on the card" /></div>
       <div class="form-group">
-        <label for="connector-token">Access token</label>
-        <input id="connector-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="Paste the token" />
-        <p id="connector-token-hint" class="status-text"></p>
+        <label for="custom-prompt" id="custom-prompt-label">Prompt applied to chat</label>
+        <textarea id="custom-prompt" rows="7" maxlength="8000" required aria-describedby="custom-prompt-hint"></textarea>
+        <p id="custom-prompt-hint" class="status-text"></p>
       </div>
+      <fieldset class="custom-avatar-fieldset" data-custom-field="expert">
+        <legend>Avatar</legend>
+        <div id="custom-colors" class="custom-colors" role="radiogroup" aria-label="Avatar colour"></div>
+        <div class="form-group"><label for="custom-accessory">Prop</label><select id="custom-accessory"></select></div>
+      </fieldset>
       <div class="button-row">
-        <button id="connector-save" class="button primary" type="submit">Connect</button>
-        <button id="connector-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="custom-save" class="button primary" type="submit">Save</button>
+        <button id="custom-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="custom-delete" class="button danger" type="button" hidden>Delete</button>
       </div>
-      <p id="connector-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="custom-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+    </form>
+  </dialog>
+
+  <dialog id="mcp-dialog" aria-labelledby="mcp-dialog-title">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Model Context Protocol</span><h2 id="mcp-dialog-title">Add MCP server</h2></div>
+      <button id="mcp-close" class="button secondary" type="button">Close</button>
+    </div>
+    <form id="mcp-form" class="dialog-body" novalidate>
+      <input id="mcp-edit-id" type="hidden" value="" />
+      <div class="form-row">
+        <div class="form-group"><label for="mcp-name">Name</label><input id="mcp-name" type="text" maxlength="64" autocomplete="off" placeholder="Filesystem" required /></div>
+        <div class="form-group"><label for="mcp-transport">Transport</label><select id="mcp-transport"><option value="stdio" selected>Local command (stdio)</option><option value="http">Remote URL (Streamable HTTP)</option></select></div>
+      </div>
+      <div data-mcp-field="stdio">
+        <p class="notice warning-notice">A local server runs this command on your Mac with your user permissions. Only add servers you trust.</p>
+        <div class="form-group"><label for="mcp-command">Command</label><input id="mcp-command" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="npx" /></div>
+        <div class="form-group"><label for="mcp-args">Arguments <span class="small-label">one per line</span></label><textarea id="mcp-args" rows="3" spellcheck="false" autocapitalize="off" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/Users/you/project"></textarea></div>
+        <div class="form-group"><label for="mcp-cwd">Working directory <span class="small-label">optional, absolute path</span></label><input id="mcp-cwd" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" /></div>
+        <div class="form-group"><label for="mcp-env">Environment variables <span class="small-label">KEY=value per line, stored encrypted</span></label><textarea id="mcp-env" rows="3" spellcheck="false" autocapitalize="off" aria-describedby="mcp-env-hint"></textarea><p id="mcp-env-hint" class="status-text"></p></div>
+      </div>
+      <div data-mcp-field="http" hidden>
+        <div class="form-group"><label for="mcp-url">Server URL</label><input id="mcp-url" type="url" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="https://example.com/mcp" /></div>
+        <div class="form-group"><label for="mcp-headers">Headers <span class="small-label">Name: value per line, stored encrypted</span></label><textarea id="mcp-headers" rows="3" spellcheck="false" autocapitalize="off" placeholder="Authorization: Bearer …" aria-describedby="mcp-headers-hint"></textarea><p id="mcp-headers-hint" class="status-text"></p></div>
+      </div>
+      <label class="checkbox-label" for="mcp-enabled"><input id="mcp-enabled" type="checkbox" checked /><span>Offer this server's tools to the model in chat</span></label>
+      <div class="button-row mcp-dialog-actions">
+        <button id="mcp-save" class="button primary" type="submit">Save and test</button>
+        <button id="mcp-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="mcp-remove" class="button danger" type="button" hidden>Remove server</button>
+      </div>
+      <p id="mcp-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
     </form>
   </dialog>
 

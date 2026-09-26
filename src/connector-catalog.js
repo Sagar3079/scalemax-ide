@@ -1,7 +1,7 @@
 // Curated setup metadata; official documentation researched on 2026-09-15.
 // Capabilities describe provider possibilities, not implemented ScaleMax features.
-// This catalog installs nothing, grants no authorization, and makes no provider calls.
-// Credentials belong in a future runtime secret store, never in this catalog or client code.
+// This catalog installs nothing and grants no authorization; provider calls happen only in the main process.
+// Credentials live in the main-process secret store (lib/connectors.cjs), never in this catalog or client code.
 // Authentication summaries cover selected setup paths, not every provider-supported method.
 export const CONNECTOR_CATALOG = [
   // Development
@@ -16,7 +16,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a personal access token in GitHub for the intended account and repositories.",
       "Approve only required access and keep the token in a server-side secret store.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Repository metadata", "Issues", "Pull requests"],
     "featured": true
@@ -32,7 +32,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Docker Hub account or organization and its intended repositories.",
       "Create an appropriate access token with limited permissions and store it server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Repository metadata", "Image tags", "Organization metadata"],
     "featured": false
@@ -48,7 +48,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Sentry organization and create an internal integration or suitable user token.",
       "Grant only required project permissions and store the token server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Error issues", "Project metadata", "Release metadata"],
     "featured": true
@@ -66,7 +66,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create an internal or public connection in the Notion developer portal.",
       "Share required pages with the internal connection or configure public OAuth consent.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Pages", "Data sources", "Content search"],
     "featured": true
@@ -82,7 +82,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Enable the Drive API in a Google Cloud project and configure an OAuth client.",
       "Configure consent and minimum file access; complete required Google verification before release.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["File search", "File transfers", "Sharing permissions"],
     "featured": true
@@ -98,7 +98,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Enable the Calendar API in a Google Cloud project and configure an OAuth client.",
       "Configure consent for minimum calendar access and satisfy applicable verification requirements.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Calendar lists", "Events", "Calendar permissions"],
     "featured": true
@@ -114,7 +114,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register a Microsoft Entra application for the intended OneDrive account types.",
       "Configure supported Graph file permissions and obtain user or administrator consent as required.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Files and folders", "Sharing links", "Change tracking"],
     "featured": false
@@ -130,7 +130,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register a Dropbox app and choose its file access model and redirect configuration.",
       "Request minimum permissions and arrange user OAuth consent; protect tokens server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["File metadata", "File transfers", "Shared links"],
     "featured": false
@@ -146,7 +146,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register an OAuth integration in the Atlassian developer console and configure its callback.",
       "Select required Jira permissions and arrange user authorization for the intended sites.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Issues", "Projects", "Workflow transitions"],
     "featured": true
@@ -162,7 +162,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register an Atlassian OAuth integration and configure its callback and Confluence permissions.",
       "Arrange user authorization for the intended sites and confirm access to required spaces.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Pages", "Spaces", "Content search"],
     "featured": false
@@ -178,7 +178,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a Linear personal API key or register an OAuth application for shared use.",
       "Authorize the intended workspace and limit access to the required teams and operations.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Issues", "Teams", "Workflow states"],
     "featured": true
@@ -194,7 +194,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a Trello Power-Up app key and configure any required redirect origins.",
       "Arrange user token authorization for required board operations and protect the token.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Boards", "Lists", "Cards"],
     "featured": false
@@ -210,7 +210,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a personal token or register an OAuth app in the Asana developer console.",
       "Arrange authorized workspace access and protect credentials with minimum necessary permissions.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Tasks", "Projects", "Workspace metadata"],
     "featured": false
@@ -228,7 +228,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a Slack app and configure only the required bot or user permissions.",
       "Arrange app installation and authorization in the intended workspace, including required admin approval.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Messages", "Channel metadata", "Event subscriptions"],
     "featured": true
@@ -244,7 +244,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a Discord application and configure its bot, installation settings, and required permissions.",
       "Have an authorized user approve installation in the intended server; keep bot credentials private.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Bot messages", "Channel metadata", "Application commands"],
     "featured": true
@@ -260,7 +260,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register a Microsoft Entra application for the intended tenant and Teams operations.",
       "Select supported Graph permissions and obtain required user or administrator consent.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Teams", "Channels", "Online meetings"],
     "featured": true
@@ -276,7 +276,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Enable the Gmail API in a Google Cloud project and configure an OAuth client.",
       "Configure minimum mailbox permissions and user consent; satisfy applicable verification requirements.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Messages", "Drafts", "Labels"],
     "featured": true
@@ -292,7 +292,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a General app in Zoom Marketplace and configure OAuth redirects and permissions.",
       "Arrange user authorization and required account approval; protect access and refresh tokens.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Meetings", "User profiles", "Webinars"],
     "featured": false
@@ -308,7 +308,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Twilio account, region, and the messaging or voice resources required.",
       "Create an API key with appropriate access and store its credentials server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["SMS messaging", "Voice calls", "Status webhooks"],
     "featured": false
@@ -324,7 +324,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose the SendGrid account and review its sender and email-delivery setup requirements.",
       "Create a permission-limited API key in account settings and store it server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Email sending", "Email templates", "Delivery events"],
     "featured": false
@@ -342,7 +342,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create an Airtable personal access token or register an OAuth integration.",
       "Grant only required base or workspace access and protect token material server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Records", "Base schemas", "Record changes"],
     "featured": true
@@ -358,7 +358,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Have the database administrator provision a least-privilege login role for the intended database.",
       "Configure approved client access and encrypted transport; protect database credentials outside client code.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["SQL queries", "Schema metadata", "Transactions"],
     "featured": true
@@ -374,7 +374,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Have the database administrator create a least-privilege account for the intended database and client host.",
       "Configure approved network access and encrypted transport; store credentials outside client code.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["SQL queries", "Table metadata", "Record updates"],
     "featured": false
@@ -390,7 +390,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create an Atlas database user and assign only required database or collection privileges.",
       "Restrict intended cluster access and configure approved network access and protected credentials.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Document queries", "Aggregations", "Collection metadata"],
     "featured": false
@@ -406,7 +406,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Supabase project and the application access model for the intended data.",
       "Configure user authorization and row-level policies; keep any privileged secret key backend-only.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Table data", "User authentication", "Object storage"],
     "featured": true
@@ -422,7 +422,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Firebase project and enable only the services needed by the planned workflow.",
       "Authorize a server identity with minimum permissions; prefer managed credentials over downloaded keys.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Firestore data", "User management", "Cloud Messaging"],
     "featured": false
@@ -440,7 +440,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose the AWS account, regions, and specific services the planned adapter will support.",
       "Authorize a least-privilege workload role and temporary credential path; avoid long-lived keys.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Object storage", "Compute resources", "Monitoring data"],
     "featured": true
@@ -456,7 +456,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose Azure resources and a supported hosting environment for the future adapter.",
       "Assign a managed identity to that host and grant minimum roles on target resources.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Storage resources", "Compute resources", "Resource metadata"],
     "featured": false
@@ -472,7 +472,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Google Cloud project and enable the specific APIs needed by the planned adapter.",
       "Configure an authorized workload identity or service account with minimum IAM permissions.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Object storage", "Compute resources", "Project metadata"],
     "featured": false
@@ -488,7 +488,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose the Cloudflare account or zones and identify the intended API operations.",
       "Create a resource-restricted API token with minimum permissions and store it securely server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["DNS records", "Zone metadata", "Worker resources"],
     "featured": true
@@ -504,7 +504,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose the Vercel account, team, or project intended for the planned workflow.",
       "Create a minimally scoped access token with an expiration and store it server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Projects", "Deployments", "Domains"],
     "featured": true
@@ -520,7 +520,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose Netlify sites and create a personal token or register an OAuth application.",
       "Arrange required account or team authorization and protect tokens and client secrets server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Sites", "Deployments", "Form submissions"],
     "featured": false
@@ -538,7 +538,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Choose a Stripe sandbox and define the intended payment or billing operations.",
       "Create a restricted test key where supported and store it in a server-side secret vault.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Payment records", "Customers", "Subscriptions"],
     "featured": true
@@ -554,7 +554,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a Shopify app and select the documented authentication path for its distribution model.",
       "Configure minimum permissions and complete the applicable merchant or organization authorization setup.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Products", "Orders", "Inventory"],
     "featured": true
@@ -570,7 +570,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create a HubSpot app and choose OAuth or static authentication for its distribution model.",
       "Select required CRM permissions and arrange authorized account installation; protect tokens server-side.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Contacts", "Companies", "Deals"],
     "featured": false
@@ -586,7 +586,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create an external client app in the intended Salesforce organization and configure OAuth.",
       "Have an administrator approve minimum API access and the appropriate authorization flow.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["CRM records", "Object metadata", "Record queries"],
     "featured": false
@@ -604,7 +604,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Register a Figma OAuth app or create a personal access token for individual use.",
       "Authorize only required file access and confirm relevant account and plan permissions.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["File inspection", "Image exports", "Comments"],
     "featured": true
@@ -620,7 +620,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Create an Intercom developer app and choose a private-workspace or public OAuth model.",
       "Configure minimum access and workspace authorization; never ask customers for their private access tokens.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Conversations", "Contacts", "Support tickets"],
     "featured": false
@@ -638,7 +638,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Arrange Zapier developer app access and review Workflow API eligibility and client setup.",
       "Configure the documented authorization method; external app accounts require separate user authorization.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Workflow creation", "Workflow management", "App discovery"],
     "featured": false
@@ -654,7 +654,7 @@ export const CONNECTOR_CATALOG = [
     "setupSteps": [
       "Review Make API availability for the intended organization and scenario workflow.",
       "Create a minimally permitted API token or request OAuth client access; authorize external apps separately.",
-      "A ScaleMax runtime adapter is still required; the app does not currently call this provider."
+      "In ScaleMax, choose Connect: the credential is encrypted on this device, and Test checks it with the provider where a validation endpoint exists."
     ],
     "capabilities": ["Scenario metadata", "Scenario execution", "Execution history"],
     "featured": false

@@ -1,6 +1,6 @@
 # ScaleMax IDE
 
-ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development. It pairs a chat-first task workspace with an assistant configurator, an Experts · Skills · Connectors catalog, a scheduled Automation manager, and a macOS-native frameless window. The app is built with Electron; the renderer is plain ES modules with no build step, so `src/` is the source of truth you edit directly.
+ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development. It pairs a chat-first task workspace with a tabbed code workspace, an assistant configurator with MCP tools, an Experts · Skills · Connectors catalog, a scheduled Automation manager, and a macOS-native frameless window. The app is built with Electron; the renderer is plain ES modules with no build step, so `src/` is the source of truth you edit directly.
 
 ## Screenshots
 
@@ -15,13 +15,14 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 ## Features
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
-- **Real chat** — messages stream to your configured provider and the reply lands in the transcript; every task and message is persisted
+- **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
+- **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
 - **Six views**, one click away in the sidebar:
   - **Chat** — the chat-first workspace with Working/Coding modes and starting-point chips
-  - **Workspace** — open a local folder, browse files, edit and save, review Git status and diffs
-  - **Assistant** — provider connection, model catalog with per-model toggles, system prompt, temperature and permissions
-  - **Experts & resources** — roles, prompt templates, community references and connector setup guides
-  - **Automation** — create, pause/resume and delete scheduled prompts
+  - **Workspace** — an IDE layout: file tree with filter and Git decorations, tabbed editor with syntax highlighting, Terminal / Git changes / Diff panel, resizable panes
+  - **Assistant** — provider connection, model catalog with per-model toggles, system prompt, temperature, permissions and MCP servers
+  - **Experts & resources** — animated expert characters, prompt templates, your own custom experts and skills, community references and 40 connectors (OAuth sign-in or access token)
+  - **Automation** — once, hourly, daily, weekly, monthly or every-N-minutes schedules with run now, pause/resume, edit and run history
   - **Preferences & about** — theme, local data and app information
 - **Search across tasks** with an overlay, plus a collapsible sidebar
 - **Secure Electron renderer** — `contextIsolation: true`, no node integration; all filesystem and credential access goes through the preload bridge
@@ -75,12 +76,11 @@ Dependency audit warnings are a separate issue. Do not use `npm audit fix --forc
 The renderer only talks to Electron through the `window.scalemaxAPI` bridge, so `src/web-shim.js` installs a faithful stand-in when the page is opened outside Electron. That means you can preview and click through the whole app in any browser — no `npm install`, no packaging.
 
 ```bash
-cd src
-python3 -m http.server 8765
-# then open http://localhost:8765/index.html
+python3 -m http.server 8765   # from the project root, so the fonts in assets/ load
+# then open http://localhost:8765/src/index.html
 ```
 
-Sign in with `smx-sagar-1234567890` to see the demo account. In browser preview, sessions, tasks, settings and automations persist to `localStorage` instead of the Electron user-data file.
+In browser preview, tasks, settings and automations persist to `localStorage` instead of the Electron user-data file. Provider, connector, MCP and workspace features need the desktop app.
 
 > The shim is a **no-op inside Electron** — if `preload.js` has already installed the real bridge, `web-shim.js` does nothing. It is safe to ship.
 
@@ -110,14 +110,26 @@ scalemax-ide/
 ├── build/                # Electron runtime check + smoke test
 ├── dist/                 # build output (generated)
 ├── lib/
-│   ├── provider.cjs      # OpenAI-compatible provider client (keys, models, chat)
-│   └── workspace.cjs     # project folder access: list, read, write, Git
+│   ├── provider.cjs      # OpenAI-compatible provider client (keys, models, chat, tool calls)
+│   ├── connectors.cjs    # encrypted connector credentials, validation, OAuth sessions
+│   ├── oauth.cjs         # loopback OAuth 2.0 engine (PKCE, token exchange, refresh)
+│   ├── oauth-catalog.cjs # provider OAuth endpoints and rules (main process only)
+│   ├── mcp.cjs           # MCP client: stdio + Streamable HTTP servers
+│   ├── tool-loop.cjs     # chat tool-calling loop over MCP tools
+│   ├── state.cjs         # atomic, validated JSON state store
+│   └── workspace.cjs     # project folder access: list, read, write, Git, commands
 ├── src/
 │   ├── app.js            # renderer logic: views, tasks, chat, catalogs, automations
+│   ├── workspace-ui.js   # Workspace tab: tabs, tree, splitters, highlighting
+│   ├── catalog-ui.js     # catalog filters, details, connectors and OAuth dialog
+│   ├── custom-ui.js      # create/edit custom experts and skills
+│   ├── mcp-ui.js         # MCP server management
+│   ├── avatars.js        # animated expert characters (SVG)
 │   ├── data.js           # experts, skills, community references, connectors
 │   ├── index.html        # single-page shell with all six views
 │   ├── sm-tokens.css     # design tokens (light + dark themes)
 │   ├── styles.css        # component styles built on the tokens
+│   ├── workspace.css     # Workspace IDE layout
 │   └── web-shim.js       # browser preview stand-in (no-op under Electron)
 ├── test/                 # node --test unit suites
 ├── main.js               # Electron main process (project root)

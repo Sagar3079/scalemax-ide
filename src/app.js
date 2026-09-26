@@ -1,9 +1,17 @@
 /** ScaleMax IDE: local conversations, settings, and demo interactions. */
 import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
-import { nextRunAt, normalizeAutomations, buildSystemPrompt, searchItems } from './domain.mjs';
+import { nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, toTemperature, searchItems } from './domain.mjs';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
 import { startScheduler } from './scheduler.js';
+import { renderAvatar } from './avatars.js';
+import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
+import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
+import { bindMcpUi } from './mcp-ui.js';
+import {
+  bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
+  activeTabContent, updateGutter, showPanel, setGitDecorations,
+} from './workspace-ui.js';
 
 const DEFAULTS = {
   permission: 'ask', mode: 'working', systemPrompt: '', temperature: 0.7,
@@ -72,12 +80,24 @@ function gitStatusClass(state) {
   return '';
 }
 
+// Tool calls the model made through MCP, kept small and text-only.
+function normalizeToolSummaries(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => isRecord(item) && typeof item.tool === 'string').slice(0, 32).map((item) => ({
+    server: typeof item.server === 'string' ? item.server.slice(0, 64) : '',
+    tool: item.tool.slice(0, 128),
+    ok: item.ok === true,
+  }));
+}
+
 const app = {
   tasks: [],
   currentTaskId: null,
   settings: { ...DEFAULTS },
   automations: [],
   skillStates: {},
+  customExperts: [],
+  customSkills: [],
   provider: null,
   providerKind: 'scalemax',
   providerBase: '',
@@ -92,6 +112,11 @@ const app = {
   toastTimer: null,
   saveQueue: Promise.resolve(),
 
+  // scheduler.js calls app.buildSystemPrompt(settings); custom catalogs ride along.
+  buildSystemPrompt(settings = this.settings) {
+    return buildSystemPrompt(settings, { experts: this.customExperts, skills: this.customSkills });
+  },
+
   async init() {
     window.addEventListener('error', (event) => this.showGlobalError(event.message || 'Unexpected error'));
     window.addEventListener('unhandledrejection', (event) =>
@@ -101,8 +126,11 @@ const app = {
     this.bindEvents();
     this.renderAll();
     bindTerminal(this);
+    bindWorkspaceUi(this);
     bindCatalogUi(this);
-    startScheduler(this);
+    bindCustomCatalogUi(this);
+    bindMcpUi(this);
+    window.scalemaxScheduler = startScheduler(this);
     this.updateSendEnabled();
     await this.loadVersion();
     document.body.dataset.appReady = 'true';
@@ -162,8 +190,8 @@ const app = {
   },
 
   async loadState() {
-    const keys = ['tasks', 'settings', 'automations', 'skillStates'];
-    const [tasks, settings, automations, skills] = await Promise.all(
+    const keys = ['tasks', 'settings', 'automations', 'skillStates', 'customExperts', 'customSkills'];
+    const [tasks, settings, automations, skills, customExperts, customSkills] = await Promise.all(
       keys.map((key) => this.readState(key)),
     );
     const now = Date.now();
@@ -173,18 +201,32 @@ const app = {
       id: task.id, title: task.title,
       messages: Array.isArray(task.messages) ? task.messages.filter((message) =>
         isRecord(message) && ['user', 'assistant'].includes(message.role) && typeof message.text === 'string',
-      ).map((message) => ({
-        role: message.role, text: message.text,
-        time: Number.isFinite(message.time) ? message.time : now,
-      })) : [],
+      ).map((message) => {
+        const normalized = {
+          role: message.role, text: message.text,
+          time: Number.isFinite(message.time) ? message.time : now,
+        };
+        const tools = normalizeToolSummaries(message.tools);
+        if (tools.length) normalized.tools = tools;
+        return normalized;
+      }) : [],
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
       updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now,
     })) : [];
-    this.settings = { ...DEFAULTS, ...(isRecord(settings) ? settings : {}) };
+    const rawSettings = isRecord(settings) ? settings : {};
+    this.settings = normalizeSettings(rawSettings);
+    // normalizeSettings only knows built-in catalog ids; keep custom expert and
+    // skill selections (resolved later by buildSystemPrompt) across reloads.
+    for (const key of ['expertId', 'skillId']) {
+      if (this.settings[key] === null && typeof rawSettings[key] === 'string'
+        && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(rawSettings[key])) this.settings[key] = rawSettings[key];
+    }
     // Automations are normalised before use: legacy records stay paused and
     // every active schedule gets a future next run.
     this.automations = normalizeAutomations(Array.isArray(automations) ? automations : []);
     this.skillStates = isRecord(skills) ? skills : {};
+    this.customExperts = normalizeCustomList(customExperts, validateCustomExpert);
+    this.customSkills = normalizeCustomList(customSkills, validateCustomSkill);
     if (!this.tasks.length) {
       this.tasks.push(this.makeTask('Welcome'));
       await this.persist('tasks');
@@ -556,12 +598,11 @@ const app = {
   // Attaches the file open in the editor, otherwise asks for one.
   async attachFile() {
     const open = this.workspace.openPath;
-    if (open && this.workspace.root) {
-      const result = await this.workspaceBridge()?.read(open);
-      if (result?.ok) {
-        this.setAttachment({ path: open, name: open.split('/').pop(), content: result.data.content });
-        return;
-      }
+    const content = open && this.workspace.root ? activeTabContent() : null;
+    if (typeof content === 'string') {
+      // The editor copy includes unsaved edits, which is what the user sees.
+      this.setAttachment({ path: open, name: open.split('/').pop(), content });
+      return;
     }
     const bridge = window.scalemaxAPI?.dialog;
     if (!bridge?.openFile) { this.showToast('Attachments require the desktop app'); return; }
@@ -597,10 +638,12 @@ const app = {
     if (!bridge || !this.workspace.root) return;
     const result = await bridge.list();
     if (result?.ok) {
-      // Keep the open file; drop cached folder contents so the tree reloads.
+      // Keep the open tabs; drop cached folder contents so the tree reloads.
       this.workspace.tree = {};
       if (this.workspace.expanded) this.workspace.expanded.clear();
+      resetCrawl();
       this.applyWorkspace(result.data);
+      void this.refreshGit({ quiet: true });
     }
   },
 
@@ -609,20 +652,19 @@ const app = {
     this.workspace.root = data?.root || '';
     this.workspace.files = Array.isArray(data?.files) ? data.files : [];
     if (rootChanged) {
-      // The open file belongs to the previous project; drop it before the
+      // Open tabs belong to the previous project; close them before the
       // editor can save stale content into the new root.
-      this.workspace.openPath = '';
-      this.workspace.revision = '';
-      this.workspace.dirty = false;
       this.workspace.tree = {};
       this.workspace.expanded = new Set();
-      if ($('#editor-input')) $('#editor-input').value = '';
-      if ($('#editor-title')) $('#editor-title').textContent = 'Editor';
-      if ($('#editor-path')) $('#editor-path').textContent = 'No file selected';
-      if ($('#editor-status')) $('#editor-status').textContent = 'Choose a file before editing or saving.';
-      this.updateEditorGutter();
+      resetTabs(this);
+      this.workspace.diffPath = '';
+      const git = $('#git-files');
+      if (git) git.replaceChildren();
+      const diff = $('#git-diff');
+      if (diff) diff.replaceChildren();
+      if ($('#git-status')) $('#git-status').textContent = 'Open a repository to review its changes.';
     }
-    if ($('#workspace-path')) $('#workspace-path').textContent = this.workspace.root || 'No folder selected';
+    renderCrumb(this.workspace.root);
     if ($('#workspace-status')) {
       const count = this.workspace.files.length;
       $('#workspace-status').textContent = this.workspace.root
@@ -630,44 +672,13 @@ const app = {
         : 'Open a local folder to begin.';
     }
     this.renderFileTree();
+    // A Git repository gets its branch and changed files straight away.
+    if (rootChanged && this.workspace.root) void this.refreshGit({ quiet: true });
   },
 
+  // Tree, tabs and editor chrome live in workspace-ui.js.
   renderFileTree() {
-    const tree = $('#file-tree');
-    if (!tree) return;
-    const files = this.workspace.files || [];
-    if (!files.length) {
-      tree.replaceChildren(element('p', 'empty-state',
-        this.workspace.root ? 'This folder is empty.' : 'No folder selected.'));
-      return;
-    }
-    const rows = [];
-    const walk = (entries, depth) => {
-      for (const entry of entries) {
-        const isDirectory = entry.type === 'directory';
-        rows.push(this.makeTreeRow(entry, isDirectory, depth));
-        if (isDirectory && this.workspace.expanded?.has(entry.path)) {
-          const children = this.workspace.tree?.[entry.path];
-          if (Array.isArray(children) && children.length) walk(children, depth + 1);
-          else rows.push(element('p', 'empty-state nested-empty', 'Empty folder'));
-        }
-      }
-    };
-    walk(files, 0);
-    tree.replaceChildren(...rows);
-  },
-
-  makeTreeRow(entry, isDirectory, depth) {
-    const row = element('button', isDirectory ? 'file-tree-item directory-entry' : 'file-tree-item file-entry');
-    row.dataset.filePath = entry.path;
-    row.dataset.fileKind = isDirectory ? 'directory' : 'file';
-    row.style.paddingLeft = `${8 + depth * 14}px`;
-    row.append(
-      element('span', isDirectory ? 'file-icon is-directory' : 'file-icon is-file'),
-      element('span', 'file-name', entry.name),
-    );
-    if (entry.path === this.workspace.openPath) row.classList.add('active');
-    return row;
+    renderTree(this);
   },
 
   async toggleFolder(path) {
@@ -690,57 +701,31 @@ const app = {
   },
 
   updateEditorGutter() {
-    const input = $('#editor-input');
-    const gutter = $('#editor-gutter');
-    if (!input || !gutter) return;
-    const lines = input.value.split('\n').length;
-    const numbers = [];
-    for (let line = 1; line <= lines; line += 1) numbers.push(line);
-    gutter.textContent = numbers.join('\n');
-    gutter.scrollTop = input.scrollTop;
+    updateGutter();
   },
 
-  async openFile(path) {
-    const bridge = this.workspaceBridge();
-    if (!bridge || !path) return;
-    if (this.workspace.dirty
-      && !window.confirm(`Discard unsaved changes to ${this.workspace.openPath || 'the current file'}?`)) return;
-    const result = await bridge.read(path);
-    if (!result?.ok) { this.showToast(result?.error?.message || 'Could not open that file'); return; }
-    this.workspace.openPath = result.data.path;
-    this.workspace.revision = result.data.revision;
-    this.workspace.dirty = false;
-    if ($('#editor-input')) $('#editor-input').value = result.data.content;
-    if ($('#editor-path')) $('#editor-path').textContent = result.data.path;
-    if ($('#editor-title')) $('#editor-title').textContent = result.data.path.split('/').pop();
-    if ($('#editor-status')) $('#editor-status').textContent = 'Loaded.';
-    this.updateEditorGutter();
-    for (const row of $$('#file-tree .file-tree-item')) {
-      row.classList.toggle('active', row.dataset.filePath === path);
-    }
+  // Opens the file in a tab (or focuses its tab); unsaved edits in other tabs are kept.
+  openFile(path) {
+    return openFileInTab(this, path);
   },
 
-  async saveFile() {
-    const bridge = this.workspaceBridge();
-    if (!bridge || !this.workspace.openPath) { this.showToast('Open a file first'); return; }
-    const content = $('#editor-input')?.value ?? '';
-    const result = await bridge.write({ path: this.workspace.openPath, content, revision: this.workspace.revision });
-    if (!result?.ok) { this.showToast(result?.error?.message || 'Could not save that file'); return; }
-    this.workspace.revision = result.data.revision;
-    this.workspace.dirty = false;
-    if ($('#editor-status')) $('#editor-status').textContent = 'Saved.';
-    this.showToast('File saved');
+  saveFile() {
+    return saveActiveTab(this);
   },
 
-  async refreshGit() {
+  async refreshGit({ quiet = false } = {}) {
     const bridge = this.workspaceBridge();
-    if (!bridge || !this.workspace.root) { this.showToast('Open a folder first'); return; }
+    if (!bridge || !this.workspace.root) { if (!quiet) this.showToast('Open a folder first'); return; }
+    const root = this.workspace.root;
     const status = await bridge.gitStatus();
+    if (this.workspace.root !== root) return;
     if (!status?.ok) {
       if ($('#git-status')) $('#git-status').textContent = status?.error?.message || 'Git is unavailable.';
+      setGitDecorations(this, [], null, false);
       return;
     }
     const data = status.data || {};
+    setGitDecorations(this, data.files, data.branch, data.isRepo);
     if ($('#git-status')) {
       const count = Array.isArray(data.files) ? data.files.length : 0;
       $('#git-status').textContent = data.isRepo
@@ -761,19 +746,27 @@ const app = {
         return row;
       }));
     }
-    await this.showGitDiff('');
+    // Keep showing the file the user picked, if any.
+    await this.showGitDiff(this.workspace.diffPath || '', { reveal: false });
   },
 
-  async showGitDiff(path) {
+  async showGitDiff(path, { reveal = true } = {}) {
     const bridge = this.workspaceBridge();
     if (!bridge) return;
     const node = $('#git-diff');
     if (!node) return;
+    this.workspace.diffPath = path || '';
+    for (const row of $$('#git-files .git-row')) row.classList.toggle('active', row.dataset.gitPath === path);
+    // Choosing a changed file shows its diff in the Diff tab.
+    if (path && reveal) showPanel('diff');
+    // Only the latest request may paint; a slower full diff never replaces a file diff.
+    const sequence = (this.diffSequence = (this.diffSequence || 0) + 1);
     const diff = await bridge.gitDiff(path || '');
+    if (sequence !== this.diffSequence) return;
     if (!diff?.ok) { node.replaceChildren(); return; }
     const text = diff.data.diff || '';
     if (!text) {
-      node.replaceChildren(element('span', 'diff-line', 'No changes to show.'));
+      node.replaceChildren(element('span', 'diff-line', path ? `No unstaged changes in ${path}.` : 'No changes to show.'));
       return;
     }
     node.replaceChildren(...text.split('\n').map((line) => {
@@ -852,24 +845,9 @@ const app = {
       event.preventDefault();
       void this.refreshWorkspace();
     });
-    $('#file-tree')?.addEventListener('click', (event) => {
-      const row = event.target.closest('[data-file-path]');
-      if (!row) return;
-      if (row.dataset.fileKind === 'directory') void this.toggleFolder(row.dataset.filePath);
-      else void this.openFile(row.dataset.filePath);
-    });
     $('#editor-save')?.addEventListener('click', (event) => {
       event.preventDefault();
       void this.saveFile();
-    });
-    $('#editor-input')?.addEventListener('input', () => {
-      this.workspace.dirty = true;
-      if ($('#editor-status')) $('#editor-status').textContent = 'Unsaved changes.';
-      this.updateEditorGutter();
-    });
-    $('#editor-input')?.addEventListener('scroll', () => {
-      const gutter = $('#editor-gutter');
-      if (gutter) gutter.scrollTop = $('#editor-input').scrollTop;
     });
     $('#git-refresh')?.addEventListener('click', (event) => {
       event.preventDefault();
@@ -884,6 +862,7 @@ const app = {
     this.bindProvider();
     $('#automation-form')?.addEventListener('submit', (event) => this.createAutomation(event));
     $('#automation-list')?.addEventListener('click', (event) => this.changeAutomation(event));
+    this.bindAutomationForm();
     $('#search-btn')?.addEventListener('click', () => this.toggleSearch(true));
     $('#search-close')?.addEventListener('click', () => this.toggleSearch(false));
     $('#search-input')?.addEventListener('input', () => this.renderSearch());
@@ -974,6 +953,17 @@ const app = {
     container.replaceChildren(...messages.map((message) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
+      if (message.tools?.length) {
+        const tools = element('div', 'msg-tools');
+        tools.setAttribute('aria-label', 'Tools used for this reply');
+        tools.append(element('span', 'msg-tools-label', 'Tools used'));
+        for (const call of message.tools) {
+          const chip = element('span', `msg-tool ${call.ok ? 'is-ok' : 'is-error'}`,
+            `${call.server ? `${call.server} · ` : ''}${call.tool}${call.ok ? '' : ' (failed)'}`);
+          tools.append(chip);
+        }
+        bubble.append(tools);
+      }
       bubble.append(element('span', 'msg-text', message.text), element('span', 'msg-time', clock(message.time)));
       return bubble;
     }));
@@ -989,13 +979,15 @@ const app = {
     this.renderTasks();
   },
 
-  appendMessage(role, text, taskId = this.currentTaskId) {
+  appendMessage(role, text, taskId = this.currentTaskId, extra = {}) {
     const task = this.tasks.find((item) => item.id === taskId);
     if (!task) { this.showToast('That task no longer exists'); return; }
     if (role === 'user' && !task.messages.some((message) => message.role === 'user')) {
       task.title = text.length > 40 ? `${text.slice(0, 40)}…` : text;
     }
     const message = { role, text, time: Date.now() };
+    const tools = normalizeToolSummaries(extra.tools);
+    if (tools.length) message.tools = tools;
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) this.renderChat();
@@ -1050,8 +1042,9 @@ const app = {
       }
     }
     const requestId = `chat-${taskId}-${Date.now()}`;
-    const payload = { requestId, messages, systemPrompt: buildSystemPrompt(this.settings) };
-    if (this.settings.temperatureEnabled) payload.temperature = Number(this.settings.temperature);
+    const payload = { requestId, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
+    const temperature = requestTemperature(this.settings);
+    if (temperature !== undefined) payload.temperature = temperature;
 
     this.setChatBusy(true, requestId);
     try {
@@ -1062,7 +1055,12 @@ const app = {
         else this.showToast(message);
         return;
       }
-      this.appendMessage('assistant', result.data.text, taskId);
+      this.appendMessage('assistant', result.data.text, taskId, { tools: result.data.toolCalls });
+      // A broken MCP server never blocks the reply, but the user should know.
+      const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
+      if (toolError?.message) {
+        this.showToast(`MCP${toolError.serverId ? ` ${toolError.serverId}` : ''}: ${toolError.message}`);
+      }
     } catch (error) {
       this.showToast(error?.message || 'Provider request failed');
     } finally {
@@ -1147,28 +1145,78 @@ const app = {
     });
     if ($('#system-prompt')) $('#system-prompt').value = this.settings.systemPrompt;
     if ($('#temperature')) $('#temperature').value = this.settings.temperature;
-    if ($('#temperature-value')) $('#temperature-value').textContent = String(this.settings.temperature);
     if ($('#temperature-enabled')) $('#temperature-enabled').checked = Boolean(this.settings.temperatureEnabled);
+    this.renderTemperatureValue();
     if ($('#permission-select')) $('#permission-select').value = this.settings.permission;
   },
 
   renderExperts() {
     const grid = $('#experts-grid');
     if (!grid) return;
-    grid.replaceChildren(...EXPERTS.map((expert) => {
+    const experts = this.allExperts();
+    const heading = $('#experts-title');
+    if (heading) {
+      const custom = this.customExperts.length;
+      heading.textContent = `${experts.length} roles${custom ? ` · ${custom} custom` : ''}`;
+    }
+    grid.replaceChildren(...experts.map((expert) => {
       const card = element('div', 'expert-card');
-      if (expert.id === this.settings.expertId) card.classList.add('selected');
-      const button = element('button', 'expert-use', expert.id === this.settings.expertId ? 'Selected' : 'Use');
+      card.dataset.expertId = expert.id;
+      const selected = expert.id === this.settings.expertId;
+      if (selected) card.classList.add('selected');
+      const button = element('button', 'expert-use', selected ? 'Selected' : 'Use');
       button.dataset.expertId = expert.id;
-      button.setAttribute('aria-pressed', String(expert.id === this.settings.expertId));
-      card.append(element('div', 'expert-avatar', expert.initials || ''), element('div', 'expert-name', expert.name),
-        element('div', 'expert-role', expert.role), element('p', 'expert-desc', expert.description), button);
+      button.setAttribute('aria-pressed', String(selected));
+      button.setAttribute('aria-label', `${selected ? 'Stop using' : 'Use'} ${expert.name}`);
+      const avatar = element('div', 'expert-avatar');
+      avatar.append(renderAvatar(expert.custom
+        ? { seed: expert.id, base: expert.avatarColor, accessory: expert.avatarAccessory }
+        : expert.id, { size: 48 }));
+      const top = element('div', 'expert-card-top');
+      top.append(avatar);
+      if (expert.custom) top.append(element('span', 'custom-tag', 'Custom'));
+      const actions = element('div', 'expert-actions');
+      actions.append(button);
+      if (expert.custom) actions.append(...this.customActions('expert', expert));
+      card.append(top, element('div', 'expert-name', expert.name), element('div', 'expert-role', expert.role),
+        element('p', 'expert-desc', expert.description || 'Custom expert'),
+        element('span', 'badge', expert.category || 'Custom'), actions);
       return card;
     }));
   },
 
+  // Edit and delete buttons for user-created catalog entries.
+  customActions(kind, entry) {
+    const edit = element('button', 'custom-edit', 'Edit');
+    edit.dataset.customKind = kind;
+    edit.dataset.customId = entry.id;
+    edit.setAttribute('aria-label', `Edit ${entry.name}`);
+    const remove = element('button', 'custom-delete', 'Delete');
+    remove.dataset.customKind = kind;
+    remove.dataset.customId = entry.id;
+    remove.setAttribute('aria-label', `Delete ${entry.name}`);
+    return [edit, remove];
+  },
+
+  // Re-renders everything that lists custom experts or skills.
+  renderCustomCatalogs() {
+    this.renderExperts();
+    this.renderSkills();
+    this.renderContextChips();
+    this.renderSearch();
+  },
+
+  allExperts() { return [...EXPERTS, ...this.customExperts]; },
+  allSkills() { return [...SKILLS, ...this.customSkills]; },
+
   renderSkills() {
-    this.renderCatalog('#skills-list', SKILLS, this.skillStates, 'skill', 'installed', 'Install', 'Installed');
+    const skills = this.allSkills();
+    const heading = $('#skills-title');
+    if (heading) {
+      const custom = this.customSkills.length;
+      heading.textContent = `${skills.length} templates${custom ? ` · ${custom} custom` : ''}`;
+    }
+    this.renderCatalog('#skills-list', skills, this.skillStates, 'skill', 'installed', 'Install', 'Installed');
   },
 
   renderConnectors() {
@@ -1181,7 +1229,9 @@ const app = {
     list.replaceChildren(...entries.map((entry) => {
       const card = element('div', `${kind}-card`);
       const head = element('div', `${kind}-card-head`);
-      head.append(element('strong', `${kind}-name`, entry.name), element('span', 'badge', entry.category));
+      const name = element('strong', `${kind}-name`, entry.name);
+      if (entry.custom) name.append(element('span', 'custom-tag', 'Custom'));
+      head.append(name, element('span', 'badge', entry.category));
       const foot = element('div', `${kind}-card-foot`);
       if (kind === 'skill') {
         const installed = states[entry.id] === enabledState;
@@ -1195,6 +1245,7 @@ const app = {
         button.dataset.id = entry.id;
         button.setAttribute('aria-pressed', String(installed));
         foot.append(button);
+        if (entry.custom) foot.append(...this.customActions('skill', entry));
       } else {
         // Connector actions (connect, test, disconnect) are owned by the
         // credential store in catalog-ui.js, which decorates this slot.
@@ -1202,15 +1253,26 @@ const app = {
         actions.dataset.connectorAction = entry.id;
         foot.append(actions);
       }
-      card.append(head, element('p', `${kind}-desc`, entry.description), foot);
+      card.append(head, element('p', `${kind}-desc`, entry.description || 'Custom prompt template'), foot);
       return card;
     }));
   },
 
+  // Edit/Delete on custom cards; returns true when the click was handled.
+  handleCustomAction(event) {
+    const button = event.target.closest('.custom-edit, .custom-delete');
+    if (!button) return false;
+    const { customKind, customId } = button.dataset;
+    if (button.classList.contains('custom-edit')) openCustomDialog(this, customKind, customId);
+    else deleteCustom(this, customKind, customId);
+    return true;
+  },
+
   bindCatalogs() {
     $('#experts-grid')?.addEventListener('click', (event) => {
+      if (this.handleCustomAction(event)) return;
       const button = event.target.closest('.expert-use');
-      const expert = EXPERTS.find((entry) => entry.id === button?.dataset.expertId);
+      const expert = this.allExperts().find((entry) => entry.id === button?.dataset.expertId);
       if (!expert) return;
       const selecting = this.settings.expertId !== expert.id;
       this.settings.expertId = selecting ? expert.id : null;
@@ -1227,14 +1289,15 @@ const app = {
       $('#chat-input')?.focus();
     });
     $('#skills-list')?.addEventListener('click', (event) => {
+      if (this.handleCustomAction(event)) return;
       const run = event.target.closest('.skill-run');
       if (run) {
-        const skill = SKILLS.find((entry) => entry.id === run.dataset.skillRun);
+        const skill = this.allSkills().find((entry) => entry.id === run.dataset.skillRun);
         if (skill) void this.runSkill(skill);
         return;
       }
       const button = event.target.closest('.skill-toggle');
-      const skill = SKILLS.find((entry) => entry.id === button?.dataset.id);
+      const skill = this.allSkills().find((entry) => entry.id === button?.dataset.id);
       if (!skill) return;
       const turningOn = this.skillStates[skill.id] !== 'installed';
       this.skillStates[skill.id] = turningOn ? 'installed' : 'available';
@@ -1253,9 +1316,9 @@ const app = {
     const host = $('#context-chips');
     if (!host) return;
     const chips = [];
-    const expert = EXPERTS.find((item) => item.id === this.settings.expertId);
+    const expert = this.allExperts().find((item) => item.id === this.settings.expertId);
     if (expert) chips.push(this.makeContextChip('expert', expert.id, expert.name));
-    const skill = SKILLS.find((item) => item.id === this.settings.skillId);
+    const skill = this.allSkills().find((item) => item.id === this.settings.skillId);
     if (skill) chips.push(this.makeContextChip('skill', skill.id, skill.name));
     host.replaceChildren(...chips);
   },
@@ -1295,83 +1358,236 @@ const app = {
       Object.assign(prompt.style, { fontSize: '12px', color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
       prompt.title = automation.prompt;
       info.append(element('strong', 'automation-name', automation.name), prompt);
-      const next = Number.isFinite(automation.nextRun)
-        ? new Date(automation.nextRun).toLocaleString() : 'not scheduled';
-      const status = element('div', 'status-text', `${automation.lastStatus || 'idle'} · Next: ${next}`);
+      const next = automation.active && Number.isFinite(automation.nextRun)
+        ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
+      const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
+      const status = element('div', 'status-text', `${automation.lastStatus || 'idle'}${last} · Next: ${next}`);
       status.style.fontSize = '11px';
       info.append(status);
-      const schedule = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' }[automation.schedule] || 'Daily';
+      if (automation.lastStatus === 'error' || automation.lastStatus === 'interrupted') {
+        if (automation.lastError) {
+          const error = element('div', 'status-text automation-error', automation.lastError);
+          Object.assign(error.style, { fontSize: '11px', color: '#dc2626' });
+          error.setAttribute('role', 'alert');
+          info.append(error);
+        }
+      }
+      const history = Array.isArray(automation.history) ? automation.history : [];
+      if (history.length) {
+        const details = element('details', 'automation-history');
+        details.style.fontSize = '11px';
+        details.append(element('summary', '', `Run history (${history.length})`));
+        const items = element('ol', 'automation-history-list');
+        items.style.margin = '4px 0 0 16px';
+        for (const entry of history) {
+          const item = element('li', `automation-history-${entry.status}`,
+            `${new Date(entry.time).toLocaleString()} · ${entry.status}${entry.preview ? ` — ${entry.preview}` : ''}`);
+          items.append(item);
+        }
+        details.append(items);
+        info.append(details);
+      }
+      const schedule = this.describeSchedule(automation);
       const dot = element('span', automation.active ? 'dot active' : 'dot');
       dot.style.backgroundColor = automation.active ? '#22c55e' : '#888';
       dot.setAttribute('aria-label', automation.active ? 'Active' : 'Paused');
+      const runNow = element('button', 'automation-run-now', '▶ Run now');
+      runNow.dataset.action = 'run-now';
+      runNow.title = `Run ${automation.name} immediately`;
+      runNow.setAttribute('aria-label', runNow.title);
       const toggle = element('button', 'automation-toggle', automation.active ? '⏸' : '▶');
       toggle.dataset.action = 'toggle';
       toggle.title = `${automation.active ? 'Pause' : 'Resume'} ${automation.name}`;
       toggle.setAttribute('aria-label', toggle.title);
+      const edit = element('button', 'automation-edit', '✎');
+      edit.dataset.action = 'edit';
+      edit.title = `Edit ${automation.name}`;
+      edit.setAttribute('aria-label', edit.title);
       const remove = element('button', 'automation-delete', '🗑');
       remove.dataset.action = 'delete';
       remove.title = `Delete ${automation.name}`;
       remove.setAttribute('aria-label', remove.title);
-      row.append(info, element('span', 'badge', `${schedule} ${automation.time}`), dot, toggle, remove);
+      row.append(info, element('span', 'badge', schedule), dot, runNow, toggle, edit, remove);
       return row;
     }));
   },
 
-  async createAutomation(event) {
-    event.preventDefault();
+  describeSchedule(automation) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    switch (automation.schedule) {
+      case 'once':
+        return Number.isFinite(automation.runAt) ? `Once ${new Date(automation.runAt).toLocaleString()}` : `Once ${automation.time}`;
+      case 'hourly': return `Hourly at :${String(automation.time || '00:00').slice(3)}`;
+      case 'weekly': return `Weekly ${days[automation.dayOfWeek] || ''} ${automation.time}`;
+      case 'monthly': return `Monthly day ${automation.dayOfMonth} ${automation.time}`;
+      case 'interval': return `Every ${automation.intervalMinutes} min`;
+      default: return `Daily ${automation.time}`;
+    }
+  },
+
+  // Shows only the inputs the chosen schedule type uses.
+  syncAutomationFields() {
+    const schedule = $('#automation-schedule')?.value || 'daily';
+    const show = {
+      time: schedule !== 'interval',
+      date: schedule === 'once',
+      interval: schedule === 'interval',
+      weekday: schedule === 'weekly',
+      monthday: schedule === 'monthly',
+    };
+    $$('#automation-form [data-automation-field]').forEach((node) => {
+      node.hidden = !show[node.dataset.automationField];
+    });
+    const hint = $('#automation-time-hint');
+    if (hint) hint.textContent = schedule === 'hourly' ? '(minute past each hour)' : '';
+  },
+
+  bindAutomationForm() {
+    $('#automation-schedule')?.addEventListener('change', () => this.syncAutomationFields());
+    $('#automation-cancel-edit')?.addEventListener('click', () => this.resetAutomationForm());
+    this.syncAutomationFields();
+  },
+
+  resetAutomationForm() {
+    $('#automation-form')?.reset();
+    if ($('#automation-time') && !$('#automation-time').value) $('#automation-time').value = '09:00';
+    if ($('#automation-edit-id')) $('#automation-edit-id').value = '';
+    if ($('#automation-submit')) $('#automation-submit').textContent = 'Consent & create schedule';
+    if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = true;
+    if ($('#automation-form-title')) $('#automation-form-title').textContent = 'New schedule';
+    this.syncAutomationFields();
+  },
+
+  // Reads the form into schedule fields; returns an error string on bad input.
+  readAutomationForm() {
     const name = $('#automation-name')?.value.trim();
     const prompt = $('#automation-prompt')?.value.trim();
-    if (!name || !prompt) { this.showToast('Enter an automation name and prompt'); return; }
+    if (!name || !prompt) return { error: 'Enter an automation name and prompt' };
     const schedule = $('#automation-schedule')?.value || 'daily';
-    const time = $('#automation-time')?.value || '09:00';
-    if (!['daily', 'weekly', 'monthly'].includes(schedule) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-      this.showToast('Choose a valid schedule and time');
-      return;
+    if (!['once', 'hourly', 'daily', 'weekly', 'monthly', 'interval'].includes(schedule)) {
+      return { error: 'Choose a valid schedule' };
     }
-    const dayOfWeek = Number($('#automation-weekday')?.value ?? 1);
-    const dayOfMonth = Number($('#automation-monthday')?.value ?? 1);
+    const time = $('#automation-time')?.value || '09:00';
+    if (schedule !== 'interval' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'Choose a valid time' };
+    const fields = {
+      name, prompt, schedule, time,
+      dayOfWeek: Number.parseInt($('#automation-weekday')?.value ?? '1', 10),
+      dayOfMonth: Number.parseInt($('#automation-monthday')?.value ?? '1', 10),
+      intervalMinutes: null,
+      runAt: null,
+    };
+    if (schedule === 'interval') {
+      fields.intervalMinutes = Number.parseInt($('#automation-interval')?.value ?? '', 10);
+      if (!Number.isInteger(fields.intervalMinutes) || fields.intervalMinutes < 1 || fields.intervalMinutes > 525600) {
+        return { error: 'Interval must be 1 to 525600 minutes' };
+      }
+    }
+    if (schedule === 'once') {
+      const date = $('#automation-date')?.value;
+      if (date) {
+        const [y, m, d] = date.split('-').map(Number);
+        const [hh, mm] = time.split(':').map(Number);
+        // Local wall-clock time on the chosen date.
+        fields.runAt = new Date(y, m - 1, d, hh, mm, 0, 0).getTime();
+        if (!(fields.runAt > Date.now())) return { error: 'Choose a date and time in the future' };
+      }
+    }
+    return { fields };
+  },
+
+  async createAutomation(event) {
+    event.preventDefault();
+    const { fields, error } = this.readAutomationForm();
+    if (error) { this.showToast(error); return; }
     const now = Date.now();
-    const automation = {
-      id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, name, prompt, schedule, time, dayOfWeek, dayOfMonth,
-      active: true, createdAt: now, schemaVersion: 2, nextRun: null,
-      lastRun: null, lastStatus: 'idle', lastError: '',
+    const editId = $('#automation-edit-id')?.value || '';
+    const existing = editId ? this.automations.find((item) => item.id === editId) : null;
+    const automation = existing ? { ...existing, ...fields } : {
+      id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, ...fields,
+      active: true, createdAt: now, schemaVersion: 2, nextRun: null, pendingCatchUp: false,
+      lastRun: null, lastStatus: 'idle', lastError: '', history: [],
     };
     try {
       automation.nextRun = nextRunAt(automation, now);
-    } catch (error) {
-      this.showToast(error?.message || 'Choose a valid schedule and time');
+    } catch (problem) {
+      this.showToast(problem?.message || 'Choose a valid schedule and time');
       return;
     }
-    this.automations.push(automation);
+    if (existing) {
+      // Mutate in place so an in-flight run keeps pointing at the same record.
+      Object.assign(existing, automation, { active: true });
+    } else {
+      this.automations.push(automation);
+    }
     const saved = this.persist('automations');
     this.renderAutomations();
-    $('#automation-form')?.reset();
-    if ($('#automation-time') && !$('#automation-time').value) $('#automation-time').value = '09:00';
+    this.resetAutomationForm();
     await saved;
-    this.showToast('Automation created');
+    this.showToast(existing ? 'Automation updated' : 'Automation created');
   },
 
-  changeAutomation(event) {
+  editAutomation(automation) {
+    const set = (selector, value) => { if ($(selector)) $(selector).value = value; };
+    set('#automation-name', automation.name);
+    set('#automation-prompt', automation.prompt);
+    set('#automation-schedule', automation.schedule);
+    set('#automation-time', automation.time || '09:00');
+    set('#automation-weekday', String(automation.dayOfWeek ?? 1));
+    set('#automation-monthday', String(automation.dayOfMonth ?? 1));
+    set('#automation-interval', String(automation.intervalMinutes ?? 60));
+    if (Number.isFinite(automation.runAt)) {
+      const date = new Date(automation.runAt);
+      set('#automation-date', `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
+    } else set('#automation-date', '');
+    set('#automation-edit-id', automation.id);
+    if ($('#automation-submit')) $('#automation-submit').textContent = 'Save changes';
+    if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = false;
+    if ($('#automation-form-title')) $('#automation-form-title').textContent = `Edit ${automation.name}`;
+    this.syncAutomationFields();
+    $('#automation-name')?.focus();
+  },
+
+  async changeAutomation(event) {
     const button = event.target.closest('button[data-action]');
     const row = button?.closest('.automation-item');
     const automation = this.automations.find((item) => item.id === row?.dataset.automationId);
     if (!automation) return;
-    if (button.dataset.action === 'delete') {
+    const action = button.dataset.action;
+    if (action === 'delete') {
+      if (!window.confirm(`Delete the automation "${automation.name}"?`)) return;
       this.automations = this.automations.filter((item) => item.id !== automation.id);
+      if ($('#automation-edit-id')?.value === automation.id) this.resetAutomationForm();
       this.showToast('Automation deleted');
-    } else if (button.dataset.action === 'toggle') {
+    } else if (action === 'toggle') {
       automation.active = !automation.active;
       if (automation.active) {
         // Recompute the next occurrence: a resumed schedule must never fire
         // for a timestamp that already passed while it was paused.
         try {
           automation.nextRun = nextRunAt(automation, Date.now());
+          automation.lastError = '';
         } catch (error) {
           automation.active = false;
           automation.lastError = error?.message || 'No future occurrence is representable as a Date.';
         }
       }
-      this.showToast(automation.active ? 'Automation resumed' : 'Automation paused');
+      automation.pendingCatchUp = false;
+      this.showToast(automation.active ? 'Automation resumed' : (automation.lastError || 'Automation paused'));
+    } else if (action === 'edit') {
+      this.editAutomation(automation);
+      return;
+    } else if (action === 'run-now') {
+      const scheduler = window.scalemaxScheduler;
+      if (!scheduler?.runNow) { this.showToast('Scheduler not ready'); return; }
+      button.disabled = true;
+      this.showToast(`Running ${automation.name}…`);
+      try {
+        const outcome = await scheduler.runNow(automation.id);
+        if (outcome === 'skipped') this.showToast(`${automation.name} is already running`);
+      } finally {
+        this.renderAutomations();
+      }
+      return;
     } else return;
     void this.persist('automations');
     this.renderAutomations();
@@ -1388,15 +1604,26 @@ const app = {
     $('#system-prompt')?.addEventListener('input', (event) => {
       this.settings.systemPrompt = event.target.value;
       persistSoon();
+      this.updateActiveSettingsIndicator();
     });
     $('#temperature')?.addEventListener('input', (event) => {
-      this.settings.temperature = Number(event.target.value);
-      if ($('#temperature-value')) $('#temperature-value').textContent = event.target.value;
+      // Range inputs yield strings; store a number so the provider accepts it.
+      const value = toTemperature(event.target.value);
+      if (value !== undefined) this.settings.temperature = value;
+      // Moving the slider means the user wants that value sent.
+      if (!this.settings.temperatureEnabled) {
+        this.settings.temperatureEnabled = true;
+        if ($('#temperature-enabled')) $('#temperature-enabled').checked = true;
+      }
+      this.renderTemperatureValue();
       persistSoon();
+      this.updateActiveSettingsIndicator();
     });
     $('#temperature-enabled')?.addEventListener('change', (event) => {
       this.settings.temperatureEnabled = Boolean(event.target.checked);
+      this.renderTemperatureValue();
       persistSoon();
+      this.updateActiveSettingsIndicator();
     });
     $('#permission-select')?.addEventListener('change', (event) => {
       this.settings.permission = event.target.value;
@@ -1411,11 +1638,43 @@ const app = {
 
   async saveAssistant() {
     if ($('#system-prompt')) this.settings.systemPrompt = $('#system-prompt').value;
-    if ($('#temperature')) this.settings.temperature = Number($('#temperature').value);
+    const value = toTemperature($('#temperature')?.value);
+    if (value !== undefined) this.settings.temperature = value;
     if ($('#temperature-enabled')) this.settings.temperatureEnabled = Boolean($('#temperature-enabled').checked);
+    if ($('#permission-select')) this.settings.permission = $('#permission-select').value;
     await this.persist('settings');
     this.applySettingsToUI();
+    this.updateActiveSettingsIndicator();
+    const saved = $('#assistant-saved');
+    if (saved) {
+      saved.textContent = `Saved ✓ ${clock(Date.now())}`;
+      window.clearTimeout(this.assistantSavedTimer);
+      this.assistantSavedTimer = window.setTimeout(() => { saved.textContent = ''; }, 4000);
+    }
     this.showToast('Settings saved');
+  },
+
+  // The output shows what is actually sent: a number, or the provider default.
+  renderTemperatureValue() {
+    const output = $('#temperature-value');
+    if (!output) return;
+    output.textContent = this.settings.temperatureEnabled
+      ? String(this.settings.temperature) : 'Default (provider)';
+  },
+
+  updateActiveSettingsIndicator() {
+    const indicator = $('#active-settings-indicator');
+    if (!indicator) return;
+    const parts = [];
+    if (String(this.settings.systemPrompt || '').trim()) parts.push('custom prompt');
+    const temperature = requestTemperature(this.settings);
+    if (temperature !== undefined) parts.push(`temp ${temperature}`);
+    if (parts.length) {
+      indicator.textContent = `Active: ${parts.join(' · ')}`;
+      indicator.hidden = false;
+    } else {
+      indicator.hidden = true;
+    }
   },
 
   toggleSearch(open) {
@@ -1434,7 +1693,7 @@ const app = {
     const list = $('#search-results');
     if (!list) return;
     const query = ($('#search-input')?.value || '').trim();
-    const results = searchItems(query, this.tasks);
+    const results = searchItems(query, this.tasks, { experts: this.customExperts, skills: this.customSkills });
     list.replaceChildren(...results.map((result) => {
       const row = element('button', 'search-result');
       if (result.kind === 'task') row.dataset.taskId = result.id;
@@ -1488,6 +1747,7 @@ const app = {
     this.renderConnectors();
     this.renderAutomations();
     this.applySettingsToUI();
+    this.updateActiveSettingsIndicator();
     this.renderProviderStatus();
     this.renderModelSelect();
     this.renderFileTree();

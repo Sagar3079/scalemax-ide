@@ -1,0 +1,93 @@
+/* Expert avatars (src/avatars.js): character badge sizing and CSS-only motion. */
+
+/* Section 07 styles .expert-avatar as a 32px initials circle; cards show a character badge. */
+.expert-card .expert-avatar {
+  width: 48px;
+  height: 48px;
+  background: none;
+  overflow: visible;
+}
+
+.expert-avatar-svg {
+  display: block;
+  overflow: visible;
+}
+
+.expert-card .expert-avatar-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.expert-avatar-svg .avatar-badge {
+  stroke: var(--sm-app-border);
+  stroke-width: 1;
+}
+
+[data-theme="dark"] .expert-avatar-svg .avatar-badge {
+  fill-opacity: 0.34;
+}
+
+/* Animated parts move around their own centre. */
+.avatar-bob,
+.avatar-head,
+.avatar-eyes,
+.avatar-prop,
+.avatar-waves {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Idle: gentle bob, blinks staggered by --blink-delay (set per character in avatars.js). */
+.avatar-bob {
+  animation: avatar-bob 3.6s ease-in-out var(--bob-delay, 0s) infinite;
+}
+
+.avatar-eyes {
+  animation: avatar-blink 5.2s linear var(--blink-delay, 0s) infinite;
+}
+
+/* Hover or keyboard focus: a little hop and a prop wiggle. */
+.expert-card:hover .avatar-head,
+.expert-card:focus-within .avatar-head {
+  animation: avatar-hop 0.6s ease-out;
+}
+
+.expert-card:hover .avatar-prop,
+.expert-card:focus-within .avatar-prop {
+  animation: avatar-wiggle 0.9s ease-in-out;
+}
+
+.expert-card:hover .avatar-waves,
+.expert-card:focus-within .avatar-waves {
+  animation: avatar-pulse 0.45s ease-in-out 2;
+}
+
+@keyframes avatar-bob {
+  50% { transform: translateY(-1.2px); }
+}
+
+@keyframes avatar-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+
+@keyframes avatar-hop {
+  40% { transform: translateY(-2px); }
+}
+
+@keyframes avatar-wiggle {
+  25% { transform: rotate(-8deg); }
+  50% { transform: rotate(6deg); }
+  75% { transform: rotate(-3deg); }
+}
+
+@keyframes avatar-pulse {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .expert-avatar-svg,
+  .expert-avatar-svg * {
+    animation: none !important;
+  }
+}

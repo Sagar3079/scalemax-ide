@@ -1,4 +1,5 @@
 import { EXPERTS, SKILLS, COMMUNITY_SKILLS, CONNECTORS } from './data.js';
+import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 
 export function isRecord(value) {
   if (value === null || typeof value !== 'object') return false;
@@ -21,8 +22,12 @@ const MAX_PROMPT = 32000;
 const MAX_TITLE = 200;
 const MAX_MESSAGE = 100000;
 const MAX_ERROR = 2000;
-const SCHEDULES = ['daily', 'weekly', 'monthly'];
+const MAX_HISTORY = 10;
+const MAX_PREVIEW = 400;
+const SCHEDULES = ['once', 'hourly', 'daily', 'weekly', 'monthly', 'interval'];
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const MIN_INTERVAL_MINUTES = 1;
+const MAX_INTERVAL_MINUTES = 525600;
 
 function own(record, key) {
   return Object.hasOwn(record, key) ? record[key] : undefined;
@@ -50,24 +55,38 @@ function integerIn(value, minimum, maximum) {
   return Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
+// Range inputs yield strings ("0.7"); accept numeric strings, return a
+// number rounded to one decimal in [0, 2], or undefined when invalid.
+export function toTemperature(value) {
+  const number = typeof value === 'string' && value.trim() ? Number(value) : value;
+  if (typeof number !== 'number' || !Number.isFinite(number) || number < 0 || number > 2) return undefined;
+  return Math.round(number * 10) / 10;
+}
+
+// The temperature to send with a request, or undefined for the provider default.
+export function requestTemperature(settings) {
+  if (!isRecord(settings)) return undefined;
+  const enabled = settings.temperatureEnabled === true || settings.temperatureEnabled === 'true';
+  return enabled ? toTemperature(settings.temperature) : undefined;
+}
+
 export function normalizeSettings(value) {
   const result = { ...DEFAULT_SETTINGS };
   if (!isRecord(value)) return result;
   for (const [key, allowed] of [
     ['mode', ['working', 'coding']],
-    ['theme', ['light', 'dark']],
+    // catalog-ui.js offers 'system'; dropping it here reset the theme on reload.
+    ['theme', ['light', 'dark', 'system']],
     ['permission', ['ask', 'readonly', 'auto-write', 'full', 'plan']],
   ]) {
     if (allowed.includes(own(value, key))) result[key] = value[key];
   }
   result.systemPrompt = boundedText(own(value, 'systemPrompt'), MAX_PROMPT);
-  const temperature = own(value, 'temperature');
-  if (Number.isFinite(temperature) && temperature >= 0 && temperature <= 2) {
-    result.temperature = temperature;
-  }
-  if (typeof own(value, 'temperatureEnabled') === 'boolean') {
-    result.temperatureEnabled = value.temperatureEnabled;
-  }
+  const temperature = toTemperature(own(value, 'temperature'));
+  if (temperature !== undefined) result.temperature = temperature;
+  const enabled = own(value, 'temperatureEnabled');
+  if (typeof enabled === 'boolean') result.temperatureEnabled = enabled;
+  else if (enabled === 'true' || enabled === 'false') result.temperatureEnabled = enabled === 'true';
   for (const [key, catalog] of [['expertId', EXPERTS], ['skillId', SKILLS]]) {
     if (catalog.some((item) => item.id === own(value, key))) result[key] = value[key];
   }
@@ -111,20 +130,51 @@ export function normalizeTasks(value, now = Date.now()) {
 
 export function nextRunAt(automation, afterMs = Date.now()) {
   if (!isRecord(automation) || !SCHEDULES.includes(own(automation, 'schedule'))) {
-    throw new RangeError('Schedule must be daily, weekly, or monthly.');
-  }
-  if (typeof own(automation, 'time') !== 'string' || !TIME_PATTERN.test(automation.time)) {
-    throw new RangeError('Time must use HH:MM in the range 00:00 through 23:59.');
-  }
-  if (automation.schedule === 'weekly' && !integerIn(own(automation, 'dayOfWeek'), 0, 6)) {
-    throw new RangeError('Weekly schedules require dayOfWeek from 0 (Sunday) through 6.');
-  }
-  if (automation.schedule === 'monthly' && !integerIn(own(automation, 'dayOfMonth'), 1, 31)) {
-    throw new RangeError('Monthly schedules require dayOfMonth from 1 through 31.');
+    throw new RangeError(`Schedule must be one of ${SCHEDULES.join(', ')}.`);
   }
   if (!validTimestamp(afterMs)) throw new RangeError('afterMs must be a finite epoch timestamp.');
+  const schedule = automation.schedule;
+
+  // Interval and one-shot schedules are anchored to a timestamp, not wall-clock.
+  if (schedule === 'interval') {
+    if (!integerIn(own(automation, 'intervalMinutes'), MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)) {
+      throw new RangeError(`Interval schedules require intervalMinutes from ${MIN_INTERVAL_MINUTES} through ${MAX_INTERVAL_MINUTES}.`);
+    }
+    return afterMs + automation.intervalMinutes * 60000;
+  }
+  if (schedule === 'once') {
+    const runAt = own(automation, 'runAt');
+    if (validTimestamp(runAt) && runAt > afterMs) return runAt;
+    // A one-shot whose moment has passed is exhausted; only an explicit HH:MM
+    // keeps it representable, and then it behaves like the next daily slot.
+    if (validTimestamp(runAt)) throw new RangeError('This one-time schedule has already run.');
+    if (typeof own(automation, 'time') !== 'string' || !TIME_PATTERN.test(automation.time)) {
+      throw new RangeError('A one-time schedule requires runAt or a time of day.');
+    }
+  }
+
+  const time = own(automation, 'time');
+  const needsTime = ['hourly', 'daily', 'weekly', 'monthly'].includes(schedule);
+  if ((needsTime || schedule === 'once') && (typeof time !== 'string' || !TIME_PATTERN.test(time))) {
+    throw new RangeError('Time must use HH:MM in the range 00:00 through 23:59.');
+  }
+  if (schedule === 'weekly' && !integerIn(own(automation, 'dayOfWeek'), 0, 6)) {
+    throw new RangeError('Weekly schedules require dayOfWeek from 0 (Sunday) through 6.');
+  }
+  if (schedule === 'monthly' && !integerIn(own(automation, 'dayOfMonth'), 1, 31)) {
+    throw new RangeError('Monthly schedules require dayOfMonth from 1 through 31.');
+  }
+  if (schedule === 'hourly') {
+    // Every hour at the minute named by time (the hour part is ignored).
+    const minute = Number(time.split(':')[1]);
+    const candidate = new Date(afterMs);
+    candidate.setMinutes(minute, 0, 0);
+    if (candidate.getTime() <= afterMs) candidate.setHours(candidate.getHours() + 1);
+    return candidate.getTime();
+  }
+
   const after = new Date(afterMs);
-  const [hour, minute] = automation.time.split(':').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
   const year = after.getFullYear();
   const month = after.getMonth();
   const day = after.getDate();
@@ -138,7 +188,7 @@ export function nextRunAt(automation, afterMs = Date.now()) {
     return candidate;
   }
 
-  if (automation.schedule === 'monthly') {
+  if (schedule === 'monthly') {
     for (let offset = 0; offset < 24; offset += 1) {
       const candidate = localDate(offset, automation.dayOfMonth);
       // Date rolls February 31 into March; that is not a February occurrence.
@@ -147,7 +197,7 @@ export function nextRunAt(automation, afterMs = Date.now()) {
       }
     }
   } else {
-    const weekly = automation.schedule === 'weekly';
+    const weekly = schedule === 'weekly';
     const offset = weekly ? (automation.dayOfWeek - after.getDay() + 7) % 7 : 0;
     const step = weekly ? 7 : 1;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -156,6 +206,25 @@ export function nextRunAt(automation, afterMs = Date.now()) {
     }
   }
   throw new RangeError('No future occurrence is representable as a Date.');
+}
+
+// Run history entries are kept newest-first and bounded, so a long-lived
+// schedule cannot grow the state file without limit.
+function normalizeHistory(value, fallbackTime) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const status = own(entry, 'status');
+    if (!['success', 'error', 'interrupted'].includes(status)) continue;
+    result.push({
+      time: timestamp(own(entry, 'time'), fallbackTime),
+      status,
+      preview: boundedText(own(entry, 'preview'), MAX_PREVIEW),
+    });
+    if (result.length === MAX_HISTORY) break;
+  }
+  return result;
 }
 
 export function normalizeAutomations(value, now = Date.now()) {
@@ -167,43 +236,70 @@ export function normalizeAutomations(value, now = Date.now()) {
     if (!isRecord(automation) || !validId(own(automation, 'id')) || ids.has(automation.id)
       || typeof own(automation, 'name') !== 'string' || !automation.name.trim()
       || typeof own(automation, 'prompt') !== 'string' || !automation.prompt.trim()
-      || !SCHEDULES.includes(own(automation, 'schedule'))
-      || typeof own(automation, 'time') !== 'string' || !TIME_PATTERN.test(automation.time)) continue;
+      || !SCHEDULES.includes(own(automation, 'schedule'))) continue;
+    const schedule = automation.schedule;
     const legacy = own(automation, 'schemaVersion') !== 2;
+    const runAt = own(automation, 'runAt');
+    const intervalMinutes = own(automation, 'intervalMinutes');
+    const time = own(automation, 'time');
+    // Interval schedules are anchored to a duration; every other schedule needs
+    // a wall-clock time (a one-time schedule may carry runAt instead).
+    if (schedule === 'interval') {
+      if (!integerIn(intervalMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)) continue;
+    } else if (schedule === 'once') {
+      if (!validTimestamp(runAt) && !(typeof time === 'string' && TIME_PATTERN.test(time))) continue;
+    } else if (typeof time !== 'string' || !TIME_PATTERN.test(time)) continue;
     const week = own(automation, 'dayOfWeek');
     const month = own(automation, 'dayOfMonth');
     const dayOfWeek = week === undefined && legacy ? 1 : week;
     const dayOfMonth = month === undefined && legacy ? 1 : month;
-    if (automation.schedule === 'weekly' && !integerIn(dayOfWeek, 0, 6)) continue;
-    if (automation.schedule === 'monthly' && !integerIn(dayOfMonth, 1, 31)) continue;
+    if (schedule === 'weekly' && !integerIn(dayOfWeek, 0, 6)) continue;
+    if (schedule === 'monthly' && !integerIn(dayOfMonth, 1, 31)) continue;
     const status = own(automation, 'lastStatus');
     const interrupted = status === 'running' || own(automation, 'running') === true;
+    const savedNextRun = own(automation, 'nextRun');
     const normalized = {
       id: automation.id,
       name: boundedText(automation.name, MAX_TITLE),
       prompt: boundedText(automation.prompt, MAX_PROMPT),
-      schedule: automation.schedule,
-      time: automation.time,
+      schedule,
+      time: typeof time === 'string' && TIME_PATTERN.test(time) ? time : '09:00',
       dayOfWeek: integerIn(dayOfWeek, 0, 6) ? dayOfWeek : 1,
       dayOfMonth: integerIn(dayOfMonth, 1, 31) ? dayOfMonth : 1,
+      intervalMinutes: integerIn(intervalMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)
+        ? intervalMinutes : null,
+      runAt: validTimestamp(runAt) ? runAt : null,
       active: !legacy && !interrupted && own(automation, 'active') === true,
       createdAt: timestamp(own(automation, 'createdAt'), fallbackTime),
       nextRun: null,
+      // True when a schedule came due while the app was closed. The scheduler
+      // replays it exactly once and then clears the flag.
+      pendingCatchUp: false,
       lastRun: timestamp(own(automation, 'lastRun'), null),
       lastStatus: interrupted ? 'interrupted'
         : ['idle', 'success', 'error', 'interrupted'].includes(status) ? status : 'idle',
       lastError: boundedText(own(automation, 'lastError'), MAX_ERROR),
+      history: normalizeHistory(own(automation, 'history'), fallbackTime),
       schemaVersion: 2,
     };
     if (interrupted && !normalized.lastError) {
       normalized.lastError = 'Previous run was interrupted; review before resuming.';
     }
     if (normalized.active) {
-      const savedNextRun = own(automation, 'nextRun');
       try {
-        // Missed runs are not replayed when restoring persisted state.
-        normalized.nextRun = validTimestamp(savedNextRun) && savedNextRun > fallbackTime
-          ? savedNextRun : nextRunAt(normalized, fallbackTime);
+        // A due timestamp from a previous session is not replayed here: the
+        // record is advanced to its next future occurrence and flagged so the
+        // scheduler runs the missed slot exactly once after startup.
+        if (validTimestamp(savedNextRun) && savedNextRun > fallbackTime) {
+          normalized.nextRun = savedNextRun;
+        } else if (schedule === 'once' && validTimestamp(savedNextRun)) {
+          // A one-time run missed while closed fires once at startup, then ends.
+          normalized.nextRun = null;
+          normalized.pendingCatchUp = true;
+        } else {
+          normalized.nextRun = nextRunAt(normalized, fallbackTime);
+          normalized.pendingCatchUp = validTimestamp(savedNextRun);
+        }
       } catch {
         normalized.active = false;
         normalized.lastError = 'No future occurrence is representable as a Date.';
@@ -216,10 +312,21 @@ export function normalizeAutomations(value, now = Date.now()) {
   return result;
 }
 
-export function buildSystemPrompt(settings) {
+// Custom catalogs are optional: buildSystemPrompt(settings) keeps working.
+// normalizeSettings only keeps built-in ids, so custom ids are read from the
+// raw settings and resolved against the validated custom lists.
+function findCatalogEntry(builtIns, customs, validator, rawId) {
+  if (typeof rawId !== 'string' || !rawId) return undefined;
+  const builtIn = builtIns.find((item) => item.id === rawId);
+  if (builtIn) return builtIn;
+  return normalizeCustomList(customs, validator).find((item) => item.id === rawId);
+}
+
+export function buildSystemPrompt(settings, { experts = [], skills = [] } = {}) {
   const normalized = normalizeSettings(settings);
-  const expert = EXPERTS.find((item) => item.id === normalized.expertId);
-  const skill = SKILLS.find((item) => item.id === normalized.skillId);
+  const raw = isRecord(settings) ? settings : {};
+  const expert = findCatalogEntry(EXPERTS, experts, validateCustomExpert, own(raw, 'expertId'));
+  const skill = findCatalogEntry(SKILLS, skills, validateCustomSkill, own(raw, 'skillId'));
   const parts = [
     'You are ScaleMax, an assistant. Be accurate, distinguish evidence from assumptions, and ask for essential missing context.',
     normalized.mode === 'coding'
@@ -243,7 +350,8 @@ export function buildSystemPrompt(settings) {
   return parts.join('\n\n');
 }
 
-export function searchItems(query, tasks) {
+// Custom experts and skills are optional; invalid records are skipped.
+export function searchItems(query, tasks, { experts = [], skills = [] } = {}) {
   if (typeof query !== 'string' || !query.trim()) return [];
   const needle = query.trim().toLowerCase();
   const result = [];
@@ -256,8 +364,11 @@ export function searchItems(query, tasks) {
     });
     if (result.length === 100) return result;
   }
+  const customExperts = normalizeCustomList(experts, validateCustomExpert);
+  const customSkills = normalizeCustomList(skills, validateCustomSkill);
   for (const [kind, items] of [
-    ['expert', EXPERTS], ['skill', SKILLS], ['community', COMMUNITY_SKILLS], ['connector', CONNECTORS],
+    ['expert', [...EXPERTS, ...customExperts]], ['skill', [...SKILLS, ...customSkills]],
+    ['community', COMMUNITY_SKILLS], ['connector', CONNECTORS],
   ]) {
     for (const item of items) {
       if (![item.name, item.description, item.category].some((text) => text.toLowerCase().includes(needle))) continue;

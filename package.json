@@ -10,7 +10,7 @@
     "repair:electron": "node build/electron-runtime.cjs --repair",
     "check:electron": "node build/electron-runtime.cjs --check",
     "start": "electron .",
-    "test": "node --test",
+    "test": "node --test test/*.test.cjs test/*.test.mjs",
     "build": "electron-builder --mac",
     "build:dir": "electron-builder --mac --dir"
   },

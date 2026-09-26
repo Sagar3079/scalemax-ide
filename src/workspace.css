@@ -1,0 +1,1018 @@
+/*
+ * ScaleMax IDE — Workspace tab (IDE layout).
+ *
+ * Toolbar, resizable explorer, tabbed editor with gutter and syntax overlay,
+ * resizable bottom panel (Terminal / Git changes / Diff) and a statusbar.
+ * Shell surfaces use the --sm-app-* aliases (see styles.css section 01).
+ * Sizes that the splitters change live in --ws-explorer-width and
+ * --ws-panel-height, set on .ws by workspace-ui.js.
+ */
+
+#view-workspace.active {
+  overflow: hidden;
+}
+
+.ws {
+  --ws-explorer-width: 260px;
+  --ws-panel-height: 220px;
+  --ws-code-font: var(--sm-font-code-family);
+  --ws-code-size: 12px;
+  --ws-code-line: 20px;
+  --ws-code-pad-y: 10px;
+  --ws-code-pad-x: 14px;
+  --ws-scrollbar: 10px;
+  --tok-keyword: #7c3aed;
+  --tok-string: #0f7b4a;
+  --tok-comment: #8a8f98;
+  --tok-number: #b45309;
+  --tok-tag: #1d4ed8;
+  --tok-attr: #0e7490;
+  --tok-heading: #0f172a;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: var(--sm-app-page);
+}
+
+[data-theme="dark"] .ws {
+  --tok-keyword: #c4a7ff;
+  --tok-string: #7ee2a8;
+  --tok-comment: #7d8590;
+  --tok-number: #f5b871;
+  --tok-tag: #7fb4ff;
+  --tok-attr: #67d4e8;
+  --tok-heading: #f1f5f9;
+}
+
+/* ---- Toolbar -------------------------------------------------------- */
+
+.ws-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--sm-app-border);
+  background: var(--sm-app-page);
+}
+
+.ws-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.ws-crumb-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--sm-palette-orange-8);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.ws-crumb-path {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--sm-text-strong);
+  white-space: nowrap;
+}
+
+.ws-crumb-name {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+/* Right-to-left overflow puts the ellipsis at the start of the parent path;
+   the <bdi> inside keeps the path itself left-to-right. */
+.ws-crumb-parent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--ws-code-font);
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+.ws-toolbar-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+.ws-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ws-toolbar .button.compact {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* ---- Body: explorer | splitter | center -------------------------- */
+
+.ws-body {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ws-explorer {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--ws-explorer-width);
+  width: var(--ws-explorer-width);
+  min-width: 160px;
+  max-width: 480px;
+  min-height: 0;
+  background: var(--sm-app-sidebar);
+}
+
+.ws-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 6px 0 14px;
+  flex-shrink: 0;
+}
+
+.ws-pane-header h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--sm-text-weak);
+}
+
+.ws-icon-button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--sm-radius-sm);
+  background: transparent;
+  color: var(--sm-text-medium);
+}
+
+.ws-icon-button:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.ws-icon-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ws-filter {
+  position: relative;
+  flex-shrink: 0;
+  margin: 0 10px 6px;
+}
+
+.ws-filter svg {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: var(--sm-text-weak);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.ws-filter input[type="search"] {
+  min-height: 26px;
+  padding: 3px 8px 3px 26px;
+  border-radius: var(--sm-radius-md);
+  font-size: 12px;
+}
+
+/* ---- File tree ------------------------------------------------------ */
+
+.ws-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 12px;
+}
+
+.ws-tree:focus-visible {
+  outline-offset: -2px;
+}
+
+.tree-row {
+  --depth: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  height: 24px;
+  padding: 0 10px 0 calc(8px + var(--depth) * 14px);
+  border: none;
+  background: none;
+  /* Indent guides: one hairline per nesting level. */
+  background-image: repeating-linear-gradient(to right,
+    transparent 0, transparent 14px, var(--sm-app-border) 14px, var(--sm-app-border) 15px);
+  background-size: calc(var(--depth) * 14px) 100%;
+  background-position: 8px 0;
+  background-repeat: no-repeat;
+  color: var(--sm-text-medium);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tree-row:hover {
+  background-color: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.tree-row.active {
+  background-color: var(--sm-bg-active);
+  color: var(--sm-text-strong);
+}
+
+.tree-row:focus-visible {
+  outline: 1px solid var(--sm-color-border-focus);
+  outline-offset: -1px;
+}
+
+.tree-row .file-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-row mark {
+  background: var(--sm-palette-orange-2);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.tree-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-chevron::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border: solid var(--sm-text-weak);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+  transition: transform var(--sm-motion-duration-fast, 120ms) ease;
+}
+
+.tree-row[aria-expanded="true"] .tree-chevron::before {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.tree-chevron.is-leaf::before {
+  display: none;
+}
+
+/* CSS-drawn icons: a folder, or a folded page tinted by file type. */
+.tree-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.tree-icon.is-folder::before {
+  content: '';
+  position: absolute;
+  inset: 3px 0 1px;
+  border-radius: 2px;
+  background: var(--sm-palette-orange-5);
+}
+
+.tree-icon.is-folder::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 6px;
+  height: 4px;
+  border-radius: 2px 2px 0 0;
+  background: var(--sm-palette-orange-5);
+}
+
+.tree-row[aria-expanded="true"] .tree-icon.is-folder::before {
+  background: var(--sm-palette-orange-4);
+}
+
+.tree-icon.is-file::before {
+  content: '';
+  position: absolute;
+  inset: 1px 2px;
+  border-radius: 1.5px;
+  background: var(--ws-icon, var(--sm-icon-tertiary, #9aa0a6));
+  clip-path: polygon(0 0, 66% 0, 100% 30%, 100% 100%, 0 100%);
+}
+
+.tree-icon[data-ext="js"], .tree-icon[data-ext="mjs"], .tree-icon[data-ext="cjs"], .tree-icon[data-ext="jsx"] { --ws-icon: #e2b100; }
+.tree-icon[data-ext="ts"], .tree-icon[data-ext="tsx"], .tree-icon[data-ext="mts"], .tree-icon[data-ext="cts"] { --ws-icon: #3178c6; }
+.tree-icon[data-ext="json"] { --ws-icon: #c08b00; }
+.tree-icon[data-ext="md"], .tree-icon[data-ext="mdx"], .tree-icon[data-ext="txt"] { --ws-icon: #64748b; }
+.tree-icon[data-ext="css"], .tree-icon[data-ext="scss"], .tree-icon[data-ext="less"] { --ws-icon: #7c4dff; }
+.tree-icon[data-ext="html"], .tree-icon[data-ext="htm"], .tree-icon[data-ext="xml"] { --ws-icon: #e44d26; }
+.tree-icon[data-ext="py"] { --ws-icon: #3572a5; }
+.tree-icon[data-ext="sh"], .tree-icon[data-ext="zsh"], .tree-icon[data-ext="bash"] { --ws-icon: #3fa34d; }
+.tree-icon[data-ext="yml"], .tree-icon[data-ext="yaml"], .tree-icon[data-ext="toml"] { --ws-icon: #cb3b3b; }
+.tree-icon[data-ext="svg"], .tree-icon[data-ext="png"], .tree-icon[data-ext="jpg"], .tree-icon[data-ext="jpeg"],
+.tree-icon[data-ext="gif"], .tree-icon[data-ext="webp"], .tree-icon[data-ext="ico"], .tree-icon[data-ext="icns"] { --ws-icon: #c04fd8; }
+.tree-icon[data-ext="lock"] { --ws-icon: #8a8f98; }
+
+.tree-git {
+  flex-shrink: 0;
+  min-width: 10px;
+  font-family: var(--ws-code-font);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tree-git.is-modified { color: var(--sm-palette-orange-8); }
+.tree-git.is-added { color: var(--sm-palette-green-8); }
+.tree-git.is-deleted { color: var(--sm-palette-red-8); }
+.tree-git.is-untracked { color: var(--sm-palette-blue-8); }
+
+.tree-message {
+  padding: 4px 10px 4px calc(26px + var(--depth, 0) * 14px);
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+/* ---- Splitters ------------------------------------------------------- */
+
+.ws-splitter {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--sm-app-border);
+  z-index: 2;
+}
+
+.ws-splitter::after {
+  content: '';
+  position: absolute;
+}
+
+.ws-splitter-v {
+  width: 1px;
+  cursor: col-resize;
+}
+
+.ws-splitter-v::after {
+  inset: 0 -3px;
+}
+
+.ws-splitter-h {
+  height: 1px;
+  cursor: row-resize;
+}
+
+.ws-splitter-h::after {
+  inset: -3px 0;
+}
+
+.ws-splitter:hover,
+.ws-splitter.is-dragging,
+.ws-splitter:focus-visible {
+  background: var(--sm-color-border-focus);
+  outline: none;
+}
+
+.ws.is-resizing,
+.ws.is-resizing * {
+  user-select: none;
+}
+
+/* ---- Center: editor over panel ----------------------------------- */
+
+.ws-center {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ws-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 120px;
+  background: var(--sm-app-surface);
+}
+
+.ws-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--sm-app-chrome);
+  border-bottom: 1px solid var(--sm-app-border);
+  scrollbar-width: thin;
+}
+
+.ws-tabs:empty {
+  display: none;
+}
+
+.ws-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ws-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+  border: none;
+  border-right: 1px solid var(--sm-app-border);
+  background: transparent;
+  color: var(--sm-text-medium);
+  font-size: 12px;
+  cursor: default;
+}
+
+.ws-tab:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.ws-tab[aria-selected="true"] {
+  background: var(--sm-app-surface);
+  color: var(--sm-text-strong);
+}
+
+.ws-tab[aria-selected="true"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--sm-brand-primary);
+}
+
+.ws-tab:focus-visible {
+  outline: 1px solid var(--sm-color-border-focus);
+  outline-offset: -2px;
+}
+
+.ws-tab .tree-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.ws-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-tab-close {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--sm-radius-sm);
+  background: transparent;
+  color: var(--sm-text-weak);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ws-tab-close:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+/* A dirty tab shows a dot until the close button is hovered or focused. */
+.ws-tab.is-dirty .ws-tab-close::before {
+  content: '●';
+  font-size: 10px;
+  color: var(--sm-text-medium);
+}
+
+.ws-tab.is-dirty .ws-tab-close .ws-tab-x {
+  display: none;
+}
+
+.ws-tab.is-dirty .ws-tab-close:hover::before,
+.ws-tab.is-dirty .ws-tab-close:focus-visible::before {
+  content: none;
+}
+
+.ws-tab.is-dirty .ws-tab-close:hover .ws-tab-x,
+.ws-tab.is-dirty .ws-tab-close:focus-visible .ws-tab-x {
+  display: inline;
+}
+
+.ws-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--sm-color-border-tertiary);
+}
+
+.ws-editor-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ws-editor-file h2 {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sm-text-strong);
+}
+
+.ws-editor-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ws-code-font);
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+.ws-editor-head .button.compact {
+  height: 22px;
+}
+
+.ws-editor-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Gutter, overlay and textarea share one set of metrics so lines align.
+   The gutter carries one scrollbar's worth of extra bottom padding because
+   the textarea always reserves a horizontal scrollbar. */
+.ws-gutter {
+  flex-shrink: 0;
+  min-width: 48px;
+  margin: 0;
+  padding: var(--ws-code-pad-y) 10px calc(var(--ws-code-pad-y) + var(--ws-scrollbar)) 8px;
+  overflow: hidden;
+  border-right: 1px solid var(--sm-color-border-tertiary);
+  background: var(--sm-app-surface);
+  font-family: var(--ws-code-font);
+  font-size: var(--ws-code-size);
+  line-height: var(--ws-code-line);
+  font-variant-ligatures: none;
+  color: var(--sm-text-weak);
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+.ws-code {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ws-highlight,
+.ws-input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: var(--ws-code-pad-y) var(--ws-code-pad-x);
+  border: 0;
+  border-radius: 0;
+  font-family: var(--ws-code-font);
+  font-size: var(--ws-code-size);
+  line-height: var(--ws-code-line);
+  font-weight: 400;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  /* Both always reserve scrollbars so their scroll ranges match exactly. */
+  overflow: scroll;
+}
+
+.ws-highlight {
+  z-index: 0;
+  color: var(--sm-text-strong);
+  background: transparent;
+  pointer-events: none;
+}
+
+.ws-highlight::-webkit-scrollbar-thumb,
+.ws-highlight::-webkit-scrollbar-track,
+.ws-highlight::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ws-input {
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  background: transparent;
+  color: var(--sm-text-strong);
+  caret-color: var(--sm-text-strong);
+}
+
+.ws-input:focus {
+  outline: none;
+  border-color: transparent;
+}
+
+.ws-input::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* While a highlight overlay is shown the textarea text is invisible; the
+   overlay paints it, the textarea keeps the caret and the selection. */
+.ws-code.is-highlighted .ws-input {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.ws-code.is-highlighted .ws-input::selection {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.ws-code:not(.is-highlighted) .ws-highlight {
+  display: none;
+}
+
+.tok-keyword { color: var(--tok-keyword); }
+.tok-string { color: var(--tok-string); }
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-number { color: var(--tok-number); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-heading { color: var(--tok-heading); font-weight: 600; }
+
+/* Empty states sit over the editor body. */
+.ws-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  background: var(--sm-app-surface);
+  text-align: center;
+}
+
+.ws-empty h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sm-text-strong);
+}
+
+.ws-empty p {
+  max-width: 380px;
+  font-size: 12px;
+  color: var(--sm-text-medium);
+}
+
+.ws-empty-icon {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 4px;
+  fill: var(--sm-palette-orange-1);
+  stroke: var(--sm-palette-orange-8);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.ws-empty .button {
+  margin-top: 6px;
+}
+
+.ws-empty .ws-empty-keys {
+  margin-top: 10px;
+  color: var(--sm-text-weak);
+}
+
+.ws-empty kbd,
+.ws-empty-keys kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-bottom-width: 2px;
+  border-radius: var(--sm-radius-sm);
+  background: var(--sm-app-surface-hover);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* ---- Bottom panel -------------------------------------------------- */
+
+.ws-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--ws-panel-height);
+  height: var(--ws-panel-height);
+  min-height: 96px;
+  background: var(--sm-app-surface);
+}
+
+.ws-panel-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 8px 0 6px;
+  border-bottom: 1px solid var(--sm-color-border-tertiary);
+}
+
+.ws-panel-tablist {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.ws-panel-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: none;
+  background: none;
+  color: var(--sm-text-weak);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.ws-panel-tab:hover {
+  color: var(--sm-text-strong);
+}
+
+.ws-panel-tab[aria-selected="true"] {
+  color: var(--sm-text-strong);
+}
+
+.ws-panel-tab[aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--sm-brand-primary);
+}
+
+.ws-panel-tab:focus-visible {
+  outline: 1px solid var(--sm-color-border-focus);
+  outline-offset: -3px;
+}
+
+.ws-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 100px;
+  background: var(--sm-app-muted);
+  color: var(--sm-text-medium);
+  font-size: 10px;
+  line-height: 16px;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.ws-panel-views {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ws-panel-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  overflow: hidden;
+}
+
+.ws-terminal-output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--sm-radius-md);
+  background: var(--sm-app-chrome);
+  font-family: var(--ws-code-font);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--sm-text-medium);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ws-terminal-output:empty::before {
+  content: 'Output appears here. Commands run in the project folder with a 30 s limit.';
+  color: var(--sm-text-weak);
+}
+
+.ws-terminal-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ws-prompt {
+  font-family: var(--ws-code-font);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sm-brand-primary);
+}
+
+.ws-terminal-form input {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: var(--sm-radius-md);
+  font-family: var(--ws-code-font);
+  font-size: 12px;
+}
+
+.ws-terminal-form .button.compact {
+  height: 26px;
+}
+
+.ws-git-files {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--sm-radius-sm);
+  background: none;
+  color: var(--sm-text-medium);
+  font-size: 12px;
+  text-align: left;
+}
+
+.git-row:hover,
+.git-row.active {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.git-status-code {
+  flex-shrink: 0;
+  width: 14px;
+  font-family: var(--ws-code-font);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--sm-text-weak);
+}
+
+.git-status-code.is-modified { color: var(--sm-palette-orange-8); }
+.git-status-code.is-added { color: var(--sm-palette-green-8); }
+.git-status-code.is-deleted { color: var(--sm-palette-red-8); }
+.git-status-code.is-untracked { color: var(--sm-palette-blue-8); }
+
+.ws-diff {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+}
+
+.ws-diff:empty {
+  display: block;
+}
+
+.ws-diff:empty::before {
+  content: 'Choose a changed file in Git changes to see its diff.';
+  color: var(--sm-text-weak);
+  font-family: inherit;
+}
+
+/* ---- Statusbar ------------------------------------------------------ */
+
+.ws-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 24px;
+  padding: 0 12px;
+  border-top: 1px solid var(--sm-app-border);
+  background: var(--sm-app-chrome);
+  font-size: 11px;
+  color: var(--sm-text-medium);
+  white-space: nowrap;
+}
+
+.ws-status-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-status-spacer {
+  flex: 1;
+}
+
+.ws-status-item {
+  flex-shrink: 0;
+  color: var(--sm-text-weak);
+}
+
+#editor-branch::before {
+  content: '⎇ ';
+}
+
+/* ---- Narrow windows ------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .ws {
+    --ws-explorer-width: 200px;
+  }
+
+  .ws-toolbar-status {
+    display: none;
+  }
+}

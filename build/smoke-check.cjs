@@ -11,7 +11,27 @@ const path = require('node:path');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const FAKE_MCP_SERVER = path.join(__dirname, '..', 'test', 'fixtures', 'fake-mcp-server.cjs');
+
 // Minimal OpenAI-compatible stub on loopback, reachable from the provider.
+// With tools offered and a "use echo" request it answers with a tool call,
+// then turns the tool result into the final reply (exercises the tool loop).
+function stubReply(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const last = messages[messages.length - 1] || {};
+  const tools = Array.isArray(body?.tools) ? body.tools : [];
+  const echo = tools.find((tool) => /_echo$/.test(tool?.function?.name || ''));
+  if (last.role === 'tool') return { role: 'assistant', content: `tool said: ${last.content}` };
+  if (echo && typeof last.content === 'string' && last.content.includes('use echo')) {
+    return {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'call_smoke_1', type: 'function', function: { name: echo.function.name, arguments: JSON.stringify({ text: 'smoke-echo' }) } }],
+    };
+  }
+  return { role: 'assistant', content: 'pong' };
+}
+
 async function startStubServer() {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
@@ -20,8 +40,14 @@ async function startStubServer() {
       return;
     }
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: { role: 'assistant', content: 'pong' } }] }));
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        let body = null;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { body = null; }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: stubReply(body) }] }));
+      });
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -74,20 +100,24 @@ async function run(win) {
       const api = window.scalemaxAPI || {};
       const providerResult = await (api.provider && api.provider.get ? api.provider.get() : Promise.resolve(null));
       const cancelResult = await (api.provider && api.provider.cancel ? api.provider.cancel('smoke') : Promise.resolve(null));
-      const reserved = { provider: 'bridge-missing', connectors: 'bridge-missing', user: 'bridge-missing' };
+      const reservedKeys = ['provider', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user'];
+      const reserved = {};
+      for (const key of reservedKeys) reserved[key] = 'bridge-missing';
       if (api.store && api.store.get) {
-        for (const key of ['provider', 'connectors', 'user']) {
+        for (const key of reservedKeys) {
           reserved[key] = await api.store.get(key);
         }
       }
       const input = document.querySelector('#chat-input');
       if (input) { input.value = 'hello'; input.dispatchEvent(new Event('input', { bubbles: true })); }
       return {
-        hasBridge: Boolean(api.store && api.provider && api.connectors),
-        reservedHidden: reserved.provider === undefined && reserved.connectors === undefined && reserved.user === undefined,
+        hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
+        reservedHidden: Object.values(reserved).every((value) => value === undefined),
         providerMethods: ['get','save','test','discover','send','cancel','clear'].filter((m) => typeof api.provider?.[m] === 'function'),
         workspaceMethods: ['select','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
+        connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth'].filter((m) => typeof api.connectors?.[m] === 'function'),
+        mcpMethods: ['list','save','remove','test','tools'].filter((m) => typeof api.mcp?.[m] === 'function'),
         providerGetOk: providerResult && providerResult.ok === true,
         providerConfigured: providerResult && providerResult.data && providerResult.data.configured === false,
         cancelOk: cancelResult && cancelResult.ok === true,
@@ -133,7 +163,23 @@ async function run(win) {
       document.querySelector('#send-btn').click();
       await new Promise((resolve) => setTimeout(resolve, 700));
       const replies = [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].map((node) => node.textContent);
+
+      // MCP: a real stdio server (the test fixture run by this Electron binary as Node).
+      const mcpSaved = await api.mcp.save({
+        name: 'Smoke tools', transport: 'stdio', command: ${JSON.stringify(process.execPath)},
+        args: [${JSON.stringify(FAKE_MCP_SERVER)}], env: { ELECTRON_RUN_AS_NODE: '1' }, enabled: true,
+      });
+      const mcpTested = mcpSaved.ok ? await api.mcp.test({ id: mcpSaved.data.id }) : mcpSaved;
+      const mcpListed = await api.mcp.list();
+      const toolChat = await api.provider.send({ requestId: 'smoke-tools', messages: [{ role: 'user', content: 'Please use echo.' }] });
+      if (mcpSaved.ok) await api.mcp.remove({ id: mcpSaved.data.id });
       await api.provider.clear();
+
+      // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
+      const oauthBefore = await api.connectors.getOAuthConfig({ id: 'github' });
+      const oauthSaved = await api.connectors.saveOAuthConfig({ id: 'github', clientId: 'Iv1.smoke', clientSecret: 'smoke-secret-value' });
+      const oauthNoLoopback = await api.connectors.startOAuth({ id: 'intercom' });
+      const oauthForgot = await api.connectors.disconnectOAuth({ id: 'github', forgetClient: true });
       const savedConnector = await api.connectors.save({ id: 'github', token: 'ghp_smoke_token_1234567890' });
       const connectorList = await api.connectors.list();
       const github = connectorList && connectorList.ok ? connectorList.data.github : null;
@@ -154,6 +200,17 @@ async function run(win) {
           && removedConnector.data.removed === true
           && (!listAfterRemove || !listAfterRemove.ok || !listAfterRemove.data.github
             || listAfterRemove.data.github.connected === false)),
+        mcpTools: mcpTested && mcpTested.ok ? mcpTested.data.tools.map((tool) => tool.name) : (mcpTested?.error?.message || null),
+        mcpSecretHidden: Boolean(mcpListed && mcpListed.ok && !JSON.stringify(mcpListed.data).includes('ELECTRON_RUN_AS_NODE":"1')
+          && mcpListed.data.some((server) => (server.envKeys || []).includes('ELECTRON_RUN_AS_NODE'))),
+        toolChatText: toolChat && toolChat.ok ? toolChat.data.text : (toolChat?.error?.message || null),
+        toolChatCalls: toolChat && toolChat.ok ? toolChat.data.toolCalls : null,
+        oauthSupported: Boolean(oauthBefore && oauthBefore.ok && oauthBefore.data.supported === true
+          && oauthBefore.data.redirectUri === 'http://127.0.0.1:53682/callback'),
+        oauthSecretHidden: Boolean(oauthSaved && oauthSaved.ok && oauthSaved.data.hasSecret === true
+          && !JSON.stringify(oauthSaved.data).includes('smoke-secret-value')),
+        oauthNoLoopbackRefused: Boolean(oauthNoLoopback && !oauthNoLoopback.ok && /HTTPS redirects/.test(oauthNoLoopback.error.message)),
+        oauthForgotten: Boolean(oauthForgot && oauthForgot.ok && oauthForgot.data.clientForgotten === true),
       };
     })()`);
   } catch (error) {
@@ -212,7 +269,14 @@ async function run(win) {
       const after = await api.workspace.read('hello.txt');
       const git = await api.workspace.gitStatus();
       const terminal = await api.workspace.run({ command: 'printf terminal-ok' });
+      const { default: app } = await import('./app.js');
+      app.applyWorkspace(selected.data);
+      await app.openFile('hello.txt');
+      const tabs = document.querySelectorAll('#editor-tabs .ws-tab').length;
+      const title = document.querySelector('#editor-title')?.textContent;
       return {
+        uiTabs: tabs,
+        uiTitle: title,
         root: selected.data.root,
         names: (listed.data.files || []).map((f) => f.name),
         before: read.data.content,
@@ -282,6 +346,8 @@ async function run(win) {
     providerMethods: probe.providerMethods.length === 7,
     workspaceApi: probe.workspaceMethods.length === 8,
     dialogApi: probe.dialogMethods.length === 2,
+    connectorApi: probe.connectorMethods.length === 10,
+    mcpApi: probe.mcpMethods.length === 5,
     providerGetOk: probe.providerGetOk,
     providerConfiguredFalse: probe.providerConfigured,
     cancelOk: probe.cancelOk,
@@ -302,6 +368,14 @@ async function run(win) {
     connectorListed: Boolean(e2e && e2e.connectorListed),
     connectorHintSafe: Boolean(e2e && e2e.connectorHintSafe),
     connectorRemoved: Boolean(e2e && e2e.connectorRemoved),
+    mcpStdioTools: Boolean(e2e && Array.isArray(e2e.mcpTools) && e2e.mcpTools.includes('echo') && e2e.mcpTools.includes('add')),
+    mcpSecretHidden: Boolean(e2e && e2e.mcpSecretHidden),
+    toolLoopReply: Boolean(e2e && e2e.toolChatText === 'tool said: smoke-echo'
+      && Array.isArray(e2e.toolChatCalls) && e2e.toolChatCalls.length === 1 && e2e.toolChatCalls[0].ok === true),
+    oauthSupported: Boolean(e2e && e2e.oauthSupported),
+    oauthSecretHidden: Boolean(e2e && e2e.oauthSecretHidden),
+    oauthNoLoopbackRefused: Boolean(e2e && e2e.oauthNoLoopbackRefused),
+    oauthForgotten: Boolean(e2e && e2e.oauthForgotten),
     automationCreated: Boolean(automation && automation.count >= 1 && automation.schedule === 'weekly'
       && automation.dayOfWeek === 3 && automation.schemaVersion === 2 && automation.hasNextRun && automation.rendered >= 1),
     noConsoleErrors: errors.length === 0,
@@ -310,8 +384,10 @@ async function run(win) {
     workspaceRead: Boolean(workspace && workspace.before === 'hello world'),
     workspaceWrite: Boolean(workspace && workspace.wrote && workspace.after === 'updated content'),
     workspaceTerminal: Boolean(workspace && workspace.terminalOk && workspace.terminalExit === 0),
+    workspaceEditorTab: Boolean(workspace && workspace.uiTabs === 1 && workspace.uiTitle === 'hello.txt'),
     ...(liveKey ? {
-      liveDiscoverBase: Boolean(live && live.baseUrl === 'https://api.scalemax.pro/token/v1'),
+      // Discover picks whichever official endpoint authenticates the key.
+      liveDiscoverBase: Boolean(live && ['https://api.scalemax.pro/v1', 'https://api.scalemax.pro/token/v1'].includes(live.baseUrl)),
       liveModelCount: Boolean(live && live.modelCount > 0),
       liveConfigured: Boolean(live && live.configured),
       liveChatReply: Boolean(live && live.reply),

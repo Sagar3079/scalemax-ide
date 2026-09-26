@@ -1,10 +1,12 @@
-import { EXPERTS, SKILLS, COMMUNITY_SKILLS, CONNECTORS } from './data.js';
+import { COMMUNITY_SKILLS, CONNECTORS } from './data.js';
+import { OAUTH_SUPPORT } from './oauth-catalog.js';
 
+// Entries are read through the app so user-created experts and skills are included.
 const CATALOGS = [
-  { selector: '#experts-grid', trigger: '.expert-use', idKey: 'expertId', entries: EXPERTS },
-  { selector: '#skills-list', trigger: '.skill-toggle', idKey: 'id', entries: SKILLS },
-  { selector: '#connectors-list', trigger: '.connector-toggle', idKey: 'id', entries: CONNECTORS },
-  { selector: '#community-list', trigger: '[data-detail-id]', idKey: 'detailId', entries: COMMUNITY_SKILLS },
+  { selector: '#experts-grid', trigger: '.expert-use', idKey: 'expertId', entries: (app) => app.allExperts() },
+  { selector: '#skills-list', trigger: '.skill-toggle', idKey: 'id', entries: (app) => app.allSkills() },
+  { selector: '#connectors-list', trigger: '[data-connector-action]', idKey: 'connectorAction', entries: () => CONNECTORS },
+  { selector: '#community-list', trigger: '[data-detail-id]', idKey: 'detailId', entries: () => COMMUNITY_SKILLS },
 ];
 const THEMES = ['light', 'dark', 'system'];
 const boundApps = new WeakSet();
@@ -47,18 +49,21 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
-function populateCategories() {
+function populateCategories(app) {
   const select = document.getElementById('catalog-category');
   if (!select) return;
   const previous = select.value;
   const categories = [...new Set(
-    [...EXPERTS, ...SKILLS, ...CONNECTORS].map((entry) => entry.category).filter(Boolean),
+    [...app.allExperts(), ...app.allSkills(), ...CONNECTORS].map((entry) => entry.category).filter(Boolean),
   )].sort((a, b) => a.localeCompare(b));
+  const current = [...select.options].map((node) => node.value).join('\n');
+  // Rebuilding the options on every catalog render would reset keyboard focus; only rebuild on change.
+  if (current === ['all', ...categories].join('\n')) return;
   select.replaceChildren(option('all', 'All'), ...categories.map((category) => option(category, category)));
   select.value = categories.includes(previous) ? previous : 'all';
 }
 
-function bindFilter() {
+function bindFilter(app) {
   const search = document.getElementById('catalog-search');
   const category = document.getElementById('catalog-category');
   const count = document.getElementById('catalog-count');
@@ -74,7 +79,7 @@ function bindFilter() {
       for (const node of list.children) {
         // Community cards stamp data-detail-id on the card itself, so a row can be its own trigger.
         const trigger = node.matches(catalog.trigger) ? node : node.querySelector(catalog.trigger);
-        const entry = catalog.entries.find((item) => item.id === trigger?.dataset[catalog.idKey]);
+        const entry = catalog.entries(app).find((item) => item.id === trigger?.dataset[catalog.idKey]);
         const text = entry ? `${entry.name} ${entry.description}`.toLowerCase() : node.textContent.toLowerCase();
         const entryCategory = entry?.category || node.querySelector('.badge')?.textContent || '';
         const visible = (!query || text.includes(query)) && (chosen === 'all' || entryCategory === chosen);
@@ -87,10 +92,11 @@ function bindFilter() {
 
   search?.addEventListener('input', apply);
   category?.addEventListener('change', apply);
-  // app.js re-renders the catalogs with replaceChildren, so re-apply after each swap.
+  // app.js re-renders the catalogs with replaceChildren, so re-apply after each swap
+  // (custom experts and skills can add categories).
   for (const catalog of CATALOGS) {
     const list = document.querySelector(catalog.selector);
-    if (list) new MutationObserver(apply).observe(list, { childList: true });
+    if (list) new MutationObserver(() => { populateCategories(app); apply(); }).observe(list, { childList: true });
   }
   apply();
 }
@@ -174,7 +180,8 @@ function bindDataExport(app) {
       settings: app.settings,
       automations: app.automations,
       skillStates: app.skillStates,
-      connectorStates: app.connectorStates,
+      customExperts: app.customExperts,
+      customSkills: app.customSkills,
     });
     app.showToast('Data exported');
   });
@@ -184,16 +191,16 @@ function bindDataExport(app) {
 // guides for connectors, prompt context for experts — that the list rows only
 // summarise. Clicking a row opens the full record.
 const DETAIL_SOURCES = [
-  { selector: '#experts-grid', row: '.expert-card', kind: 'Expert role', entries: EXPERTS, idFrom: (node) => node.querySelector('.expert-use')?.dataset.expertId },
-  { selector: '#skills-list', row: '.skill-card', kind: 'Prompt template', entries: SKILLS, idFrom: (node) => node.querySelector('.skill-toggle')?.dataset.id },
-  { selector: '#connectors-list', row: '.connector-card', kind: 'Setup guide', entries: CONNECTORS, idFrom: (node) => node.querySelector('[data-connector-action]')?.dataset.connectorAction },
+  { selector: '#experts-grid', row: '.expert-card', kind: 'Expert role', entries: (app) => app.allExperts(), idFrom: (node) => node.querySelector('.expert-use')?.dataset.expertId },
+  { selector: '#skills-list', row: '.skill-card', kind: 'Prompt template', entries: (app) => app.allSkills(), idFrom: (node) => node.querySelector('.skill-toggle')?.dataset.id },
+  { selector: '#connectors-list', row: '.connector-card', kind: 'Setup guide', entries: () => CONNECTORS, idFrom: (node) => node.querySelector('[data-connector-action]')?.dataset.connectorAction },
 ];
 
 const RESOURCE_KINDS = {
-  expert: { label: 'Expert role', entries: EXPERTS },
-  skill: { label: 'Prompt template', entries: SKILLS },
-  community: { label: 'Community', entries: COMMUNITY_SKILLS },
-  connector: { label: 'Setup guide', entries: CONNECTORS },
+  expert: { label: 'Expert role', entries: (app) => app.allExperts() },
+  skill: { label: 'Prompt template', entries: (app) => app.allSkills() },
+  community: { label: 'Community', entries: () => COMMUNITY_SKILLS },
+  connector: { label: 'Setup guide', entries: () => CONNECTORS },
 };
 
 function detailSection(label, value, asCode = false) {
@@ -267,11 +274,11 @@ function openDetailDialog(app, kind, entry) {
 function bindDetails(app) {
   for (const source of DETAIL_SOURCES) {
     document.querySelector(source.selector)?.addEventListener('click', (event) => {
-      if (event.target.closest('.skill-toggle, .skill-run, .connector-actions, .expert-use')) return;
+      if (event.target.closest('.skill-toggle, .skill-run, .connector-actions, .expert-use, .custom-edit, .custom-delete')) return;
       const row = event.target.closest(source.row);
       if (!row) return;
       const id = source.idFrom(row);
-      const entry = source.entries.find((item) => item.id === id);
+      const entry = source.entries(app).find((item) => item.id === id);
       if (entry) openDetailDialog(app, source.kind, entry);
     });
   }
@@ -284,18 +291,41 @@ function bindDetails(app) {
 
 // ---- Connectors ----------------------------------------------------------
 // Credentials live in the main process (encrypted with safeStorage); the
-// renderer only ever sees sanitized metadata, never the token.
+// renderer only ever sees sanitized metadata, never a token or client secret.
+// OAuth provider URLs and rules are owned by main (lib/oauth-catalog.cjs); the
+// renderer passes a connector id and reads display details via getOAuthConfig.
 
 let connectorCredentials = {};
 let activeConnector = null;
+let activeOAuthConfig = null;
+// The connector whose browser sign-in is in progress; it keeps running if the dialog closes.
+let oauthPendingId = null;
+
+const LOOPBACK_LABELS = {
+  yes: 'Loopback redirect supported',
+  'localhost-only': 'Uses a localhost redirect',
+  unknown: 'Loopback redirect unconfirmed',
+};
 
 function connectorBridge() {
   return window.scalemaxAPI?.connectors || null;
 }
 
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, text) {
+  const node = byId(id);
+  if (node) node.textContent = text;
+}
+
 function setConnectorStatus(message) {
-  const node = document.getElementById('connector-status');
-  if (node) node.textContent = message;
+  setText('connector-status', message);
+}
+
+function setOAuthStatus(message) {
+  setText('connector-oauth-status', message);
 }
 
 function connectorDotClass(status) {
@@ -303,6 +333,23 @@ function connectorDotClass(status) {
   if (status === 'error') return 'fail';
   if (status === 'unsupported') return 'pending';
   return '';
+}
+
+function oauthAvailable(id) {
+  return Object.hasOwn(OAUTH_SUPPORT, id) && OAUTH_SUPPORT[id] !== 'no';
+}
+
+function copyText(app, value, label) {
+  if (!value) return;
+  if (!navigator.clipboard?.writeText) { app.showToast('Clipboard is unavailable'); return; }
+  navigator.clipboard.writeText(value)
+    .then(() => app.showToast(`${label} copied`))
+    .catch(() => app.showToast('Could not copy'));
+}
+
+function connectedLabel(record) {
+  if (record.identity) return record.oauth ? `Signed in as ${record.identity}` : record.identity;
+  return record.oauth ? `OAuth ${record.hint || 'token stored'}` : (record.hint || 'token stored');
 }
 
 function decorateConnectors(app) {
@@ -313,24 +360,27 @@ function decorateConnectors(app) {
     slot.replaceChildren();
     if (!record?.connected) {
       const connect = element('button', 'button secondary', 'Connect');
-      connect.addEventListener('click', () => openConnectorDialog(app, entry));
+      connect.addEventListener('click', () => void openConnectorDialog(app, entry));
       slot.append(connect);
+      slot.append(element('span', 'connector-auth-hint', oauthAvailable(entry.id) ? 'OAuth or token' : 'Access token'));
       continue;
     }
     const chip = element('span', 'connector-chip');
-    chip.title = record.lastStatus === 'ok' ? 'Token verified'
-      : record.lastStatus === 'error' ? 'Token stored, provider check failed'
+    chip.title = record.lastStatus === 'ok' ? 'Credential verified'
+      : record.lastStatus === 'error' ? (record.lastError || 'Credential stored, provider check failed')
         : record.lastStatus === 'unsupported' ? 'Token stored, no validation endpoint yet'
-          : 'Token stored';
+          : 'Credential stored';
     chip.append(
       element('span', `status-dot ${connectorDotClass(record.lastStatus)}`),
-      element('span', 'connector-chip-text', record.hint || 'token stored'),
+      element('span', 'connector-chip-text', connectedLabel(record)),
     );
     const test = element('button', 'button secondary', 'Test');
     test.addEventListener('click', () => void testConnector(app, entry));
+    const manage = element('button', 'button secondary', 'Manage');
+    manage.addEventListener('click', () => void openConnectorDialog(app, entry));
     const remove = element('button', 'button danger', 'Disconnect');
     remove.addEventListener('click', () => void disconnectConnector(app, entry));
-    slot.append(chip, test, remove);
+    slot.append(chip, test, manage, remove);
   }
 }
 
@@ -341,23 +391,173 @@ async function refreshConnectors(app) {
     connectorCredentials = result?.ok && result.data ? result.data : {};
   }
   decorateConnectors(app);
+  renderConnectorCurrent();
 }
 
-function openConnectorDialog(app, entry) {
-  if (!connectorBridge()) { app.showToast('Connector connections require the desktop app'); return; }
-  const dialog = document.getElementById('connector-dialog');
+// The "currently connected" line at the top of the dialog.
+function renderConnectorCurrent() {
+  const node = byId('connector-current');
+  if (!node) return;
+  const record = activeConnector ? connectorCredentials[activeConnector.id] : null;
+  node.hidden = !record?.connected;
+  node.textContent = record?.connected
+    ? `Connected · ${connectedLabel(record)}${record.lastStatus === 'error' && record.lastError ? ` · ${record.lastError}` : ''}`
+    : '';
+}
+
+function setOAuthPending(pending) {
+  const start = byId('connector-oauth-start');
+  const cancel = byId('connector-oauth-cancel');
+  if (start) start.disabled = pending;
+  if (cancel) cancel.hidden = !pending;
+  for (const id of ['connector-client-id', 'connector-client-secret', 'connector-shop']) {
+    const input = byId(id);
+    if (input) input.disabled = pending;
+  }
+}
+
+function renderOAuthSection(entry, config) {
+  const section = byId('connector-oauth-section');
+  const unavailable = byId('connector-oauth-unavailable');
+  activeOAuthConfig = config?.supported ? config : null;
+  if (section) section.hidden = !activeOAuthConfig || activeOAuthConfig.loopback === 'no';
+  if (unavailable) {
+    const blocked = Boolean(activeOAuthConfig && activeOAuthConfig.loopback === 'no');
+    unavailable.hidden = !blocked;
+    unavailable.textContent = blocked
+      ? `OAuth sign-in isn't available for ${entry.name} in a desktop app: ${activeOAuthConfig.redirectNote || 'the provider requires HTTPS redirects.'} Use an access token below.`
+      : '';
+  }
+  if (!activeOAuthConfig || activeOAuthConfig.loopback === 'no') return;
+  const current = activeOAuthConfig;
+  setText('connector-oauth-title', `Sign in with ${entry.name}`);
+  setText('connector-oauth-badge', LOOPBACK_LABELS[current.loopback] || 'Loopback redirect');
+  setText('connector-register-url', current.registerUrl || 'See the provider documentation');
+  setText('connector-redirect-uri', current.redirectUri || '');
+  const note = byId('connector-redirect-note');
+  if (note) {
+    note.hidden = !current.redirectNote;
+    note.textContent = current.redirectNote || '';
+  }
+  const clientId = byId('connector-client-id');
+  if (clientId) clientId.value = current.clientId || '';
+  const secretGroup = byId('connector-client-secret-group');
+  const secretNone = byId('connector-secret-none');
+  const secret = byId('connector-client-secret');
+  if (secretGroup) secretGroup.hidden = current.secret === 'none';
+  if (secretNone) secretNone.hidden = current.secret !== 'none';
+  setText('connector-secret-mode', current.secret === 'required' ? '(required)' : '(optional)');
+  if (secret) {
+    secret.value = '';
+    secret.placeholder = current.hasSecret
+      ? `Stored ${current.secretStorage === 'session' ? 'for this session' : 'encrypted'}; leave blank to keep it`
+      : "The app's client secret";
+  }
+  const shopGroup = byId('connector-shop-group');
+  const shop = byId('connector-shop');
+  if (shopGroup) shopGroup.hidden = !current.needsShop;
+  if (shop) shop.value = current.shop || '';
+  const forget = byId('connector-oauth-forget');
+  if (forget) forget.hidden = !current.configured;
+  const record = connectorCredentials[entry.id];
+  setText('connector-oauth-start', record?.oauth && record.connected ? `Sign in to ${entry.name} again` : `Sign in with ${entry.name}`);
+}
+
+async function openConnectorDialog(app, entry) {
+  const bridge = connectorBridge();
+  if (!bridge) { app.showToast('Connector connections require the desktop app'); return; }
+  const dialog = byId('connector-dialog');
   if (!dialog) return;
   activeConnector = entry;
-  const title = document.getElementById('connector-dialog-title');
-  const description = document.getElementById('connector-dialog-description');
-  const hint = document.getElementById('connector-token-hint');
-  const token = document.getElementById('connector-token');
-  if (title) title.textContent = `Connect ${entry.name}`;
-  if (description) description.textContent = entry.description || '';
-  if (hint) hint.textContent = entry.auth || '';
+  activeOAuthConfig = null;
+  setText('connector-dialog-title', `Connect ${entry.name}`);
+  setText('connector-dialog-description', entry.description || '');
+  setText('connector-token-hint', entry.auth || '');
+  const token = byId('connector-token');
   if (token) token.value = '';
   setConnectorStatus('');
+  const pending = oauthPendingId === entry.id;
+  setOAuthStatus(pending ? `Waiting for the ${entry.name} sign-in to finish in your browser…` : '');
+  setOAuthPending(pending);
+  renderOAuthSection(entry, null);
+  renderConnectorCurrent();
   if (!dialog.open) dialog.showModal();
+  if (Object.hasOwn(OAUTH_SUPPORT, entry.id) && bridge.getOAuthConfig) {
+    const result = await bridge.getOAuthConfig({ id: entry.id });
+    // The user may have switched connectors while this was loading.
+    if (activeConnector !== entry) return;
+    if (result?.ok) renderOAuthSection(entry, result.data);
+    else setOAuthStatus(result?.error?.message || 'OAuth settings could not be loaded.');
+  }
+}
+
+async function saveOAuthSettings(bridge) {
+  const input = { id: activeConnector.id, clientId: byId('connector-client-id')?.value.trim() || '' };
+  const secret = byId('connector-client-secret')?.value.trim() || '';
+  // A blank secret keeps the stored one; clearing happens through "Forget app settings".
+  if (secret && activeOAuthConfig?.secret !== 'none') input.clientSecret = secret;
+  if (activeOAuthConfig?.needsShop) input.shop = byId('connector-shop')?.value.trim() || '';
+  const saved = await bridge.saveOAuthConfig(input);
+  if (!saved?.ok) throw new Error(saved?.error?.message || 'OAuth settings could not be saved.');
+  const secretInput = byId('connector-client-secret');
+  if (secretInput) secretInput.value = '';
+  renderOAuthSection(activeConnector, saved.data);
+  return saved.data;
+}
+
+async function startConnectorOAuth(app, event) {
+  event.preventDefault();
+  const bridge = connectorBridge();
+  if (!bridge?.startOAuth || !activeConnector || oauthPendingId === activeConnector.id) return;
+  const entry = activeConnector;
+  if (!byId('connector-client-id')?.value.trim()) { setOAuthStatus('Enter the client ID of your OAuth app.'); return; }
+  oauthPendingId = entry.id;
+  setOAuthPending(true);
+  setOAuthStatus('Saving app settings…');
+  // The dialog may be closed while the browser flow runs; results then arrive as toasts.
+  const report = (message, toast) => {
+    if (activeConnector === entry) setOAuthStatus(message);
+    else if (toast) app.showToast(`${entry.name}: ${message}`);
+  };
+  try {
+    await saveOAuthSettings(bridge);
+    report(`Complete the sign-in in your browser. Waiting for ${entry.name} to redirect back (up to 5 minutes)…`, false);
+    const result = await bridge.startOAuth({ id: entry.id });
+    if (!result?.ok) {
+      const cancelled = result?.error?.code === 'CANCELLED';
+      report(cancelled ? 'Sign-in cancelled.' : (result?.error?.message || 'OAuth sign-in failed.'), !cancelled);
+      return;
+    }
+    const identity = result.data?.identity;
+    report(identity ? `Signed in as ${identity}.` : 'Signed in. The access token is stored encrypted.', false);
+    app.showToast(`${entry.name} connected`);
+  } catch (error) {
+    report(error?.message || 'OAuth sign-in failed.', true);
+  } finally {
+    if (oauthPendingId === entry.id) oauthPendingId = null;
+    if (activeConnector === entry) setOAuthPending(false);
+    await refreshConnectors(app);
+    if (activeConnector === entry) renderOAuthSection(entry, activeOAuthConfig);
+  }
+}
+
+async function cancelConnectorOAuth() {
+  const bridge = connectorBridge();
+  if (!bridge?.disconnectOAuth || !activeConnector) return;
+  await bridge.disconnectOAuth({ id: activeConnector.id, pendingOnly: true });
+}
+
+async function forgetConnectorOAuth(app) {
+  const bridge = connectorBridge();
+  const entry = activeConnector;
+  if (!bridge?.disconnectOAuth || !entry) return;
+  if (!window.confirm(`Remove the saved OAuth app settings for ${entry.name} and disconnect it?`)) return;
+  const result = await bridge.disconnectOAuth({ id: entry.id, forgetClient: true });
+  if (!result?.ok) { setOAuthStatus(result?.error?.message || 'Could not remove the app settings.'); return; }
+  setOAuthStatus('App settings removed.');
+  await refreshConnectors(app);
+  const config = await bridge.getOAuthConfig({ id: entry.id });
+  if (activeConnector === entry && config?.ok) renderOAuthSection(entry, config.data);
 }
 
 async function submitConnector(app, event) {
@@ -369,28 +569,29 @@ async function submitConnector(app, event) {
     return;
   }
   if (!activeConnector) return;
-  const token = document.getElementById('connector-token')?.value.trim() || '';
+  const entry = activeConnector;
+  const token = byId('connector-token')?.value.trim() || '';
   if (!token) { setConnectorStatus('Enter the access token.'); return; }
-  const button = document.getElementById('connector-save');
+  const button = byId('connector-save');
   if (button) button.disabled = true;
   setConnectorStatus('Saving…');
   try {
-    const saved = await bridge.save({ id: activeConnector.id, token });
+    const saved = await bridge.save({ id: entry.id, token });
     if (!saved?.ok) {
       setConnectorStatus(saved?.error?.message || 'Could not save the token.');
       return;
     }
-    const input = document.getElementById('connector-token');
+    const input = byId('connector-token');
     if (input) input.value = '';
     await refreshConnectors(app);
-    app.showToast(`${activeConnector.name} connected`);
+    app.showToast(`${entry.name} connected`);
     setConnectorStatus('Validating token…');
-    const result = await bridge.test({ id: activeConnector.id });
+    const result = await bridge.test({ id: entry.id });
     await refreshConnectors(app);
     const data = result?.data;
     if (data?.supported === false) setConnectorStatus(data.message || 'Saved. No validation endpoint is configured yet.');
     else if (data?.ok) setConnectorStatus('Connection verified.');
-    else setConnectorStatus(data?.message || 'Token saved, but the provider rejected it.');
+    else setConnectorStatus(data?.message || result?.error?.message || 'Token saved, but the provider rejected it.');
   } finally {
     if (button) button.disabled = false;
   }
@@ -405,7 +606,7 @@ async function testConnector(app, entry) {
   const data = result?.data;
   app.showToast(data?.ok ? `${entry.name} verified`
     : data?.supported === false ? `${entry.name}: no validation endpoint yet`
-      : `${entry.name} check failed`);
+      : `${entry.name}: ${data?.message || result?.error?.message || 'check failed'}`);
 }
 
 async function disconnectConnector(app, entry) {
@@ -418,21 +619,30 @@ async function disconnectConnector(app, entry) {
 }
 
 function bindConnectors(app) {
-  const dialog = document.getElementById('connector-dialog');
+  const dialog = byId('connector-dialog');
   if (dialog) {
-    document.getElementById('connector-form')?.addEventListener('submit', (event) => void submitConnector(app, event));
-    document.getElementById('connector-dialog-close')?.addEventListener('click', () => { if (dialog.open) dialog.close(); });
-    document.getElementById('connector-cancel')?.addEventListener('click', () => { if (dialog.open) dialog.close(); });
+    byId('connector-form')?.addEventListener('submit', (event) => void submitConnector(app, event));
+    byId('connector-oauth-form')?.addEventListener('submit', (event) => void startConnectorOAuth(app, event));
+    byId('connector-oauth-cancel')?.addEventListener('click', () => void cancelConnectorOAuth());
+    byId('connector-oauth-forget')?.addEventListener('click', () => void forgetConnectorOAuth(app));
+    byId('connector-register-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.registerUrl, 'Link'));
+    byId('connector-redirect-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.redirectUri, 'Redirect URI'));
+    // Closing the dialog leaves a browser sign-in running; "Cancel sign-in" stops it.
+    const close = () => { if (dialog.open) dialog.close(); };
+    byId('connector-dialog-close')?.addEventListener('click', close);
+    byId('connector-cancel')?.addEventListener('click', close);
+    dialog.addEventListener('close', () => { activeConnector = null; });
   }
   // app.js re-renders the catalog with replaceChildren; re-decorate after each swap.
-  const list = document.getElementById('connectors-list');
+  const list = byId('connectors-list');
   if (list) new MutationObserver(() => decorateConnectors(app)).observe(list, { childList: true });
   void refreshConnectors(app);
 }
 
+
 export function openResourceDetail(app, kind, id) {
-  const source = RESOURCE_KINDS[kind];
-  const entry = source?.entries.find((item) => item.id === id);
+  const source = Object.hasOwn(RESOURCE_KINDS, kind) ? RESOURCE_KINDS[kind] : null;
+  const entry = source?.entries(app).find((item) => item.id === id);
   if (!source || !entry) { app.showToast('No details available'); return; }
   openDetailDialog(app, source.label, entry);
 }
@@ -440,8 +650,8 @@ export function openResourceDetail(app, kind, id) {
 export function bindCatalogUi(app) {
   if (!app || typeof app !== 'object' || boundApps.has(app)) return;
   boundApps.add(app);
-  populateCategories();
-  bindFilter();
+  populateCategories(app);
+  bindFilter(app);
   renderCommunity(app);
   bindTheme(app);
   bindTaskActions(app);

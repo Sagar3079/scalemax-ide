@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -6,10 +6,15 @@ const { createProvider } = require('./lib/provider.cjs');
 const { createConnectorStore } = require('./lib/connectors.cjs');
 const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
+const { createMcpManager } = require('./lib/mcp.cjs');
+const { createToolLoop } = require('./lib/tool-loop.cjs');
 
 // The automated smoke check must never read or write the real user data.
 if (process.env.SCALEMAX_SMOKE === '1') {
   app.setPath('userData', path.join(os.tmpdir(), `scalemax-smoke-${process.pid}`));
+} else if (process.env.SCALEMAX_USER_DATA) {
+  // Development and UI testing: run against a throwaway profile instead of the real one.
+  app.setPath('userData', path.resolve(process.env.SCALEMAX_USER_DATA));
 }
 
 // ---------------------------------------------------------------------------
@@ -94,10 +99,39 @@ const provider = createProvider({
   approve: async () => true
 });
 
+// The main process owns every OAuth provider URL and rule (lib/oauth-catalog.cjs); the
+// renderer only ever passes a connector id.
 const connectors = createConnectorStore({
   store: stateAdapter,
-  safeStorage
+  safeStorage,
+  oauth: require('./lib/oauth.cjs'),
+  oauthConfigs: require('./lib/oauth-catalog.cjs').OAUTH_PROVIDERS
 });
+
+// ---------------------------------------------------------------------------
+// MCP servers and the chat tool loop
+// ---------------------------------------------------------------------------
+// Server configs live under the reserved `mcpServers` state key; env and header
+// values are encrypted with safeStorage and never cross the bridge.
+const mcp = createMcpManager({
+  store: stateAdapter,
+  safeStorage,
+  clientInfo: { name: 'ScaleMax', version: app.getVersion() }
+});
+
+// Chat requests offer tools from enabled MCP servers to the model and run the
+// tool calls it makes (lib/tool-loop.cjs); without tools it is a plain send.
+const toolLoop = createToolLoop({ provider, mcp });
+
+/** The chat permission mode from the persisted assistant settings. */
+function chatPermission() {
+  try {
+    const permission = stateStore.get('settings')?.permission;
+    return typeof permission === 'string' ? permission : 'ask';
+  } catch {
+    return 'ask';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Workspace service (project folder, file access, Git)
@@ -164,10 +198,11 @@ ipcMain.handle('app:quit', async () => {
   app.quit();
 });
 
-// Provider and connector credentials are reserved: they are only reachable
-// through the provider:*/connector:* channels, which return metadata and never
-// the stored token. The legacy `user` record is unreachable for the same reason.
-const RESERVED_STATE_KEYS = new Set(['provider', 'connectors', 'user']);
+// Provider, connector, OAuth client and MCP records are reserved: they are only
+// reachable through the provider:*/connector:*/mcp:* channels, which return
+// metadata and never a stored secret. The legacy `user` record is unreachable
+// for the same reason. (lib/state.cjs also refuses every non-public key.)
+const RESERVED_STATE_KEYS = new Set(['provider', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user']);
 
 ipcMain.handle('store:get', async (_event, key) => {
   if (typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return undefined;
@@ -211,8 +246,11 @@ const providerChannels = {
   'provider:save': (_event, input) => provider.save(input),
   'provider:test': () => provider.test(),
   'provider:discover': (_event, input) => provider.discover(input),
-  'provider:send': (_event, input) => provider.send(input),
-  'provider:cancel': (_event, id) => provider.cancel(id),
+  // An unconfigured provider fails fast without starting any MCP server.
+  'provider:send': (_event, input) => (provider.get().configured
+    ? toolLoop.send(input, { permission: chatPermission() })
+    : provider.send(input)),
+  'provider:cancel': (_event, id) => toolLoop.cancel(id),
   'provider:clear': () => provider.clear()
 };
 
@@ -234,6 +272,40 @@ const connectorChannels = {
 
 for (const [channel, run] of Object.entries(connectorChannels)) {
   ipcMain.handle(channel, wrap(run, CONNECTOR_FALLBACK));
+}
+
+// OAuth channels. The client secret is written here and never read back: the
+// renderer only ever sees whether one is stored. Access and refresh tokens never
+// cross the bridge, and lib/connectors.cjs only lets https sign-in pages reach
+// shell.openExternal.
+const oauthChannels = {
+  'connector:oauth-config-save': (_event, input) => connectors.saveOAuthConfig(input),
+  'connector:oauth-config-get': (_event, input) => connectors.getOAuthConfig(input),
+  'connector:oauth-start': (_event, input) => connectors.startOAuth(input, {
+    openExternal: (url) => shell.openExternal(url)
+  }),
+  'connector:oauth-status': (_event, input) => connectors.oauthStatus(input),
+  'connector:oauth-disconnect': (_event, input) => connectors.disconnectOAuth(input)
+};
+
+for (const [channel, run] of Object.entries(oauthChannels)) {
+  ipcMain.handle(channel, wrap(run, CONNECTOR_FALLBACK));
+}
+
+// MCP channels return sanitized server entries and tool summaries only; env and
+// header values are write-only. Tools run inside chat through the tool loop.
+const MCP_FALLBACK = { code: 'MCP_ERROR', message: 'MCP request failed.' };
+
+const mcpChannels = {
+  'mcp:list': () => mcp.list(),
+  'mcp:save': (_event, input) => mcp.save(input),
+  'mcp:remove': (_event, input) => mcp.remove(input),
+  'mcp:test': (_event, input) => mcp.test(input),
+  'mcp:tools': (_event, input) => mcp.listTools(input)
+};
+
+for (const [channel, run] of Object.entries(mcpChannels)) {
+  ipcMain.handle(channel, wrap(run, MCP_FALLBACK));
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +423,11 @@ app.whenReady().then(() => {
 }).catch((error) => {
   console.error('[ScaleMax] Startup failed:', error);
   app.exit(1);
+});
+
+// MCP stdio servers run in their own process groups; stop them with the app.
+app.on('before-quit', () => {
+  void mcp.closeAll();
 });
 
 app.on('window-all-closed', () => {

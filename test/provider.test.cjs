@@ -248,3 +248,203 @@ test('test() validates the models response shape', async () => {
   assert.equal(result.ok, true);
   assert.deepEqual(result.models, ['gpt-4o-mini', 'gpt-4o']);
 });
+
+async function sendAndCapture(input) {
+  const { provider, calls } = makeProvider({
+    respond: () => jsonResponse({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }),
+  });
+  await provider.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'm' });
+  await provider.send({ requestId: 'req-t', messages: [{ role: 'user', content: 'Hi' }], ...input });
+  return JSON.parse(calls[0].options.body);
+}
+
+test('send puts the system prompt first and forwards a numeric temperature', async () => {
+  const body = await sendAndCapture({ systemPrompt: 'You are terse.', temperature: 0.7 });
+  assert.deepEqual(body.messages[0], { role: 'system', content: 'You are terse.' });
+  assert.deepEqual(body.messages[1], { role: 'user', content: 'Hi' });
+  assert.equal(typeof body.temperature, 'number');
+  assert.equal(body.temperature, 0.7);
+});
+
+test('send forwards temperature 0 (falsy but valid)', async () => {
+  const body = await sendAndCapture({ systemPrompt: 'S', temperature: 0 });
+  assert.equal(body.temperature, 0);
+});
+
+test('send omits temperature when undefined so the provider default applies', async () => {
+  const body = await sendAndCapture({ systemPrompt: 'S' });
+  assert.equal(Object.hasOwn(body, 'temperature'), false);
+  assert.deepEqual(body.messages[0], { role: 'system', content: 'S' });
+});
+
+test('send omits an empty system message', async () => {
+  const body = await sendAndCapture({ systemPrompt: '   ' });
+  assert.deepEqual(body.messages, [{ role: 'user', content: 'Hi' }]);
+});
+
+test('send rejects a string temperature', async () => {
+  const { provider } = makeProvider({ respond: () => jsonResponse({}) });
+  await provider.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'm' });
+  await assert.rejects(
+    () => provider.send({ requestId: 'r', messages: [{ role: 'user', content: 'Hi' }], temperature: '0.7' }),
+    /Temperature must be a finite number/,
+  );
+});
+
+const TOOL_ECHO = {
+  type: 'function',
+  function: {
+    name: 'mcp_fake_echo',
+    description: '[Fake] Echo text.',
+    parameters: { type: 'object', properties: { text: { type: 'string' } } },
+  },
+};
+const TOOL_ADD = {
+  type: 'function',
+  function: { name: 'mcp_fake_add', parameters: { type: 'object', properties: {} } },
+};
+
+async function configuredProvider(respond) {
+  const setup = makeProvider({ respond });
+  await setup.provider.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'test-model' });
+  return setup;
+}
+
+test('complete sends tools with tool_choice auto and parses tool calls', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({
+    model: 'test-model-2026',
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'mcp_fake_echo', arguments: '{"text":"hi"}' } },
+          { id: 'call_2', type: 'function', function: { name: 'mcp_fake_add', arguments: { a: 1, b: 2 } } },
+        ],
+      },
+    }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  }));
+  const messages = [{ role: 'system', content: 'Be terse.' }, { role: 'user', content: 'Hi' }];
+  const result = await provider.complete({ requestId: 'c-1', messages, tools: [TOOL_ECHO, TOOL_ADD], temperature: 0 });
+  assert.deepEqual(result, {
+    content: null,
+    toolCalls: [
+      { id: 'call_1', name: 'mcp_fake_echo', arguments: '{"text":"hi"}' },
+      { id: 'call_2', name: 'mcp_fake_add', arguments: '{"a":1,"b":2}' },
+    ],
+    model: 'test-model-2026',
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    finishReason: 'tool_calls',
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/chat\/completions$/);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.model, 'test-model');
+  assert.equal(body.stream, false);
+  assert.equal(body.temperature, 0);
+  assert.equal(body.tool_choice, 'auto');
+  assert.deepEqual(body.tools, [TOOL_ECHO, TOOL_ADD]);
+  assert.deepEqual(body.messages, messages);
+});
+
+test('complete forwards tool round-trips and omits tools when none are given', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({
+    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'The answer is 3.' } }],
+  }));
+  const messages = [
+    { role: 'user', content: 'Add 1 and 2' },
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'mcp_fake_add', arguments: '{"a":1,"b":2}' } }],
+    },
+    { role: 'tool', tool_call_id: 'call_1', content: '3' },
+  ];
+  const result = await provider.complete({ requestId: 'c-2', messages });
+  // Without a model in the response, the configured model is reported.
+  assert.deepEqual(result, { content: 'The answer is 3.', toolCalls: [], model: 'test-model', finishReason: 'stop' });
+  const body = JSON.parse(calls[0].options.body);
+  assert.deepEqual(body.messages, messages);
+  assert.equal(Object.hasOwn(body, 'tools'), false);
+  assert.equal(Object.hasOwn(body, 'tool_choice'), false);
+  assert.equal(Object.hasOwn(body, 'temperature'), false);
+});
+
+test('complete fills in missing tool call ids and keeps at most 16 calls', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({
+    choices: [{
+      message: {
+        content: 'Working on it.',
+        tool_calls: Array.from({ length: 20 }, () => ({ function: { name: 'mcp_fake_echo', arguments: '{}' } })),
+      },
+    }],
+  }));
+  const result = await provider.complete({ requestId: 'c-3', messages: [{ role: 'user', content: 'Hi' }], tools: [TOOL_ECHO] });
+  assert.equal(result.content, 'Working on it.');
+  assert.equal(result.finishReason, null);
+  assert.equal(result.toolCalls.length, 16);
+  assert.equal(new Set(result.toolCalls.map((call) => call.id)).size, 16);
+  for (const call of result.toolCalls) {
+    assert.match(call.id, /^call_[0-9a-f]{32}$/);
+    assert.equal(call.name, 'mcp_fake_echo');
+    assert.equal(call.arguments, '{}');
+  }
+});
+
+test('complete rejects invalid requests before calling the provider', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({}));
+  const user = [{ role: 'user', content: 'Hi' }];
+  const tool = (fn) => [{ type: 'function', function: { name: 'ok_name', parameters: {}, ...fn } }];
+  const cases = [
+    [{ requestId: '', messages: user }, /requestId/],
+    [{ requestId: 'r', messages: [] }, /nonempty array/],
+    [{ requestId: 'r', messages: [{ role: 'developer', content: 'x' }] }, /system, user, assistant, or tool roles/],
+    [{ requestId: 'r', messages: [{ role: 'tool', content: 'x' }] }, /tool roles/],
+    [{ requestId: 'r', messages: [{ role: 'assistant', content: null }] }, /tool roles/],
+    [{ requestId: 'r', messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024 + 1) }] }, /at most 1 MB/],
+    [{
+      requestId: 'r',
+      messages: [{ role: 'assistant', content: null, tool_calls: [{ id: 'c', type: 'code', function: { name: 'x', arguments: '{}' } }] }],
+    }, /tool_calls must be/],
+    [{ requestId: 'r', messages: user, tools: tool({ name: 'bad name' }) }, /name matching/],
+    [{ requestId: 'r', messages: user, tools: tool({ description: 'd'.repeat(1025) }) }, /description of at most 1024/],
+    [{ requestId: 'r', messages: user, tools: tool({ parameters: 'none' }) }, /object parameters/],
+    [{ requestId: 'r', messages: user, tools: [...tool({}), ...tool({})] }, /unique/],
+    [{ requestId: 'r', messages: user, tools: Array.from({ length: 129 }, (_, i) => tool({ name: `t${i}` })[0]) }, /at most 128/],
+    [{ requestId: 'r', messages: user, temperature: 3 }, /Temperature must be/],
+  ];
+  for (const [input, pattern] of cases) {
+    await assert.rejects(
+      () => provider.complete(input),
+      (error) => error.name === 'ProviderError' && pattern.test(error.message),
+      `expected ${pattern}`,
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('complete requires assistant text or tool calls in the response', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({
+    choices: [{ message: { role: 'assistant', content: '   ', tool_calls: [] } }],
+  }));
+  await assert.rejects(
+    () => provider.complete({ requestId: 'c-4', messages: [{ role: 'user', content: 'Hi' }] }),
+    /did not contain assistant text or tool calls/,
+  );
+});
+
+test('complete is cancellable through the shared requestId', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { provider } = await configuredProvider(async () => {
+    await gate;
+    return jsonResponse({ choices: [{ message: { content: 'late' } }] });
+  });
+  const pending = provider.complete({ requestId: 'c-5', messages: [{ role: 'user', content: 'Hi' }], tools: [TOOL_ECHO] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(provider.cancel('c-5'), true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED' && /cancelled/.test(error.message));
+  release();
+});
