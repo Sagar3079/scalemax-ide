@@ -220,6 +220,8 @@ test('test() fails when slack reports ok: false', async () => {
   const result = await connectors.test({ id: 'slack' });
   assert.equal(result.ok, false);
   assert.equal(result.status, 200);
+  // A 200 with ok:false is a rejected token (seen live from slack.com), not an HTTP error.
+  assert.equal(result.message, 'Provider rejected the stored token.');
   assert.equal(connectors.list().slack.lastStatus, 'error');
 });
 

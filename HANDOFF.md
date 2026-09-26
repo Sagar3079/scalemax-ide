@@ -60,7 +60,7 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `src/styles.css` | ~2,470 | Component styles on the tokens (11 sections). Shell aliases `--sm-app-*` incl. `--sm-app-muted` (badges). |
 | `src/app.js` | ~1,760 | Renderer singleton `app`: tasks, chat (tool-call chips), catalogs, custom experts/skills rendering, automations, search, toasts; delegates the Workspace tab to `workspace-ui.js`. |
 | `lib/mcp.cjs` | ~1,700 | MCP client manager: stdio (newline JSON-RPC, process-group kill) + Streamable HTTP (JSON/SSE, session id, protocol header); encrypted env/header secrets; `chatTools()` for the tool loop. |
-| `lib/connectors.cjs` | ~1,160 | Connector credentials (safeStorage), 25 validation endpoints, GitHub live fetch, **OAuth**: client configs (`connectorOAuthClients`), `startOAuth`, refresh, identity. |
+| `lib/connectors.cjs` | ~1,160 | Connector credentials (safeStorage), 24 validation endpoints, GitHub live fetch, **OAuth**: client configs (`connectorOAuthClients`), `startOAuth`, refresh, identity. |
 | `src/workspace-ui.js` | ~1,120 | Workspace tab: per-tab editor model, ARIA file tree + bounded filter crawl, splitters (persisted), panel tabs, Cmd/Ctrl+S, Tab/Shift+Tab, tokenizer + highlight overlay. Pure helpers are unit-tested. |
 | `src/workspace.css` | ~1,020 | Workspace IDE layout (toolbar, explorer, tabs, gutter/overlay, bottom panel, statusbar). |
 | `lib/provider.cjs` | ~710 | OpenAI-compatible client: ScaleMax preset (tries `/v1` then `/token/v1`), discover, `send`, internal `complete` (tools/tool_calls), 4 MB caps, 120 s timeout, redirects rejected, safeStorage keys. |
@@ -115,7 +115,7 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 
 **Connectors (40).** Each card: **Connect** → dialog with two paths:
 - **OAuth** (25 providers in `lib/oauth-catalog.cjs`): the user registers their own app (register link + exact redirect URI shown with copy buttons), enters client ID (+ secret when required; hidden for public clients such as Microsoft/Slack/Zoom; Shopify asks for the store domain) → **Sign in** opens the system browser → loopback callback on port 53682 (`127.0.0.1`, or `localhost` + `::1` where the provider only accepts localhost) → tokens encrypted, identity shown ("Signed in as …"), refresh tokens used automatically before expiry. Intercom (HTTPS-only redirects) honestly shows OAuth as unavailable. No shared client IDs ship with the app.
-- **Access token**: stored encrypted and validated against the provider where an endpoint exists (25 connectors: github, sentry, notion, slack, linear, airtable, asana, cloudflare, vercel, netlify, figma, intercom, hubspot, sendgrid, stripe, discord (bot), dropbox, zoom, google-drive/-calendar, gmail, onedrive, microsoft-teams, supabase); the rest report "no validation endpoint yet". Verified live: an invalid GitHub token → "Provider rejected the stored token."
+- **Access token**: stored encrypted and validated against the provider where an endpoint exists (24 connectors: github, sentry, notion, slack, linear, airtable, asana, cloudflare, vercel, netlify, figma, intercom, hubspot, sendgrid, stripe, discord (bot), dropbox, zoom, google-drive/-calendar, gmail, onedrive, microsoft-teams, supabase); the rest report "no validation endpoint yet". Verified against the real services: all 24 endpoints reject an invalid token with 401/403 (Slack answers 200 `ok:false`, also reported as a rejected token); a valid GitHub token verifies and feeds live repo data into chat.
 - **Live data**: a chat message containing `github.com/owner/repo` pulls repo metadata + 10 open issues through the stored token.
 
 **MCP (Assistant → 03 Tools from MCP servers).** Add a server: local command (stdio: command, args, cwd, env) or remote URL (Streamable HTTP + headers). Save tests it and lists tools (read-only tools badged). "In chat" toggle controls whether its tools are offered to the model. Permission gating: Plan only → no tools; Read-only → only tools annotated `readOnlyHint`. Verified live: deepseek-v4-flash called a stdio `echo` tool and returned its output; the public DeepWiki HTTP server initialized (protocol 2025-06-18, 3 tools).
@@ -161,7 +161,16 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 
 **Verified in session 3 (all green):** 187/187 unit · 42/42 smoke · 47/47 live smoke · Playwright click-through of every tab in the real app (light + dark) with the live key: provider test/save via UI, system prompt + temperature reach the payload and shape the live reply, expert persona and skill Run on a real file (live replies), automation Run now (live), custom expert/skill create/edit/delete/persist/search, reduced-motion, OAuth dialog states for GitHub/OneDrive/Intercom, live GitHub token rejection, MCP stdio tool call through the live model, remote DeepWiki MCP over HTTP, Workspace tabs/save/filter/Git/diff/terminal/splitters, highlight overlay alignment probe · browser preview (web shim) 0 errors · 0 console errors in the app.
 
-**Not verified end to end:** a completed OAuth sign-in against a real provider (needs the user's own app registration; the engine is covered by loopback tests with a fake browser and token endpoint). Token validation endpoints other than GitHub were exercised with mocked responses only.
+**Real-service checks (after session 3, through the app's own `lib/connectors.cjs` / `lib/oauth.cjs`):**
+- All 24 token validation endpoints reject an invalid token (401/403; Slack 200 `ok:false`).
+- All 25 OAuth identity endpoints reject an invalid token (Slack 200 `ok:false`; Shopify needs a real store, a made-up store 404s).
+- All 25 OAuth token endpoints answer a bogus client/code with an OAuth error (`invalid_client`, `invalid_grant`, …; GitHub 404s an unknown client id; Intercom and the made-up Shopify store 404) and all 25 authorize pages exist.
+- GitHub success path with a valid token: Connect → "Connection verified." → live repo data injected into a live chat reply.
+- Fixed from these probes: Slack-style `200 ok:false` now reads "Provider rejected the stored token."; OAuth error codes keep only the leading code (Dropbox `invalid_client`, GitHub `not_found`).
+
+**Packaged app (dmg rebuilt after session 3):** the dmg's `app.asar` ships only `assets/ lib/ src/ main.js preload.js package.json`, every file identical to the repo (package.json is rewritten by electron-builder), no other brand names, username or key anywhere in the bundle. The packaged `ScaleMax.app` boots with 37 bridge methods, 0 console errors, a live chat reply and an MCP tool call through the live model.
+
+**Still requires a human:** a completed OAuth sign-in with a real provider needs the account owner to register an OAuth app and click Authorize (see §12).
 
 ---
 
@@ -187,7 +196,7 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 5. **Connector backend** — encrypted credentials, validation, live GitHub fetch.
 6. **Bug-fix sweep** and **specialization pass** (experts seed work, skills run on files).
 7. **Session 2** — ScaleMax logo, system prompt/temperature fixes, automation v2 (types, catch-up, history), OAuth/avatars/custom-catalog groundwork.
-8. **Session 3** — OAuth end to end (engine, verified 25-provider catalog, 5 methods, UI), 20 more validation endpoints, custom experts/skills UI, animated avatars, MCP (client, tool loop, IPC, UI, smoke), Workspace IDE redesign, smoke/test expansion, live click-through.
+8. **Session 3** — OAuth end to end (engine, verified 25-provider catalog, 5 methods, UI), 19 more validation endpoints (24 total), custom experts/skills UI, animated avatars, MCP (client, tool loop, IPC, UI, smoke), Workspace IDE redesign, smoke/test expansion, live click-through.
 
 ---
 
@@ -229,7 +238,7 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 
 All §12.3 steps from session 2 were completed:
 
-1. OAuth: `lib/oauth.cjs` hardened (redirect host, JSON token bodies, Basic-when-secret, refresh, identity, abort, stray-request tolerance), `lib/oauth-catalog.cjs` (25 providers, researched against official docs), the 5 connector methods + `pendingOnly` cancel, preload exposure, OAuth UI in the connector dialog, 20 extra token validation endpoints, tests.
+1. OAuth: `lib/oauth.cjs` hardened (redirect host, JSON token bodies, Basic-when-secret, refresh, identity, abort, stray-request tolerance), `lib/oauth-catalog.cjs` (25 providers, researched against official docs), the 5 connector methods + `pendingOnly` cancel, preload exposure, OAuth UI in the connector dialog, 19 extra token validation endpoints (24 total), tests.
 2. Custom expert/skill creation UI (`src/custom-ui.js`), avatars rewritten without `innerHTML` (`src/avatars.js`, `src/experts.css`), custom items in filters/details/search/exports.
 3. MCP: `lib/mcp.cjs`, `lib/tool-loop.cjs`, `provider.complete`, `mcp:*` IPC + preload, Assistant card 03 (`src/mcp-ui.js`), tool chips in chat, smoke coverage.
 4. Workspace IDE redesign (`src/workspace.css`, `src/workspace-ui.js`, new `#view-workspace` markup).

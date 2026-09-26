@@ -274,7 +274,7 @@ test('authorize() rejects when the provider reports an error and sanitises the c
   })));
   await assert.rejects(
     authorize(CONFIG, { clientId: CLIENT_ID, port, fetchImpl, openExternal: noisy.openExternal }),
-    (error) => error.message === `Authorization was denied (servererrorbxb${'a'.repeat(50)}).`,
+    (error) => error.message === 'Authorization was denied (server_error).',
   );
   await noisy.done;
 });
@@ -475,12 +475,21 @@ test('tokenRequest() treats ok: false, error fields and HTTP failures as failure
   }
 });
 
-test('tokenRequest() sanitises provider error codes to at most 64 [a-z0-9_] characters', async () => {
-  const { fetchImpl } = tokenEndpoint(() => jsonResponse({ error: `Invalid-Grant<script>"${'X'.repeat(80)}` }, { status: 400 }));
-  await assert.rejects(
-    tokenRequest(CONFIG, { grant_type: 'authorization_code', code: 'code-1' }, { fetchImpl, clientId: CLIENT_ID }),
-    (error) => error.message === `OAuth token exchange failed (invalidgrantscript${'x'.repeat(46)}).`,
-  );
+test('tokenRequest() keeps only the leading [a-z0-9_] provider error code (at most 64 characters)', async () => {
+  const cases = [
+    [`Invalid-Grant<script>"${'X'.repeat(80)}`, 'invalid_grant'],
+    ['invalid_client: Invalid client_id or client_secret', 'invalid_client'], // Dropbox
+    ['Not Found', 'not_found'], // GitHub, unknown client
+    ['x'.repeat(100), 'x'.repeat(64)],
+    ['<b>', 'http_400'], // nothing usable: the HTTP status is reported instead
+  ];
+  for (const [raw, expected] of cases) {
+    const { fetchImpl } = tokenEndpoint(() => jsonResponse({ error: raw }, { status: 400 }));
+    await assert.rejects(
+      tokenRequest(CONFIG, { grant_type: 'authorization_code', code: 'code-1' }, { fetchImpl, clientId: CLIENT_ID }),
+      (error) => error.message === `OAuth token exchange failed (${expected}).`,
+    );
+  }
 });
 
 test('tokenRequest() accepts form-encoded token responses', async () => {
