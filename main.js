@@ -11,6 +11,8 @@ const { createToolLoop } = require('./lib/tool-loop.cjs');
 
 // The automated smoke check must never read or write the real user data.
 if (process.env.SCALEMAX_SMOKE === '1') {
+  // The smoke run deletes this profile; the next run sweeps any files Chromium
+  // writes into it while shutting down (see build/smoke-check.cjs).
   app.setPath('userData', path.join(os.tmpdir(), `scalemax-smoke-${process.pid}`));
 } else if (process.env.SCALEMAX_USER_DATA) {
   // Development and UI testing: run against a throwaway profile instead of the real one.

@@ -57,7 +57,25 @@ async function startStubServer() {
   return { server, port: server.address().port };
 }
 
+// Chromium can write a few files into the throwaway profile while the app shuts
+// down, after the run removed it. Each run clears profiles left by earlier,
+// no-longer-running smoke processes.
+function removeStaleProfiles() {
+  let names = [];
+  try { names = fs.readdirSync(os.tmpdir()); } catch { return; }
+  for (const name of names) {
+    const match = /^scalemax-smoke-(\d+)$/.exec(name);
+    if (!match || Number(match[1]) === process.pid) continue;
+    try {
+      process.kill(Number(match[1]), 0);
+      continue; // that smoke run is still alive
+    } catch { /* not running: its profile is stale */ }
+    try { fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
 async function run(win) {
+  removeStaleProfiles();
   const errors = [];
   const logs = [];
   const { server, port } = await startStubServer();
