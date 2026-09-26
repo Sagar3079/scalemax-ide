@@ -124,7 +124,32 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * @param {{id: string, forgetClient?: boolean, pendingOnly?: boolean}} input
      * @returns {Promise<{ok: boolean, data?: {removed: boolean, clientForgotten: boolean, cancelled?: boolean}, error?: object}>}
      */
-    disconnectOAuth: (input) => ipcRenderer.invoke('connector:oauth-disconnect', input)
+    disconnectOAuth: (input) => ipcRenderer.invoke('connector:oauth-disconnect', input),
+
+    /**
+     * Connectors that can sign in through an installed CLI (GitHub via `gh`).
+     * @returns {Promise<{ok: boolean, data?: {github: {installed: boolean}}, error?: object}>}
+     */
+    cliAvailable: () => ipcRenderer.invoke('connector:cli-available'),
+
+    /**
+     * Connects through the provider's CLI. With an existing gh login it finishes at once
+     * (status 'connected'); otherwise it opens the device page and returns the one-time code
+     * (status 'code', already copied to the clipboard). Then call cliWait. Tokens are never returned.
+     * @param {{id: 'github'}} input
+     * @returns {Promise<{ok: boolean, data?: {status: 'connected'|'code', code?: string, verificationUri?: string, copied?: boolean, source?: string, toolCount?: number, mcpError?: string|null}, error?: object}>}
+     */
+    cliConnect: (input) => ipcRenderer.invoke('connector:cli-start', input),
+
+    /**
+     * Resolves when the pending CLI sign-in finished (browser approval done, token stored).
+     * @param {{id: 'github'}} input
+     * @returns {Promise<{ok: boolean, data?: {status: 'connected', source: string, toolCount: number, mcpError: string|null}, error?: object}>}
+     */
+    cliWait: (input) => ipcRenderer.invoke('connector:cli-wait', input),
+
+    /** @param {{id: 'github'}} input @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
+    cliCancel: (input) => ipcRenderer.invoke('connector:cli-cancel', input)
   },
 
   mcp: {

@@ -205,6 +205,7 @@ test('save encrypts env secrets and list() exposes key names only', () => {
     updatedAt: 1_700_000_000_000,
     auth: null,
     signInPending: false,
+    connector: null,
   });
   const record = store.snapshot().mcpServers['my-server'];
   assert.equal(record.schemaVersion, 1);
@@ -1014,4 +1015,14 @@ test('without encryption the sign-in lasts for this session only', async (t) => 
   const restarted = createMcpManager({ store, oauthClient: setup.oauth.client });
   t.after(() => restarted.closeAll());
   await assert.rejects(() => restarted.test({ id: 'notion' }), (error) => error.code === 'MCP_AUTH_REQUIRED');
+});
+
+test('a server can be linked to a catalog connector; omitted keeps the link, null clears it', () => {
+  const { mcp, store } = makeManager();
+  const saved = mcp.save({ name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/', connector: 'github' });
+  assert.equal(saved.connector, 'github');
+  assert.equal(store.snapshot().mcpServers.github.connector, 'github');
+  assert.equal(mcp.save({ id: 'github', name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/' }).connector, 'github');
+  assert.equal(mcp.save({ id: 'github', name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/', connector: null }).connector, null);
+  assert.throws(() => mcp.save({ name: 'X', transport: 'http', url: 'https://example.com/mcp', connector: 'Not An Id' }), /connector link/);
 });

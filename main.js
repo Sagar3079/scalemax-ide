@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -8,6 +8,7 @@ const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
+const { createCliConnect } = require('./lib/cli-auth.cjs');
 
 // The automated smoke check must never read or write the real user data.
 if (process.env.SCALEMAX_SMOKE === '1') {
@@ -124,6 +125,11 @@ const mcp = createMcpManager({
 // Chat requests offer tools from enabled MCP servers to the model and run the
 // tool calls it makes (lib/tool-loop.cjs); without tools it is a plain send.
 const toolLoop = createToolLoop({ provider, mcp });
+
+// GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's
+// device-flow login in a throwaway config; the token lands in the connector store and on
+// GitHub's MCP server, never in the renderer. The one-time code is copied for the user.
+const cliConnect = createCliConnect({ connectors, mcp, clipboard });
 
 /** The chat permission mode from the persisted assistant settings. */
 function chatPermission() {
@@ -287,7 +293,14 @@ const oauthChannels = {
     openExternal: (url) => shell.openExternal(url)
   }),
   'connector:oauth-status': (_event, input) => connectors.oauthStatus(input),
-  'connector:oauth-disconnect': (_event, input) => connectors.disconnectOAuth(input)
+  'connector:oauth-disconnect': (_event, input) => connectors.disconnectOAuth(input),
+  // CLI sign-in: only the fixed https://github.com/login/device page is ever opened.
+  'connector:cli-available': () => cliConnect.available(),
+  'connector:cli-start': (_event, input) => cliConnect.start(input, {
+    openExternal: (url) => shell.openExternal(url)
+  }),
+  'connector:cli-wait': (_event, input) => cliConnect.wait(input),
+  'connector:cli-cancel': (_event, input) => cliConnect.cancel(input)
 };
 
 for (const [channel, run] of Object.entries(oauthChannels)) {
@@ -436,6 +449,7 @@ app.whenReady().then(() => {
 
 // MCP stdio servers run in their own process groups; stop them with the app.
 app.on('before-quit', () => {
+  cliConnect.closeAll();
   void mcp.closeAll();
 });
 

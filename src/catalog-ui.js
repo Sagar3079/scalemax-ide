@@ -306,6 +306,10 @@ let mcpServers = [];
 // The connector whose one-click sign-in is in progress.
 let mcpPendingId = null;
 const MCP_CHANGED = 'scalemax:mcp-changed';
+// Connectors that can sign in through an installed CLI ({ github: { installed } }), and the
+// CLI sign-in in progress ({ id, code }; code is set once the device page is open).
+let cliSupport = {};
+let cliPending = null;
 
 function mcpBridge() {
   return window.scalemaxAPI?.mcp || null;
@@ -318,7 +322,13 @@ function mcpListing(connectorId) {
 /** The signed-in MCP server that serves this connector, or null. */
 function mcpServerFor(connectorId) {
   const listing = mcpListing(connectorId);
-  return listing ? mcpServers.find((server) => server.auth?.directoryId === listing) || null : null;
+  return mcpServers.find((server) => (listing && server.auth?.directoryId === listing)
+    || server.connector === connectorId) || null;
+}
+
+function cliAvailableFor(connectorId) {
+  return Boolean(Object.hasOwn(cliSupport, connectorId) && cliSupport[connectorId]?.installed
+    && connectorBridge()?.cliConnect);
 }
 
 function toolCountText(count) {
@@ -402,12 +412,39 @@ function decorateConnectors(app) {
     if (server) {
       const chip = element('span', 'connector-chip');
       chip.title = server.lastStatus === 'error' ? (server.lastError || 'Signed in, but the connection failed')
-        : `Signed in through the official ${MCP_LISTING_NAMES[server.auth.directoryId] || entry.name} MCP server`;
+        : `Connected through the official ${MCP_LISTING_NAMES[server.auth?.directoryId] || entry.name} MCP server`;
       chip.append(
         element('span', `status-dot ${connectorDotClass(server.lastStatus)}`),
         element('span', 'connector-chip-text', mcpConnectedLabel(server)),
       );
       connectorActions(app, entry, slot, chip);
+      continue;
+    }
+    if (!record?.connected && cliPending?.id === entry.id) {
+      // The device page is open: show the one-time code the user enters there.
+      const waiting = element('span', 'connector-chip');
+      waiting.append(element('span', 'status-dot pending'),
+        element('span', 'connector-chip-text', cliPending.code ? `Code ${cliPending.code}` : 'Connecting…'));
+      if (cliPending.code) waiting.title = 'Enter this code on github.com/login/device';
+      slot.append(waiting);
+      if (cliPending.code) {
+        const code = cliPending.code;
+        const copy = element('button', 'button secondary', 'Copy code');
+        copy.addEventListener('click', () => copyText(app, code, 'Code'));
+        slot.append(copy);
+      }
+      const cancel = element('button', 'button secondary', 'Cancel');
+      cancel.addEventListener('click', () => void connectorBridge()?.cliCancel?.({ id: entry.id }));
+      slot.append(cancel);
+      continue;
+    }
+    if (!record?.connected && cliAvailableFor(entry.id)) {
+      const connect = element('button', 'button secondary', 'Connect');
+      connect.addEventListener('click', () => void startCliConnect(app, entry));
+      const more = element('button', 'connector-more', 'More options');
+      more.setAttribute('aria-label', `More ways to connect ${entry.name}`);
+      more.addEventListener('click', () => void openConnectorDialog(app, entry));
+      slot.append(connect, more);
       continue;
     }
     const oneClick = Boolean(mcpListing(entry.id) && mcpBridge()?.signIn);
@@ -460,6 +497,10 @@ async function refreshConnectors(app) {
   if (mcp?.list) {
     const result = await mcp.list();
     mcpServers = result?.ok && Array.isArray(result.data) ? result.data : [];
+  }
+  if (bridge?.cliAvailable) {
+    const result = await bridge.cliAvailable();
+    cliSupport = result?.ok && result.data ? result.data : {};
   }
   decorateConnectors(app);
   renderConnectorCurrent();
@@ -555,6 +596,45 @@ async function startMcpSignIn(app, entry = activeConnector) {
     report(error?.message || 'Sign-in failed.', true);
   } finally {
     if (mcpPendingId === entry.id) mcpPendingId = null;
+    await refreshConnectors(app);
+    announceMcpChange();
+  }
+}
+
+function cliConnectedMessage(entry, data) {
+  const via = data.source === 'existing' ? ' with your GitHub CLI login' : '';
+  if (data.mcpError) return `${entry.name} connected${via}. Chat tools are unavailable: ${data.mcpError}`;
+  return `${entry.name} connected${via} · ${toolCountText(data.toolCount || 0)} in chat`;
+}
+
+// Connect through the provider's CLI: an existing login finishes at once; otherwise the device
+// page opens and the card shows the one-time code until the user approves.
+async function startCliConnect(app, entry) {
+  const bridge = connectorBridge();
+  if (!bridge?.cliConnect || cliPending) return;
+  const mine = { id: entry.id, code: null };
+  cliPending = mine;
+  decorateConnectors(app);
+  const fail = (result) => {
+    if (result?.error?.code !== 'CANCELLED') app.showToast(`${entry.name}: ${result?.error?.message || 'sign-in failed'}`);
+  };
+  try {
+    const started = await bridge.cliConnect({ id: entry.id });
+    if (!started?.ok) { fail(started); return; }
+    if (started.data.status === 'connected') {
+      app.showToast(cliConnectedMessage(entry, started.data));
+      return;
+    }
+    mine.code = started.data.code;
+    decorateConnectors(app);
+    app.showToast(`Enter code ${mine.code} on the GitHub page in your browser${started.data.copied ? ' (copied)' : ''}`);
+    const done = await bridge.cliWait({ id: entry.id });
+    if (!done?.ok) { fail(done); return; }
+    app.showToast(cliConnectedMessage(entry, done.data));
+  } catch (error) {
+    app.showToast(`${entry.name}: ${error?.message || 'sign-in failed'}`);
+  } finally {
+    if (cliPending === mine) cliPending = null;
     await refreshConnectors(app);
     announceMcpChange();
   }
