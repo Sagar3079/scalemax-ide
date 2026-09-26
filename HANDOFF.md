@@ -21,7 +21,7 @@ git clone https://github.com/Sagar3079/scalemax-ide.git && cd scalemax-ide
 npm install                # devDeps only (electron, electron-builder)
 
 npm start                  # runs prestart runtime check, then electron .
-npm test                   # node --test test/*.test.cjs test/*.test.mjs → 187 unit tests
+npm test                   # node --test test/*.test.cjs test/*.test.mjs → 188 unit tests
 npm run build              # electron-builder --mac → dist/ScaleMax-1.0.0-arm64.dmg + .zip
 
 # Hermetic end-to-end smoke check (boots the real app, isolated userData):
@@ -153,7 +153,7 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 
 ## 7. Verification (how to prove things work)
 
-**Unit** — `npm test` → **187 tests**: connectors 45, domain 28, provider 26, oauth 26, mcp 22, avatars 12, tool-loop 12, scheduler 6, workspace-ui 6, oauth-catalog 4. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
+**Unit** — `npm test` → **188 tests**: connectors 45, domain 28, provider 26, oauth 26, mcp 22, avatars 12, tool-loop 13, scheduler 6, workspace-ui 6, oauth-catalog 4. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
 
 **Smoke** — `SCALEMAX_SMOKE=1 npm start` → **42 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (7 provider, 8 workspace, 2 dialog, 10 connector, 5 mcp), reserved keys incl. `connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
 
@@ -167,6 +167,15 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 - All 25 OAuth token endpoints answer a bogus client/code with an OAuth error (`invalid_client`, `invalid_grant`, …; GitHub 404s an unknown client id; Intercom and the made-up Shopify store 404) and all 25 authorize pages exist.
 - GitHub success path with a valid token: Connect → "Connection verified." → live repo data injected into a live chat reply.
 - Fixed from these probes: Slack-style `200 ok:false` now reads "Provider rejected the stored token."; OAuth error codes keep only the leading code (Dropbox `invalid_client`, GitHub `not_found`).
+
+**Real MCP servers through the live model (11/11 pass):** each added to the real app (GUI-like minimal PATH), tested, then asked a question that needs one of its tools:
+- stdio via npx: filesystem (`read_text_file`), memory (`create_entities`, `read_graph`), everything (`get-sum` → 42);
+- stdio via uvx: time (`get_current_time`), fetch (`fetch` → "Example Domain"), git (`git_log` → latest commit message);
+- Streamable HTTP, no auth: DeepWiki, Context7, Cloudflare docs, GitMCP (protocol 2025-03-26);
+- Streamable HTTP with an encrypted `Authorization` header: GitHub's remote MCP server (45 tools, `get_file_contents`).
+- Fixed from this run: DeepSeek sends `{}""` as arguments for tools without parameters; the tool loop now uses the leading JSON object when only quotes/whitespace follow (it previously failed those calls until the round limit and leaked raw tool-call markup).
+
+**All 40 connector dialogs** open in the real app and match `lib/oauth-catalog.cjs` (sign-in section, secret field per secret mode, store field, redirect URI, register link, token path).
 
 **Packaged app (dmg rebuilt after session 3):** the dmg's `app.asar` ships only `assets/ lib/ src/ main.js preload.js package.json`, every file identical to the repo (package.json is rewritten by electron-builder), no other brand names, username or key anywhere in the bundle. The packaged `ScaleMax.app` boots with 37 bridge methods, 0 console errors, a live chat reply and an MCP tool call through the live model.
 

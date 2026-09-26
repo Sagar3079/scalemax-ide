@@ -224,6 +224,24 @@ test('invalid JSON arguments and unknown tools become error results', async () =
   ]);
 });
 
+test('trailing junk after a valid argument object is tolerated, other junk is not', async () => {
+  // Seen live: DeepSeek sends `{}""` for tools without parameters.
+  const provider = fakeProvider([
+    toolReply([
+      toolCall('c1', 'mcp_fake_echo', '{}""'),
+      toolCall('c2', 'mcp_fake_echo', ' {"text":"a}b\\"c"} \' '),
+      toolCall('c3', 'mcp_fake_echo', '{} trailing words'),
+      toolCall('c4', 'mcp_fake_echo', '{"open": 1'),
+    ]),
+    textReply('Done.'),
+  ]);
+  const mcp = fakeMcp();
+  await createToolLoop({ provider, mcp }).send({ ...INPUT });
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.arguments), [{}, { text: 'a}b"c' }]);
+  const contents = toolMessages(provider.calls.complete[1]).map((message) => message.content);
+  assert.deepEqual(contents.slice(2), ['Error: invalid JSON arguments', 'Error: invalid JSON arguments']);
+});
+
 test('MCP failures, isError results and oversized output are reported to the model', async () => {
   const provider = fakeProvider([
     toolReply([toolCall('c1', 'mcp_fake_echo'), toolCall('c2', 'mcp_fake_add'), toolCall('c3', 'mcp_big_dump')]),
