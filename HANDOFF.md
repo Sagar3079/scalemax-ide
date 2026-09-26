@@ -170,7 +170,7 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 
 **Packaged app (dmg rebuilt after session 3):** the dmg's `app.asar` ships only `assets/ lib/ src/ main.js preload.js package.json`, every file identical to the repo (package.json is rewritten by electron-builder), no other brand names, username or key anywhere in the bundle. The packaged `ScaleMax.app` boots with 37 bridge methods, 0 console errors, a live chat reply and an MCP tool call through the live model.
 
-**Still requires a human:** a completed OAuth sign-in with a real provider needs the account owner to register an OAuth app and click Authorize (see §12).
+**Real OAuth sign-in (GitHub, completed):** the account owner registered a GitHub OAuth app (callback `http://127.0.0.1:53682/callback`) and entered its client ID/secret in a throwaway-profile app. Sign in with GitHub → browser consent → loopback callback → PKCE token exchange → "Signed in as <login>". Verified afterwards: `Test` 200 through the identity endpoint, repo fetch through the OAuth token, client secret and tokens encrypted at rest, no token visible to the renderer, 0 console errors. GitHub issued an 8-hour token with a refresh token; the refresh itself was not exercised live (unit-tested only). Other providers still need their own app registrations to be signed in for real.
 
 ---
 
@@ -203,7 +203,7 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 ## 10. Known gaps / suggested next steps
 
 - **No streaming** — chat is request/response; the tool loop runs in main. Streaming would need an event channel (no `ipcMain.on` push channels exist yet).
-- **OAuth needs user app registrations** per provider; no completed real-provider sign-in has been tested. Several providers only document `localhost` redirects (Slack requires PKCE to be enabled first; Atlassian/Asana/Shopify loopback support is uncertain — see `redirectNote` in `lib/oauth-catalog.cjs`). OAuth `test()` uses the identity endpoint; for Slack/Linear/Shopify an identity field is required because they answer 200 on bad tokens.
+- **OAuth needs user app registrations** per provider; a real sign-in has been completed for GitHub only (live token refresh not yet exercised). Several providers only document `localhost` redirects (Slack requires PKCE to be enabled first; Atlassian/Asana/Shopify loopback support is uncertain — see `redirectNote` in `lib/oauth-catalog.cjs`). OAuth `test()` uses the identity endpoint; for Slack/Linear/Shopify an identity field is required because they answer 200 on bad tokens.
 - **MCP**: tools only (no resources, prompts, sampling or elicitation); no per-call approval prompt; a hanging server can delay a chat turn up to ~90 s (initialize + tools/list timeouts).
 - **Automations only run while the window is open** (renderer scheduler).
 - **Connector fetch is GitHub-only.**
@@ -247,6 +247,10 @@ All §12.3 steps from session 2 were completed:
 
 Also fixed: `npm test` hang (fixture picked up by `node --test`), CSP-blocked inline style in the composer, missing `.sr-only`, dark-theme badge contrast (`--sm-app-muted`), automation button styles, a Git diff race (file diff overwritten by a slower full diff), README cleanup (removed an outdated demo-account line).
 
+### After session 3
+
+Rebuilt and scanned the dmg, booted the packaged app live, probed every connector/OAuth endpoint against the real services (fixing two messages), verified GitHub with a real token and completed a real GitHub OAuth sign-in (see §7).
+
 ### Suggested next session
 
-Streaming responses; a real OAuth app registration test per priority provider (GitHub, Google, Microsoft); MCP resources/prompts; main-process automation scheduler; code signing + CI.
+Streaming responses; real OAuth sign-ins for Google and Microsoft (plus a live token refresh); MCP resources/prompts; main-process automation scheduler; code signing + CI.
