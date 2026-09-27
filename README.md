@@ -114,7 +114,7 @@ scalemax-ide/
 │   ├── connectors.cjs    # encrypted connector credentials, validation, OAuth sessions
 │   ├── oauth.cjs         # loopback OAuth 2.0 engine (PKCE, token exchange, refresh)
 │   ├── oauth-catalog.cjs # provider OAuth endpoints and rules (main process only)
-│   ├── cli-auth.cjs      # GitHub sign-in through the GitHub CLI (gh)
+│   ├── cli-auth.cjs      # GitHub sign-in through the GitHub CLI (downloads gh if missing)
 │   ├── mcp.cjs           # MCP client: stdio + Streamable HTTP servers
 │   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in

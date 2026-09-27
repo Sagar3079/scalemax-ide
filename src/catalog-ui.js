@@ -326,9 +326,26 @@ function mcpServerFor(connectorId) {
     || server.connector === connectorId) || null;
 }
 
+// Installed, or downloadable on the first Connect.
 function cliAvailableFor(connectorId) {
-  return Boolean(Object.hasOwn(cliSupport, connectorId) && cliSupport[connectorId]?.installed
-    && connectorBridge()?.cliConnect);
+  const support = Object.hasOwn(cliSupport, connectorId) ? cliSupport[connectorId] : null;
+  return Boolean(support && (support.installed || support.installable) && connectorBridge()?.cliConnect);
+}
+
+const CLI_PHASES = {
+  starting: 'Connecting…',
+  downloading: 'Downloading GitHub CLI…',
+  verifying: 'Verifying GitHub CLI…',
+  installing: 'Installing GitHub CLI…',
+  checking: 'Checking GitHub CLI login…',
+  login: 'Starting GitHub CLI login…',
+};
+
+function cliPendingText(pendingState) {
+  if (pendingState.code) return `Code ${pendingState.code}`;
+  const base = CLI_PHASES[pendingState.phase] || 'Connecting…';
+  return pendingState.phase === 'downloading' && Number.isFinite(pendingState.percent)
+    ? base.replace('…', ` ${pendingState.percent}%…`) : base;
 }
 
 function toolCountText(count) {
@@ -424,7 +441,7 @@ function decorateConnectors(app) {
       // The device page is open: show the one-time code the user enters there.
       const waiting = element('span', 'connector-chip');
       waiting.append(element('span', 'status-dot pending'),
-        element('span', 'connector-chip-text', cliPending.code ? `Code ${cliPending.code}` : 'Connecting…'));
+        element('span', 'connector-chip-text', cliPendingText(cliPending)));
       if (cliPending.code) waiting.title = 'Enter this code on github.com/login/device';
       slot.append(waiting);
       if (cliPending.code) {
@@ -612,28 +629,47 @@ function cliConnectedMessage(entry, data) {
 async function startCliConnect(app, entry) {
   const bridge = connectorBridge();
   if (!bridge?.cliConnect || cliPending) return;
-  const mine = { id: entry.id, code: null };
+  const mine = { id: entry.id, code: null, phase: 'starting', percent: null };
   cliPending = mine;
   decorateConnectors(app);
   const fail = (result) => {
     if (result?.error?.code !== 'CANCELLED') app.showToast(`${entry.name}: ${result?.error?.message || 'sign-in failed'}`);
   };
+  if (!cliSupport[entry.id]?.installed) app.showToast('Downloading the GitHub CLI from github.com…');
+  // Download and login progress until the one-time code (or the connection) arrives.
+  let shown = cliPendingText(mine);
+  const poll = setInterval(async () => {
+    if (cliPending !== mine || mine.code || !bridge.cliStatus) return;
+    const progress = await bridge.cliStatus({ id: entry.id });
+    if (cliPending !== mine || mine.code || !progress?.ok || progress.data.phase === 'idle') return;
+    mine.phase = progress.data.phase;
+    mine.percent = Number.isFinite(progress.data.percent) ? progress.data.percent : null;
+    const text = cliPendingText(mine);
+    if (text !== shown) {
+      shown = text;
+      decorateConnectors(app);
+    }
+  }, 400);
   try {
     const started = await bridge.cliConnect({ id: entry.id });
+    clearInterval(poll);
     if (!started?.ok) { fail(started); return; }
+    if (started.data.installed) cliSupport[entry.id] = { ...cliSupport[entry.id], installed: true };
     if (started.data.status === 'connected') {
       app.showToast(cliConnectedMessage(entry, started.data));
       return;
     }
     mine.code = started.data.code;
     decorateConnectors(app);
-    app.showToast(`Enter code ${mine.code} on the GitHub page in your browser${started.data.copied ? ' (copied)' : ''}`);
+    app.showToast(`${started.data.installed ? 'GitHub CLI installed. ' : ''}Log in to the GitHub CLI: enter code ${mine.code} `
+      + `on the GitHub page in your browser${started.data.copied ? ' (copied)' : ''}`);
     const done = await bridge.cliWait({ id: entry.id });
     if (!done?.ok) { fail(done); return; }
     app.showToast(cliConnectedMessage(entry, done.data));
   } catch (error) {
     app.showToast(`${entry.name}: ${error?.message || 'sign-in failed'}`);
   } finally {
+    clearInterval(poll);
     if (cliPending === mine) cliPending = null;
     await refreshConnectors(app);
     announceMcpChange();

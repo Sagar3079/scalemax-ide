@@ -129,7 +129,27 @@ const toolLoop = createToolLoop({ provider, mcp });
 // GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's
 // device-flow login in a throwaway config; the token lands in the connector store and on
 // GitHub's MCP server, never in the renderer. The one-time code is copied for the user.
-const cliConnect = createCliConnect({ connectors, mcp, clipboard });
+// When gh is missing it is downloaded (checksum + GitHub signature verified) into the app's own
+// tools folder, so no admin rights or Homebrew are needed.
+const cliConnect = createCliConnect({
+  connectors,
+  mcp,
+  clipboard,
+  toolsDir: path.join(app.getPath('userData'), 'tools'),
+  // Development only: SCALEMAX_GH_SYSTEM=ignore pretends no system gh is installed, so the
+  // download path can be tested on a Mac that has one. Ignored in packaged builds.
+  // SCALEMAX_GH_HOME gives gh an empty home (no keychain login) to test the CLI login prompt.
+  ...(!app.isPackaged && process.env.SCALEMAX_GH_SYSTEM === 'ignore'
+    ? {
+      locations: [],
+      env: {
+        ...process.env,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        ...(process.env.SCALEMAX_GH_HOME ? { HOME: path.resolve(process.env.SCALEMAX_GH_HOME) } : {})
+      }
+    }
+    : {})
+});
 
 /** The chat permission mode from the persisted assistant settings. */
 function chatPermission() {
@@ -300,6 +320,7 @@ const oauthChannels = {
     openExternal: (url) => shell.openExternal(url)
   }),
   'connector:cli-wait': (_event, input) => cliConnect.wait(input),
+  'connector:cli-status': (_event, input) => cliConnect.status(input),
   'connector:cli-cancel': (_event, input) => cliConnect.cancel(input)
 };
 

@@ -127,17 +127,19 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     disconnectOAuth: (input) => ipcRenderer.invoke('connector:oauth-disconnect', input),
 
     /**
-     * Connectors that can sign in through an installed CLI (GitHub via `gh`).
-     * @returns {Promise<{ok: boolean, data?: {github: {installed: boolean}}, error?: object}>}
+     * Connectors that can sign in through a CLI (GitHub via `gh`): installed now, or installable
+     * automatically on first Connect.
+     * @returns {Promise<{ok: boolean, data?: {github: {installed: boolean, installable: boolean}}, error?: object}>}
      */
     cliAvailable: () => ipcRenderer.invoke('connector:cli-available'),
 
     /**
-     * Connects through the provider's CLI. With an existing gh login it finishes at once
-     * (status 'connected'); otherwise it opens the device page and returns the one-time code
-     * (status 'code', already copied to the clipboard). Then call cliWait. Tokens are never returned.
+     * Connects through the provider's CLI. Downloads the official GitHub CLI first when it is
+     * missing (poll cliStatus for progress). With an existing gh login it finishes at once
+     * (status 'connected'); otherwise it logs the CLI in: the device page opens and the one-time
+     * code is returned (status 'code', already copied). Then call cliWait. Tokens are never returned.
      * @param {{id: 'github'}} input
-     * @returns {Promise<{ok: boolean, data?: {status: 'connected'|'code', code?: string, verificationUri?: string, copied?: boolean, source?: string, toolCount?: number, mcpError?: string|null}, error?: object}>}
+     * @returns {Promise<{ok: boolean, data?: {status: 'connected'|'code', installed: boolean, code?: string, verificationUri?: string, copied?: boolean, source?: string, toolCount?: number, mcpError?: string|null}, error?: object}>}
      */
     cliConnect: (input) => ipcRenderer.invoke('connector:cli-start', input),
 
@@ -147,6 +149,13 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * @returns {Promise<{ok: boolean, data?: {status: 'connected', source: string, toolCount: number, mcpError: string|null}, error?: object}>}
      */
     cliWait: (input) => ipcRenderer.invoke('connector:cli-wait', input),
+
+    /**
+     * Progress of the CLI connect in progress.
+     * @param {{id: 'github'}} input
+     * @returns {Promise<{ok: boolean, data?: {phase: 'idle'|'starting'|'downloading'|'verifying'|'installing'|'checking'|'login'|'approve', percent?: number, version?: string}, error?: object}>}
+     */
+    cliStatus: (input) => ipcRenderer.invoke('connector:cli-status', input),
 
     /** @param {{id: 'github'}} input @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
     cliCancel: (input) => ipcRenderer.invoke('connector:cli-cancel', input)
