@@ -123,17 +123,63 @@
                   <button id="remove-attachment-btn" class="button secondary" type="button" hidden>Remove</button>
                 </div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
-                  <button id="attach-btn" class="button secondary" type="button">Attach file</button>
+                  <button id="attach-btn" class="composer-icon-button" type="button" aria-label="Attach file" title="Attach file">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" /></svg>
+                  </button>
+                  <button id="permission-button" class="composer-chip" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="permission-menu" title="Tool permissions">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6l-7-3Z" /></svg>
+                    <span id="permission-label">Basic</span>
+                    <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+                  </button>
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
-                  <span id="model-pill" class="model-pill">No model selected</span>
                   <div class="button-row send-actions">
+                    <button id="model-button" class="composer-chip model-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-menu">
+                      <span id="model-button-name" class="model-button-name">No model selected</span>
+                      <span id="model-button-reasoning" class="model-button-reasoning" hidden></span>
+                      <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+                    </button>
                     <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
                     <button id="send-btn" class="button primary" type="button">
                       Send message
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                     </button>
                   </div>
+                </div>
+              </div>
+              <div id="permission-menu" class="composer-menu" popover role="menu" aria-label="Tool permissions">
+                <p class="composer-menu-title">Tool permissions</p>
+                <button class="composer-menu-option" type="button" role="menuitemradio" aria-checked="false" data-permission="manual">
+                  <span class="composer-menu-option-name">Manual</span>
+                  <span class="composer-menu-option-desc">Ask before every tool call.</span>
+                </button>
+                <button class="composer-menu-option" type="button" role="menuitemradio" aria-checked="false" data-permission="basic">
+                  <span class="composer-menu-option-name">Basic</span>
+                  <span class="composer-menu-option-desc">Read-only tools run automatically; ask before anything that changes something.</span>
+                </button>
+                <button class="composer-menu-option" type="button" role="menuitemradio" aria-checked="false" data-permission="bypass">
+                  <span class="composer-menu-option-name">Bypass all permissions</span>
+                  <span class="composer-menu-option-desc">Autonomous: every tool call runs without asking. Needs your consent.</span>
+                </button>
+              </div>
+              <div id="model-menu" class="composer-menu model-menu" popover role="dialog" aria-label="Model and reasoning">
+                <p class="composer-menu-title">Model</p>
+                <div id="model-menu-list" class="model-menu-list" role="radiogroup" aria-label="Chat model"></div>
+                <p id="model-menu-empty" class="status-text" hidden></p>
+                <div class="model-menu-section">
+                  <div class="model-menu-row">
+                    <span id="thinking-label" class="model-menu-label">Thinking</span>
+                    <button id="thinking-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="thinking-label"><span class="switch-thumb"></span></button>
+                  </div>
+                  <div class="model-menu-row">
+                    <span id="effort-label" class="model-menu-label">Reasoning</span>
+                    <div id="effort-options" class="segmented" role="radiogroup" aria-labelledby="effort-label">
+                      <button class="segmented-option" type="button" role="radio" aria-checked="false" data-effort="low">Low</button>
+                      <button class="segmented-option" type="button" role="radio" aria-checked="true" data-effort="medium">Medium</button>
+                      <button class="segmented-option" type="button" role="radio" aria-checked="false" data-effort="high">High</button>
+                    </div>
+                  </div>
+                  <p id="reasoning-note" class="status-text model-menu-note"></p>
                 </div>
               </div>
             </div>
@@ -325,13 +371,11 @@
                 <label class="checkbox-label" for="temperature-enabled"><input id="temperature-enabled" type="checkbox" /><span>Send temperature with requests (moving the slider turns this on; off uses the provider default)</span></label>
               </div>
               <div class="form-group">
-                <label for="permission-select">Local tool permissions</label>
+                <label for="permission-select">Tool permissions</label>
                 <select id="permission-select">
-                  <option value="readonly">Read-only</option>
-                  <option value="ask" selected>Ask before changes</option>
-                  <option value="auto-write">Auto-approve file writes</option>
-                  <option value="full">Full access — no prompts</option>
-                  <option value="plan">Plan only — no tools</option>
+                  <option value="manual">Manual: ask before every tool call</option>
+                  <option value="basic" selected>Basic: read-only tools run automatically</option>
+                  <option value="bypass">Bypass all permissions (autonomous)</option>
                 </select>
               </div>
               <div class="button-row"><button id="assistant-save" class="button primary" type="submit">Save assistant settings</button><span id="assistant-saved" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span></div>
@@ -589,6 +633,44 @@
       <div id="detail-content" class="detail-content"></div>
     </div>
   </dialog>
+  <dialog id="bypass-dialog" class="consent-dialog" aria-labelledby="bypass-title" aria-describedby="bypass-description">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Tool permissions</span><h2 id="bypass-title">Bypass all permissions?</h2></div>
+    </div>
+    <div class="dialog-body">
+      <div id="bypass-description">
+        <p class="body-copy">ScaleMax switches to autonomous mode. Every tool call the model makes runs immediately, without asking you first.</p>
+        <ul class="consent-list">
+          <li>Connected services can be changed: issues, pages, files, messages, deployments.</li>
+          <li>Local MCP servers run their tools with your Mac user's permissions.</li>
+          <li>Tool results can contain instructions from third parties, and the model may follow them.</li>
+        </ul>
+        <p class="body-copy">You can switch back to Manual or Basic at any time.</p>
+      </div>
+      <div class="button-row consent-actions">
+        <button id="bypass-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="bypass-confirm" class="button danger" type="button">Yes, bypass all permissions</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="tool-approval-dialog" class="consent-dialog" aria-labelledby="approval-title" aria-describedby="approval-summary">
+    <div class="dialog-header">
+      <div><span id="approval-eyebrow" class="eyebrow">Tool call</span><h2 id="approval-title">Allow this tool call?</h2></div>
+      <span id="approval-queue" class="badge" hidden></span>
+    </div>
+    <div class="dialog-body">
+      <p id="approval-summary" class="body-copy"></p>
+      <span class="small-label">Arguments</span>
+      <pre id="approval-arguments" class="code-output approval-arguments"></pre>
+      <div class="button-row consent-actions">
+        <button id="approval-deny" class="button secondary" type="button">Deny</button>
+        <button id="approval-all" class="button secondary" type="button">Allow all in this reply</button>
+        <button id="approval-once" class="button primary" type="button">Allow</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="web-shim.js"></script>

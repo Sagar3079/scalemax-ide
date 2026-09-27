@@ -53,7 +53,52 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     cancel: (requestId) => ipcRenderer.invoke('provider:cancel', requestId),
 
     /** @returns {Promise<{ok: boolean, data?: object, error?: object}>} */
-    clear: () => ipcRenderer.invoke('provider:clear')
+    clear: () => ipcRenderer.invoke('provider:clear'),
+
+    /**
+     * Switches the chat model (composer model menu); the endpoint and key stay as they are.
+     * @param {{model: string}} input
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} provider metadata
+     */
+    setModel: (input) => ipcRenderer.invoke('provider:set-model', input),
+
+    /**
+     * Reloads the model list (with chat/reasoning capabilities) using the stored key.
+     * @returns {Promise<{ok: boolean, data?: object, error?: object}>} provider metadata
+     */
+    refreshModels: () => ipcRenderer.invoke('provider:refresh-models')
+  },
+
+  approvals: {
+    /**
+     * Subscribes to tool calls that wait for the user's approval.
+     * @param {(request: {approvalId: string, requestId: string, serverId: string, serverName: string, toolName: string, readOnly: boolean, arguments: string}) => void} callback
+     * @returns {() => void} unsubscribe
+     */
+    onRequest: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, request) => callback(request);
+      ipcRenderer.on('tool:approval-request', listener);
+      return () => ipcRenderer.removeListener('tool:approval-request', listener);
+    },
+
+    /**
+     * Fires when a pending approval ends without an answer (chat cancelled or timed out).
+     * @param {(info: {approvalId: string}) => void} callback
+     * @returns {() => void} unsubscribe
+     */
+    onClosed: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, info) => callback(info);
+      ipcRenderer.on('tool:approval-closed', listener);
+      return () => ipcRenderer.removeListener('tool:approval-closed', listener);
+    },
+
+    /**
+     * @param {{approvalId: string, decision: 'once'|'request'|'deny'}} input
+     * @returns {Promise<{ok: boolean, data?: {accepted: boolean}, error?: object}>}
+     */
+    respond: (input) => ipcRenderer.invoke('tool:approval-respond', input)
   },
 
   connectors: {

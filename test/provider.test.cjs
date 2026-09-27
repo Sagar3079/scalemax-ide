@@ -197,9 +197,11 @@ test('discover picks the ScaleMax endpoint that authenticates the key', async ()
   const result = await provider.discover({ kind: 'scalemax', apiKey: 'sm_live_test_key_1234567890' });
   assert.equal(result.kind, 'scalemax');
   assert.equal(result.baseUrl, 'https://api.scalemax.pro/token/v1');
+  // No capabilities in the response: every capability is unknown (null).
+  const unknown = { chat: null, tools: null, reasoning: null, effortLevels: [], defaultEffort: null, effortLocked: false };
   assert.deepEqual(result.models, [
-    { id: 'gpt-5.5', displayName: 'GPT-5.5', available: true },
-    { id: 'claude-sonnet-5[1m]', displayName: 'Claude Sonnet 5', available: false },
+    { id: 'gpt-5.5', displayName: 'GPT-5.5', available: true, ...unknown },
+    { id: 'claude-sonnet-5[1m]', displayName: 'Claude Sonnet 5', available: false, ...unknown },
   ]);
   assert.equal(seen[0], 'https://api.scalemax.pro/v1/models');
   assert.equal(seen[1], 'https://api.scalemax.pro/token/v1/models');
@@ -447,4 +449,119 @@ test('complete is cancellable through the shared requestId', async () => {
   assert.equal(provider.cancel('c-5'), true);
   await assert.rejects(() => pending, (error) => error.code === 'CANCELLED' && /cancelled/.test(error.message));
   release();
+});
+
+// ---- Model capabilities, reasoning and model switching ----------------------------
+
+// Shaped like the live ScaleMax /models response (2026-09-26).
+const SCALEMAX_MODELS = {
+  data: [
+    {
+      id: 'deepseek-v4-flash', display_name: 'DeepSeek V4 Flash', availability: 'available',
+      capabilities: { chat: true, tools: true, reasoning: true, tool_choice: false },
+    },
+    {
+      id: 'claude-sonnet-4-6[1m]', display_name: 'Sonnet 4.6', availability: 'available',
+      capabilities: { chat: true, tools: true, reasoning: true, effort: true, effort_levels: ['low'], default_effort: 'low', effort_locked: true },
+    },
+    { id: 'space-bunny', display_name: 'Space Bunny (Free)', availability: 'available', capabilities: { chat: true, tools: true } },
+    { id: 'flux-2-pro', display_name: 'ScaleMax Image Flux', family: 'image', availability: 'available', capabilities: { image_generation: true } },
+  ],
+};
+
+async function scalemaxProvider(respondChat) {
+  const bodies = [];
+  const { provider, store } = makeProvider({
+    respond: (url, options) => {
+      if (url.endsWith('/models')) return jsonResponse(SCALEMAX_MODELS);
+      bodies.push(JSON.parse(options.body));
+      return jsonResponse(respondChat ? respondChat() : { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    },
+  });
+  const found = await provider.discover({ kind: 'scalemax', apiKey: 'sm_live_test_key_1234567890' });
+  await provider.save({
+    kind: 'scalemax', baseUrl: found.baseUrl, model: 'deepseek-v4-flash', enabledModels: ['deepseek-v4-flash'],
+    models: found.models, apiKey: 'sm_live_test_key_1234567890',
+  });
+  return { provider, store, bodies, found };
+}
+
+test('the catalog keeps chat, tools and reasoning capabilities', async () => {
+  const { found } = await scalemaxProvider();
+  const byId = Object.fromEntries(found.models.map((model) => [model.id, model]));
+  assert.deepEqual(byId['deepseek-v4-flash'], {
+    id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', available: true,
+    chat: true, tools: true, reasoning: true, effortLevels: [], defaultEffort: null, effortLocked: false,
+  });
+  assert.deepEqual(byId['claude-sonnet-4-6[1m]'].effortLevels, ['low']);
+  assert.equal(byId['claude-sonnet-4-6[1m]'].effortLocked, true);
+  assert.equal(byId['claude-sonnet-4-6[1m]'].defaultEffort, 'low');
+  assert.equal(byId['space-bunny'].reasoning, false);
+  assert.equal(byId['flux-2-pro'].chat, false);
+});
+
+test('reasoning settings are sent only to reasoning models, adjusted to what they allow', async () => {
+  const { provider, bodies } = await scalemaxProvider();
+  const ask = (reasoning, id) => provider.send({ requestId: id, messages: [{ role: 'user', content: 'Hi' }], reasoning });
+  await ask({ thinking: true, effort: 'high' }, 'a');
+  await ask({ thinking: false, effort: 'high' }, 'b');
+  await ask(undefined, 'c');
+  assert.deepEqual(bodies[0].thinking, { type: 'enabled' });
+  assert.equal(bodies[0].reasoning_effort, 'high');
+  assert.deepEqual(bodies[1].thinking, { type: 'disabled' });
+  assert.equal(bodies[1].reasoning_effort, undefined);
+  assert.equal('thinking' in bodies[2], false);
+
+  // Sonnet's effort is locked at low; a model without reasoning gets no fields at all.
+  await provider.setModel({ model: 'claude-sonnet-4-6[1m]' });
+  await ask({ thinking: true, effort: 'high' }, 'd');
+  assert.equal(bodies[3].model, 'claude-sonnet-4-6[1m]');
+  assert.equal(bodies[3].reasoning_effort, 'low');
+  await provider.setModel({ model: 'space-bunny' });
+  await ask({ thinking: true, effort: 'high' }, 'e');
+  assert.equal('thinking' in bodies[4] || 'reasoning_effort' in bodies[4], false);
+
+  // complete() (the tool loop) applies the same rules.
+  await provider.setModel({ model: 'deepseek-v4-flash' });
+  await provider.complete({ requestId: 'f', messages: [{ role: 'user', content: 'Hi' }], reasoning: { thinking: true, effort: 'low' } });
+  assert.equal(bodies[5].reasoning_effort, 'low');
+
+  await assert.rejects(() => ask({ thinking: 'yes' }, 'g'), /Reasoning must be/);
+  await assert.rejects(() => ask({ thinking: true, effort: 'max' }, 'h'), /Reasoning must be/);
+});
+
+test('thinking text in the response is returned next to the answer', async () => {
+  const { provider } = await scalemaxProvider(() => ({
+    choices: [{ message: { role: 'assistant', content: '391', reasoning_content: '17 × 23 = 391' } }],
+  }));
+  const result = await provider.send({ requestId: 'r', messages: [{ role: 'user', content: '17*23?' }] });
+  assert.equal(result.text, '391');
+  assert.equal(result.reasoning, '17 × 23 = 391');
+});
+
+test('setModel switches the chat model, enables it, and refuses non-chat or unknown models', async () => {
+  const { provider, store } = await scalemaxProvider();
+  const meta = await provider.setModel({ model: 'space-bunny' });
+  assert.equal(meta.model, 'space-bunny');
+  assert.deepEqual(meta.enabledModels, ['deepseek-v4-flash', 'space-bunny']);
+  assert.equal(store.snapshot().provider.model, 'space-bunny');
+  assert.equal(meta.hasKey, true);
+  await assert.rejects(() => provider.setModel({ model: 'flux-2-pro' }), /does not support chat/);
+  await assert.rejects(() => provider.setModel({ model: 'gpt-nope' }), /not in the ScaleMax model list/);
+  await assert.rejects(() => provider.setModel({}), /Choose a model/);
+});
+
+test('refreshModels reloads capabilities with the stored key', async () => {
+  const { provider, store, calls } = makeProvider({ respond: () => jsonResponse(SCALEMAX_MODELS) });
+  await provider.save({
+    kind: 'scalemax', baseUrl: 'https://api.scalemax.pro/v1', model: 'deepseek-v4-flash',
+    enabledModels: ['deepseek-v4-flash', 'retired-model'],
+    models: [{ id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', available: true }],
+    apiKey: 'sm_live_test_key_1234567890',
+  });
+  const meta = await provider.refreshModels();
+  assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer sm_live_test_key_1234567890');
+  assert.equal(meta.models.find((model) => model.id === 'deepseek-v4-flash').reasoning, true);
+  assert.deepEqual(meta.enabledModels, ['deepseek-v4-flash']);
+  assert.equal(store.snapshot().provider.models.length, 4);
 });

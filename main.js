@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell, clipboard } = require('electron');
+const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -78,7 +79,12 @@ function createWindow() {
     mainWindow.show();
   });
 
+  // A reload or a crashed renderer can never answer a pending approval.
+  mainWindow.webContents.on('did-start-loading', () => denyAllApprovals());
+  mainWindow.webContents.on('render-process-gone', () => denyAllApprovals());
+
   mainWindow.on('closed', () => {
+    denyAllApprovals();
     mainWindow = null;
   });
 }
@@ -124,7 +130,57 @@ const mcp = createMcpManager({
 
 // Chat requests offer tools from enabled MCP servers to the model and run the
 // tool calls it makes (lib/tool-loop.cjs); without tools it is a plain send.
-const toolLoop = createToolLoop({ provider, mcp });
+// Tool calls that need the user's OK (Manual, and non-read-only tools in Basic) are sent to the
+// window as `tool:approval-request`; the renderer answers through `tool:approval-respond`.
+// A cancelled chat, a reload or a closed window denies whatever is still pending.
+const APPROVAL_TIMEOUT_MS = 15 * 60_000;
+const APPROVAL_DECISIONS = new Set(['once', 'request', 'deny']);
+const pendingApprovals = new Map();
+
+function mcpServerName(serverId) {
+  try {
+    return mcp.list().find((server) => server.id === serverId)?.name || serverId;
+  } catch {
+    return serverId;
+  }
+}
+
+function requestToolApproval(request, { signal } = {}) {
+  const target = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+  if (!target) return Promise.resolve('deny');
+  return new Promise((resolve) => {
+    const approvalId = randomUUID();
+    let timer = null;
+    const finish = (decision, notify) => {
+      if (!pendingApprovals.has(approvalId)) return;
+      pendingApprovals.delete(approvalId);
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', onAbort);
+      if (notify && !target.isDestroyed()) target.send('tool:approval-closed', { approvalId });
+      resolve(decision);
+    };
+    const onAbort = () => finish('deny', true);
+    pendingApprovals.set(approvalId, { finish, webContentsId: target.id });
+    timer = setTimeout(() => finish('deny', true), APPROVAL_TIMEOUT_MS);
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    target.send('tool:approval-request', {
+      approvalId,
+      requestId: request.requestId,
+      serverId: request.serverId,
+      serverName: mcpServerName(request.serverId),
+      toolName: request.toolName,
+      readOnly: request.readOnly,
+      arguments: request.arguments,
+    });
+  });
+}
+
+function denyAllApprovals() {
+  for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false);
+}
+
+const toolLoop = createToolLoop({ provider, mcp, approve: requestToolApproval });
 
 // GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's
 // device-flow login in a throwaway config; the token lands in the connector store and on
@@ -151,13 +207,20 @@ const cliConnect = createCliConnect({
     : {})
 });
 
-/** The chat permission mode from the persisted assistant settings. */
+// Earlier permission values map onto the three modes; bypass never survives without consent.
+const LEGACY_PERMISSIONS = { ask: 'basic', 'auto-write': 'basic', full: 'basic', readonly: 'manual', plan: 'manual' };
+
+/** The chat permission mode (manual | basic | bypass) from the persisted assistant settings. */
 function chatPermission() {
   try {
-    const permission = stateStore.get('settings')?.permission;
-    return typeof permission === 'string' ? permission : 'ask';
+    const settings = stateStore.get('settings') || {};
+    let mode = ['manual', 'basic', 'bypass'].includes(settings.permission)
+      ? settings.permission : (LEGACY_PERMISSIONS[settings.permission] || 'basic');
+    // Autonomous mode is only honoured when the user agreed to it in the consent dialog.
+    if (mode === 'bypass' && settings.bypassConsent !== true) mode = 'basic';
+    return mode;
   } catch {
-    return 'ask';
+    return 'manual';
   }
 }
 
@@ -178,14 +241,9 @@ function getWorkspace() {
       approve: async () => true,
       // Read-only and plan modes block writes and commands in the workspace
       // service; every other mode is treated as 'ask'.
-      getPermission: () => {
-        try {
-          const permission = stateStore.get('settings')?.permission;
-          return permission === 'readonly' || permission === 'plan' ? 'readonly' : 'ask';
-        } catch {
-          return 'ask';
-        }
-      }
+      // Saves and commands in the Workspace tab are the user's own actions; the chat permission
+      // modes (manual / basic / bypass) govern the tool calls the model makes.
+      getPermission: () => 'ask'
     });
   }
   return workspace;
@@ -279,6 +337,8 @@ const providerChannels = {
     ? toolLoop.send(input, { permission: chatPermission() })
     : provider.send(input)),
   'provider:cancel': (_event, id) => toolLoop.cancel(id),
+  'provider:set-model': (_event, input) => provider.setModel(input),
+  'provider:refresh-models': () => provider.refreshModels(),
   'provider:clear': () => provider.clear()
 };
 
@@ -350,6 +410,17 @@ const mcpChannels = {
 for (const [channel, run] of Object.entries(mcpChannels)) {
   ipcMain.handle(channel, wrap(run, MCP_FALLBACK));
 }
+
+// The user's answer to a tool approval prompt: once | request (allow the rest of this reply) | deny.
+// Only the window the prompt was sent to can answer it.
+ipcMain.handle('tool:approval-respond', wrap((event, input) => {
+  const approvalId = input && typeof input.approvalId === 'string' ? input.approvalId : '';
+  const decision = input && APPROVAL_DECISIONS.has(input.decision) ? input.decision : null;
+  const entry = pendingApprovals.get(approvalId);
+  if (!entry || !decision || entry.webContentsId !== event.sender.id) return { accepted: false };
+  entry.finish(decision, false);
+  return { accepted: true };
+}, { code: 'APPROVAL_ERROR', message: 'Approval could not be recorded.' }));
 
 // ---------------------------------------------------------------------------
 // Dialog + workspace IPC (native pickers, project files, Git status)

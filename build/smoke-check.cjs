@@ -131,10 +131,15 @@ async function run(win) {
       return {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
-        providerMethods: ['get','save','test','discover','send','cancel','clear'].filter((m) => typeof api.provider?.[m] === 'function'),
+        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels'].filter((m) => typeof api.provider?.[m] === 'function'),
         workspaceMethods: ['select','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
+        approvalMethods: ['onRequest','onClosed','respond'].filter((m) => typeof api.approvals?.[m] === 'function'),
+        composerControls: ['#attach-btn svg', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
+          .every((selector) => Boolean(document.querySelector(selector))),
+        attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
+        permissionLabel: document.querySelector('#permission-label')?.textContent || '',
         mcpMethods: ['list','save','remove','test','tools','signIn','cancelSignIn'].filter((m) => typeof api.mcp?.[m] === 'function'),
         providerGetOk: providerResult && providerResult.ok === true,
         providerConfigured: providerResult && providerResult.data && providerResult.data.configured === false,
@@ -190,6 +195,24 @@ async function run(win) {
       const mcpTested = mcpSaved.ok ? await api.mcp.test({ id: mcpSaved.data.id }) : mcpSaved;
       const mcpListed = await api.mcp.list();
       const toolChat = await api.provider.send({ requestId: 'smoke-tools', messages: [{ role: 'user', content: 'Please use echo.' }] });
+      // Manual mode: the tool call waits for the approval prompt in this window; Allow runs it.
+      const settingsBefore = await api.store.get('settings');
+      await api.store.set('settings', { ...(settingsBefore || {}), permission: 'manual' });
+      const approvalPending = api.provider.send({ requestId: 'smoke-approve', messages: [{ role: 'user', content: 'Please use echo.' }] });
+      let approvalShown = false;
+      for (let i = 0; i < 100 && !approvalShown; i += 1) {
+        approvalShown = Boolean(document.querySelector('#tool-approval-dialog')?.open);
+        if (!approvalShown) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const approvalTitle = document.querySelector('#approval-title')?.textContent || '';
+      document.querySelector('#approval-once')?.click();
+      const approved = await approvalPending;
+      // Deny: the tool never runs and the model is told.
+      const denyPending = api.provider.send({ requestId: 'smoke-deny', messages: [{ role: 'user', content: 'Please use echo.' }] });
+      for (let i = 0; i < 100 && !document.querySelector('#tool-approval-dialog')?.open; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+      document.querySelector('#approval-deny')?.click();
+      const denied = await denyPending;
+      await api.store.set('settings', settingsBefore || {});
       if (mcpSaved.ok) await api.mcp.remove({ id: mcpSaved.data.id });
       await api.provider.clear();
 
@@ -223,6 +246,12 @@ async function run(win) {
           && mcpListed.data.some((server) => (server.envKeys || []).includes('ELECTRON_RUN_AS_NODE'))),
         toolChatText: toolChat && toolChat.ok ? toolChat.data.text : (toolChat?.error?.message || null),
         toolChatCalls: toolChat && toolChat.ok ? toolChat.data.toolCalls : null,
+        approvalShown,
+        approvalTitle,
+        approvedCalls: approved && approved.ok ? approved.data.toolCalls : (approved?.error?.message || null),
+        approvedText: approved && approved.ok ? approved.data.text : null,
+        deniedCalls: denied && denied.ok ? denied.data.toolCalls : (denied?.error?.message || null),
+        approvalClosed: !document.querySelector('#tool-approval-dialog')?.open,
         oauthSupported: Boolean(oauthBefore && oauthBefore.ok && oauthBefore.data.supported === true
           && oauthBefore.data.redirectUri === 'http://127.0.0.1:53682/callback'),
         oauthSecretHidden: Boolean(oauthSaved && oauthSaved.ok && oauthSaved.data.hasSecret === true
@@ -361,7 +390,10 @@ async function run(win) {
   const checks = probe ? {
     hasBridge: probe.hasBridge,
     reservedKeysHidden: probe.reservedHidden,
-    providerMethods: probe.providerMethods.length === 7,
+    providerMethods: probe.providerMethods.length === 9,
+    approvalApi: probe.approvalMethods.length === 3,
+    composerControls: probe.composerControls === true && probe.attachIsIcon === true,
+    permissionDefaultBasic: probe.permissionLabel === 'Basic',
     workspaceApi: probe.workspaceMethods.length === 8,
     dialogApi: probe.dialogMethods.length === 2,
     connectorApi: probe.connectorMethods.length === 15,
@@ -390,6 +422,11 @@ async function run(win) {
     mcpSecretHidden: Boolean(e2e && e2e.mcpSecretHidden),
     toolLoopReply: Boolean(e2e && e2e.toolChatText === 'tool said: smoke-echo'
       && Array.isArray(e2e.toolChatCalls) && e2e.toolChatCalls.length === 1 && e2e.toolChatCalls[0].ok === true),
+    manualApprovalAllow: Boolean(e2e && e2e.approvalShown && /Smoke tools · echo/.test(e2e.approvalTitle)
+      && Array.isArray(e2e.approvedCalls) && e2e.approvedCalls.length === 1 && e2e.approvedCalls[0].ok === true
+      && e2e.approvedText === 'tool said: smoke-echo'),
+    manualApprovalDeny: Boolean(e2e && Array.isArray(e2e.deniedCalls) && e2e.deniedCalls.length === 1
+      && e2e.deniedCalls[0].ok === false && /denied/.test(e2e.deniedCalls[0].preview) && e2e.approvalClosed),
     oauthSupported: Boolean(e2e && e2e.oauthSupported),
     oauthSecretHidden: Boolean(e2e && e2e.oauthSecretHidden),
     oauthNoLoopbackRefused: Boolean(e2e && e2e.oauthNoLoopbackRefused),

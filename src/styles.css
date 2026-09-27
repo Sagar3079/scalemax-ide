@@ -1286,6 +1286,332 @@ input[type="range"] {
 
 .send-actions {
   margin-inline-start: auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* ---- Composer controls: attach, permissions, model menu (src/composer-ui.js) ---- */
+.composer-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--sm-radius-lg);
+  background: none;
+  color: var(--sm-text-medium);
+}
+
+.composer-icon-button:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.composer-icon-button svg,
+.composer-chip svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: 100px;
+  background: var(--sm-app-surface);
+  color: var(--sm-text-medium);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.composer-chip:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.composer-chip .composer-chevron {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+.composer-chip.is-bypass {
+  border-color: var(--sm-palette-red-3);
+  background: var(--sm-palette-red-1);
+  color: var(--sm-palette-red-7);
+}
+
+.model-button {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.model-button.empty {
+  color: var(--sm-text-weak);
+}
+
+.model-button-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sm-text-strong);
+  font-weight: 500;
+}
+
+.model-button.empty .model-button-name {
+  color: var(--sm-text-weak);
+  font-weight: 400;
+}
+
+.model-button-reasoning {
+  flex-shrink: 0;
+  color: var(--sm-text-weak);
+  font-size: 11px;
+}
+
+/* Popovers sit in the top layer; composer-ui.js places them above their button. */
+.composer-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 300px;
+  max-height: min(460px, 70vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-bg-popover);
+  box-shadow: var(--sm-shadow-popup-medium);
+  color: var(--sm-text-strong);
+}
+
+.model-menu {
+  width: 340px;
+}
+
+.composer-menu-title {
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sm-text-weak);
+}
+
+.composer-menu-option,
+.model-menu-option {
+  display: flex;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--sm-radius-md);
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+
+.composer-menu-option {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-menu-option {
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-menu-option:hover,
+.model-menu-option:hover {
+  background: var(--sm-bg-hover);
+}
+
+.composer-menu-option[aria-checked="true"],
+.model-menu-option[aria-checked="true"] {
+  background: var(--sm-bg-active);
+}
+
+.composer-menu-option-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.composer-menu-option[data-permission="bypass"] .composer-menu-option-name {
+  color: var(--sm-palette-red-7);
+}
+
+.composer-menu-option-desc {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sm-text-medium);
+}
+
+.model-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-menu-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.model-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--sm-color-border-tertiary);
+}
+
+.model-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-menu-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.model-menu-note {
+  margin: 0;
+  font-size: 11px;
+}
+
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 100px;
+  background: var(--sm-color-border-solid);
+  transition: background 0.15s ease;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--sm-palette-brand-8);
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s ease;
+}
+
+.switch[aria-checked="true"] .switch-thumb {
+  transform: translateX(14px);
+}
+
+.switch:disabled,
+.segmented-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--sm-radius-lg);
+  background: var(--sm-app-surface-hover);
+}
+
+.segmented-option {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--sm-radius-md);
+  background: none;
+  color: var(--sm-text-medium);
+  font-size: 12px;
+}
+
+.segmented-option[aria-checked="true"] {
+  background: var(--sm-app-surface);
+  color: var(--sm-text-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch-thumb {
+    transition: none;
+  }
+}
+
+/* The model's thinking, folded above an answer. */
+.msg-reasoning {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--sm-text-medium);
+}
+
+.msg-reasoning-label {
+  cursor: pointer;
+  width: fit-content;
+  font-weight: 500;
+}
+
+.msg-reasoning-text {
+  margin-top: 4px;
+  padding: 6px 10px;
+  border-inline-start: 2px solid var(--sm-color-border-secondary);
+  white-space: pre-wrap;
+}
+
+/* Bypass consent and tool approval prompts. */
+.consent-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.consent-list {
+  margin: 8px 0 12px;
+  padding-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--sm-text-medium);
+}
+
+.consent-actions {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.approval-arguments {
+  max-height: 220px;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .starter-section {
@@ -2149,6 +2475,29 @@ input[type="range"] {
 #custom-dialog .dialog-body,
 #mcp-dialog .dialog-body {
   max-height: 72vh;
+}
+
+/* Bypass consent and tool approval prompts: same surface as the other dialogs. */
+#bypass-dialog,
+#tool-approval-dialog {
+  max-height: 84vh;
+  margin: 14vh auto auto;
+  padding: 0;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-bg-modal);
+  color: var(--sm-text-strong);
+  box-shadow: var(--sm-shadow-popup-large);
+}
+
+#bypass-dialog::backdrop,
+#tool-approval-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+#bypass-dialog:focus-visible,
+#tool-approval-dialog:focus-visible {
+  outline: none;
 }
 
 .custom-form-top {

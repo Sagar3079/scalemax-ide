@@ -46,9 +46,10 @@ Electron runtime issues (truncated installs, missing `path.txt`): `npm run repai
 Three tiers, textbook Electron:
 
 ```
-main.js (Node)             → 43 ipcMain.handle channels, all wrapped in {ok,data}/{ok,error} envelopes except app:* and store:*
-preload.js (contextBridge) → window.scalemaxAPI: 44 methods = 43 channels across 7 namespaces
-                              (app 2, store 2, provider 7, connectors 15, mcp 7, dialog 2, workspace 8) + getPlatform()
+main.js (Node)             → 46 ipcMain.handle channels, all wrapped in {ok,data}/{ok,error} envelopes except app:* and store:*
+preload.js (contextBridge) → window.scalemaxAPI: 50 methods = 46 channels across 8 namespaces
+                              (app 2, store 2, provider 9, approvals 3, connectors 15, mcp 7, dialog 2, workspace 8) + getPlatform()
+                              (approvals.onRequest/onClosed are main→renderer events, respond is a channel)
 src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, webSecurity:true
 ```
 
@@ -88,10 +89,10 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `src/oauth-catalog.js` | ~30 | Renderer-side `OAUTH_SUPPORT` (id → loopback support); a test keeps it in sync with `lib/oauth-catalog.cjs`. |
 | `src/terminal.js`, `src/web-shim.js`, `src/data.js` | small | Console binding, browser bridge stand-in, catalog re-exports + 8 experts. |
 
-### IPC surface (43 channels, all paired with preload — recount script logic: every `ipcMain.handle('x:y'` plus channel-table keys)
+### IPC surface (46 channels, all paired with preload — recount script logic: every `ipcMain.handle('x:y'` plus channel-table keys)
 
 - `store:get` / `store:set` — PUBLIC_KEYS allowlist (`tasks, settings, automations, skillStates, connectorStates, currentTaskId, customExperts, customSkills`). `provider`, `connectors`, `connectorOAuthClients`, `mcpServers`, `user` are reserved (also refused by `lib/state.cjs`).
-- `provider:get/save/test/discover/send/cancel/clear` — `send` goes through the tool loop (MCP tools) when the provider is configured; `cancel` cancels the loop and the HTTP request.
+- `provider:get/save/test/discover/send/cancel/clear/set-model/refresh-models` — `set-model` switches the chat model from the composer (must be a chat-capable, available catalog model for ScaleMax); `refresh-models` reloads the catalog with capabilities using the stored key; `send` goes through the tool loop (MCP tools) when the provider is configured; `cancel` cancels the loop and the HTTP request.
 - `connector:list/save/remove/test/fetch` + `connector:oauth-config-save/-config-get/-start/-status/-disconnect` + `connector:cli-available/-start/-wait/-status/-cancel` (GitHub CLI sign-in; only the one-time code and status cross the bridge) — tokens and client secrets never cross the bridge.
 - `mcp:list/save/remove/test/tools` + `mcp:oauth-start/-cancel` — env/header values and sign-in tokens are write-only; `oauth-start` takes a connector id (resolved in main by `lib/mcp-directory.cjs`) or a saved server id, never a URL; tool calls only run inside chat.
 - `workspace:select/list/read/write/git-status/git-diff/run/cancel`, `dialog:open-folder/open-file`, `app:get-version/quit`.
@@ -131,7 +132,9 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 
 **Search, theme, exports.** Search covers tasks + all catalogs incl. custom items. Light/Dark/System. Task JSON and full local-data JSON exports (now incl. custom experts/skills).
 
-**Permissions.** `readonly`/`plan` block workspace writes and commands in main; they also restrict MCP tools in chat (above).
+**Composer.** Paperclip icon (attach) · permissions chip · model button left of Send ("DeepSeek V4 Flash · Thinking · High"). The model menu (a top-layer popover above the button, `src/composer-ui.js`) lists the chat-capable models from the catalog (image/video models are hidden), a Thinking switch and a Low/Medium/High reasoning effort. Picking a model calls `provider:set-model` (persists; the Assistant picker and statusbar follow). Reasoning is sent as `payload.reasoning = {thinking, effort}`; `lib/provider.cjs` turns it into `thinking: {type}` + `reasoning_effort` only for models whose `/models` capabilities say `reasoning: true`, and uses the model's fixed effort when `effort_locked` (Sonnet 4.6 is locked at low; the menu shows that). Any `reasoning_content` in the reply is shown folded above the answer. Live check (2026-09-27): the API accepts both fields with and without tools on DeepSeek V4 Flash, Sonnet 4.6 and the free models, and they change the output, but it returns no thinking text or reasoning-token counts, so how much each effort level reasons cannot be observed from ScaleMax.
+
+**Permissions (tool calls the model makes).** Three modes, from the composer chip or Assistant: **Manual** asks before every MCP tool call; **Basic** (default) runs tools annotated `readOnlyHint` automatically and asks for the rest; **Bypass all** runs everything, and is only honoured after the consent dialog (`settings.bypassConsent`; main re-checks it). A prompt shows server · tool and the arguments with Deny / Allow all in this reply / Allow; Escape denies; Stop, a timeout (15 min), a reload or a closed window deny what is pending; automations get the same prompt (labelled). A denial reaches the model as a tool error it must not retry. Old values migrate: ask/auto-write/full → basic, readonly/plan → manual. Workspace saves and commands are the user's own actions and are not gated by these modes.
 
 ---
 
@@ -152,17 +155,18 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 - **OAuth**: main owns every provider URL; the renderer only passes a connector id. Only `https:` authorize pages are opened; the callback server binds loopback only, checks the Host header and a 32-byte state (timing-safe), ignores stray requests, and closes before the flow settles; one flow at a time (new flow aborts the old); PKCE where supported; token responses capped at 256 KB; provider error codes are sanitized to `[a-z0-9_]`.
 - **One-click sign-in (MCP authorization)**: the directory URLs live in main; discovery refuses redirects, non-https endpoints, metadata whose `issuer` does not match, servers without PKCE S256, and resource metadata pointing at another origin. ScaleMax registers as a public client (`token_endpoint_auth_method: none`) where allowed, otherwise keeps the issued client secret encrypted with the tokens. Access/refresh tokens and client secrets live only in the safeStorage-encrypted `encryptedAuth` blob (session-only without encryption), are redacted from server error text, and never reach the renderer. One sign-in at a time (shared loopback port 53682).
 - **GitHub CLI sign-in**: gh runs without a shell from a fixed executable path, with `GH_TOKEN`/`GITHUB_TOKEN`/`GH_HOST`/`GH_CONFIG_DIR`/browser variables stripped; a fresh login is a normal gh login (the user's gh config, keychain storage); a downloaded gh only runs after its checksum and GitHub's code signature pass; only `https://github.com/login/device` is opened; the token only goes to the connector store and the GitHub MCP header (both encrypted). The consent page names "GitHub CLI" because that is the OAuth app the token belongs to; scopes are gh's defaults (`repo`, `read:org`, `gist`).
+- **Tool approvals**: main owns the pending prompts (`tool:approval-request` → `tool:approval-respond`), only the window a prompt was sent to can answer it, and anything unanswered is denied. Bypass needs `bypassConsent: true` in the persisted settings, set only by the consent dialog; `normalizeSettings` drops it whenever the mode is not bypass.
 - **MCP**: a stdio server runs its command with the user's permissions — the add dialog warns and the renderer asks for confirmation when the command changes (UX consent; the main process does not prompt, consistent with the documented auto-approve trade-off below). Tool descriptions and results come from third-party servers and go to the model — treat them as untrusted (prompt-injection surface). Stdio servers run in their own process group and are killed on quit.
 - Workspace guard: canonical paths only (`/tmp` is a symlink on macOS — use `/private/tmp`), secret-path denylist, protected roots, 1 MiB caps.
-- Known accepted trade-off: main-process approvals are auto-granted (`approve: async () => true`); workspace commands and MCP tool calls do not prompt per call. Permission modes (`readonly`/`plan`) are the gate.
+- Known accepted trade-off: provider and workspace approvals are auto-granted (`approve: async () => true`); the user starts those actions themselves. MCP tool calls from the model are gated per call by the permission mode.
 
 ---
 
 ## 7. Verification (how to prove things work)
 
-**Unit** — `npm test` → **216 tests**: connectors 45, mcp 32, cli-auth 8, domain 28, provider 26, oauth 26, tool-loop 13, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
+**Unit** — `npm test` → **228 tests**: connectors 45, mcp 32, provider 31, domain 30, oauth 26, tool-loop 18, cli-auth 8, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
 
-**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **42 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (7 provider, 8 workspace, 2 dialog, 15 connector, 7 mcp), reserved keys incl. `connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
+**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **47 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (9 provider, 3 approvals, 8 workspace, 2 dialog, 15 connector, 7 mcp), composer controls (icon attach, permission chip defaulting to Basic, model button, menus, dialogs), Manual-mode approval end to end (prompt appears in the window → Allow runs the tool; Deny blocks it), reserved keys incl. `connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
 
 **UI** — Playwright 1.60 is installed outside the repo at `~/Desktop/node_modules/playwright` (not a project dep). Launch pattern: `_electron.launch({ args: ['.'], cwd: repo, executablePath: '<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', env: { ...process.env, SCALEMAX_USER_DATA: '/private/tmp/…' } })`, then wait for `document.body.dataset.appReady === 'true'`. Payload capture: `const { default: app } = await import('./app.js')` in `win.evaluate`, wrap `app.getProviderBridge()`.
 
@@ -237,7 +241,7 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 3. Native `<dialog>` paints in the top layer — `showToast()` re-parents the toast into any open dialog.
 4. `--sm-bg-*` are component-scoped; use `--sm-app-*` for shell surfaces.
 5. CSP blocks inline `style=` in HTML; CSSOM in JS is fine.
-6. The smoke check asserts exact bridge counts (7 provider, 8 workspace, 2 dialog, 15 connector, 7 mcp) — update `build/smoke-check.cjs` when adding bridge methods.
+6. The smoke check asserts exact bridge counts (9 provider, 3 approvals, 8 workspace, 2 dialog, 15 connector, 7 mcp) — update `build/smoke-check.cjs` when adding bridge methods.
 7. `store:set` returns `true`/`false`; `persist()` falls back to localStorage on `false`.
 8. Renderer = ES modules, main = CommonJS; `package.json` has no `"type"` (Node prints a harmless module-type warning when tests import `src/*.js`).
 9. `sm-tokens.css` is generated.

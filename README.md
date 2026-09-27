@@ -17,6 +17,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
+- **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
 - **Six views**, one click away in the sidebar:
   - **Chat** — the chat-first workspace with Working/Coding modes and starting-point chips
   - **Workspace** — an IDE layout: file tree with filter and Git decorations, tabbed editor with syntax highlighting, Terminal / Git changes / Diff panel, resizable panes
@@ -127,6 +128,7 @@ scalemax-ide/
 │   ├── catalog-ui.js     # catalog filters, details, connectors and OAuth dialog
 │   ├── custom-ui.js      # create/edit custom experts and skills
 │   ├── mcp-ui.js         # MCP server management
+│   ├── composer-ui.js    # composer model/reasoning menu, permission modes, tool approval prompts
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)
 │   ├── avatars.js        # animated expert characters (SVG)
 │   ├── data.js           # experts, skills, community references, connectors

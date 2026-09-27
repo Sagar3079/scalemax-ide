@@ -1,6 +1,9 @@
 /** ScaleMax IDE: local conversations, settings, and demo interactions. */
 import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
-import { nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, toTemperature, searchItems } from './domain.mjs';
+import {
+  nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
+  toTemperature, searchItems, DEFAULT_SETTINGS,
+} from './domain.mjs';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
 import { startScheduler } from './scheduler.js';
@@ -8,15 +11,13 @@ import { renderAvatar } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
 import { bindMcpUi } from './mcp-ui.js';
+import { bindComposerUi, renderModelButton, renderPermission, setPermission } from './composer-ui.js';
 import {
   bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
   activeTabContent, updateGutter, showPanel, setGitDecorations,
 } from './workspace-ui.js';
 
-const DEFAULTS = {
-  permission: 'ask', mode: 'working', systemPrompt: '', temperature: 0.7,
-  temperatureEnabled: false, expertId: null, skillId: null,
-};
+const DEFAULTS = { ...DEFAULT_SETTINGS };
 const FALLBACK_KEY = 'scalemax-fallback';
 const TAG_PROMPTS = {
   daily: 'Plan my development work for today. ',
@@ -130,6 +131,7 @@ const app = {
     bindCatalogUi(this);
     bindCustomCatalogUi(this);
     bindMcpUi(this);
+    bindComposerUi(this);
     window.scalemaxScheduler = startScheduler(this);
     this.updateSendEnabled();
     await this.loadVersion();
@@ -333,16 +335,11 @@ const app = {
     this.renderModelPill();
   },
 
-  // The active model is shown in the middle of the composer.
+  // The active model is the button next to Send (src/composer-ui.js) and the statusbar.
   renderModelPill() {
-    const pill = $('#model-pill');
     const model = this.provider?.model || '';
     if ($('#statusbar-model')) $('#statusbar-model').textContent = model || 'No model';
-    if (!pill) return;
-    const configured = Boolean(this.provider?.configured);
-    pill.textContent = model || (configured ? 'No model selected' : 'No provider connected');
-    pill.title = model ? `Using ${model}` : 'No model selected';
-    pill.classList.toggle('empty', !model);
+    renderModelButton(this);
   },
 
   renderProviderModels() {
@@ -964,6 +961,12 @@ const app = {
         }
         bubble.append(tools);
       }
+      // The model's thinking, when the provider returns it, stays folded above the answer.
+      if (message.reasoning) {
+        const thinking = element('details', 'msg-reasoning');
+        thinking.append(element('summary', 'msg-reasoning-label', 'Thinking'), element('div', 'msg-reasoning-text', message.reasoning));
+        bubble.append(thinking);
+      }
       bubble.append(element('span', 'msg-text', message.text), element('span', 'msg-time', clock(message.time)));
       return bubble;
     }));
@@ -988,6 +991,7 @@ const app = {
     const message = { role, text, time: Date.now() };
     const tools = normalizeToolSummaries(extra.tools);
     if (tools.length) message.tools = tools;
+    if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) this.renderChat();
@@ -1045,6 +1049,9 @@ const app = {
     const payload = { requestId, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
     const temperature = requestTemperature(this.settings);
     if (temperature !== undefined) payload.temperature = temperature;
+    // Thinking on/off and effort from the model menu; the provider only sends them to models
+    // that report reasoning support.
+    payload.reasoning = requestReasoning(this.settings);
 
     this.setChatBusy(true, requestId);
     try {
@@ -1055,7 +1062,9 @@ const app = {
         else this.showToast(message);
         return;
       }
-      this.appendMessage('assistant', result.data.text, taskId, { tools: result.data.toolCalls });
+      this.appendMessage('assistant', result.data.text, taskId, {
+        tools: result.data.toolCalls, reasoning: result.data.reasoning,
+      });
       // A broken MCP server never blocks the reply, but the user should know.
       const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
       if (toolError?.message) {
@@ -1147,7 +1156,8 @@ const app = {
     if ($('#temperature')) $('#temperature').value = this.settings.temperature;
     if ($('#temperature-enabled')) $('#temperature-enabled').checked = Boolean(this.settings.temperatureEnabled);
     this.renderTemperatureValue();
-    if ($('#permission-select')) $('#permission-select').value = this.settings.permission;
+    renderPermission(this);
+    renderModelButton(this);
   },
 
   renderExperts() {
@@ -1625,9 +1635,9 @@ const app = {
       persistSoon();
       this.updateActiveSettingsIndicator();
     });
+    // Same path as the composer menu, so Bypass all always asks for consent.
     $('#permission-select')?.addEventListener('change', (event) => {
-      this.settings.permission = event.target.value;
-      persistSoon();
+      void setPermission(this, event.target.value);
     });
     // The save button is type="submit"; the form submit event covers both.
     $('#assistant-form')?.addEventListener('submit', (event) => {
@@ -1641,7 +1651,7 @@ const app = {
     const value = toTemperature($('#temperature')?.value);
     if (value !== undefined) this.settings.temperature = value;
     if ($('#temperature-enabled')) this.settings.temperatureEnabled = Boolean($('#temperature-enabled').checked);
-    if ($('#permission-select')) this.settings.permission = $('#permission-select').value;
+    // The permission is saved when it changes (setPermission), never read back from the form.
     await this.persist('settings');
     this.applySettingsToUI();
     this.updateActiveSettingsIndicator();

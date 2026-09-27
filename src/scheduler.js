@@ -1,5 +1,5 @@
 /** ScaleMax IDE: runs enabled automations while this window is open. */
-import { nextRunAt, buildSystemPrompt, requestTemperature } from './domain.mjs';
+import { nextRunAt, buildSystemPrompt, requestTemperature, requestReasoning } from './domain.mjs';
 
 const POLL_MS = 30000;
 const MAX_HISTORY = 10;
@@ -115,6 +115,7 @@ async function runAutomation(app, automation, { manual = false } = {}) {
     };
     const temperature = requestTemperature(app.settings);
     if (temperature !== undefined) payload.temperature = temperature;
+    payload.reasoning = requestReasoning(app.settings);
 
     let result;
     try {

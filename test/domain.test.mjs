@@ -2,15 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildSystemPrompt, searchItems, normalizeAutomations, nextRunAt,
-  normalizeSettings, toTemperature, requestTemperature,
+  normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
-test('system prompt carries the base contract and the ask-first default', () => {
+test('system prompt carries the base contract and the basic-permission default', () => {
   const prompt = buildSystemPrompt({});
   assert.match(prompt, /You are ScaleMax, an assistant/);
   assert.match(prompt, /Working mode/);
-  assert.match(prompt, /Ask-first permission/);
+  assert.match(prompt, /Basic permission/);
   assert.match(prompt, /Never pretend tools executed/);
 });
 
@@ -36,12 +36,12 @@ test('an installed skill contributes its template with the input slot resolved',
 });
 
 test('the user system prompt is included and permissions map to distinct instructions', () => {
-  const prompt = buildSystemPrompt({ systemPrompt: 'Always answer in one line.', permission: 'full' });
+  const prompt = buildSystemPrompt({ systemPrompt: 'Always answer in one line.', permission: 'manual' });
   assert.match(prompt, /User system instructions:\nAlways answer in one line\./);
-  assert.match(prompt, /Full access/);
-  assert.match(buildSystemPrompt({ permission: 'readonly' }), /Read-only permission/);
-  assert.match(buildSystemPrompt({ permission: 'plan' }), /Plan-only permission/);
-  assert.match(buildSystemPrompt({ permission: 'auto-write' }), /Auto-approve file writes/);
+  assert.match(prompt, /Manual permission/);
+  assert.match(buildSystemPrompt({ permission: 'bypass', bypassConsent: true }), /Autonomous mode/);
+  // Bypass without recorded consent is only Basic.
+  assert.match(buildSystemPrompt({ permission: 'bypass' }), /Basic permission/);
 });
 
 test('unknown expert and skill ids are ignored', () => {
@@ -126,12 +126,15 @@ test('legacy automations without day fields are normalised and paused', () => {
 // ---- Settings round-trip (TASK 1) ----
 
 test('normalizeSettings round-trips systemPrompt, temperature and temperatureEnabled', () => {
-  const input = { systemPrompt: 'Answer in French.', temperature: 1.3, temperatureEnabled: true, permission: 'plan', theme: 'system' };
+  const input = { systemPrompt: 'Answer in French.', temperature: 1.3, temperatureEnabled: true, permission: 'manual', theme: 'system', thinking: false, reasoningEffort: 'high' };
   const once = normalizeSettings(input);
   assert.equal(once.systemPrompt, 'Answer in French.');
   assert.equal(once.temperature, 1.3);
   assert.equal(once.temperatureEnabled, true);
   assert.equal(once.theme, 'system');
+  assert.equal(once.permission, 'manual');
+  assert.equal(once.thinking, false);
+  assert.equal(once.reasoningEffort, 'high');
   // Persist + reload through JSON must be lossless.
   assert.deepEqual(normalizeSettings(JSON.parse(JSON.stringify(once))), once);
 });
@@ -256,4 +259,27 @@ test('search includes valid custom experts and skills and skips invalid ones', (
   // Built-in search keeps working without custom catalogs.
   assert.ok(searchItems('security', []).some((item) => item.kind === 'expert'));
   assert.deepEqual(searchItems('bad', [], { experts: 'not a list', skills: null }).filter((item) => item.id === 'bad'), []);
+});
+
+test('permission modes: legacy values migrate, bypass needs recorded consent', () => {
+  assert.equal(normalizeSettings({}).permission, 'basic');
+  for (const [legacy, mode] of [['ask', 'basic'], ['auto-write', 'basic'], ['full', 'basic'], ['readonly', 'manual'], ['plan', 'manual']]) {
+    assert.equal(normalizeSettings({ permission: legacy }).permission, mode, legacy);
+  }
+  const consented = normalizeSettings({ permission: 'bypass', bypassConsent: true });
+  assert.deepEqual([consented.permission, consented.bypassConsent], ['bypass', true]);
+  assert.equal(effectivePermission(consented), 'bypass');
+  const unconsented = normalizeSettings({ permission: 'bypass' });
+  assert.deepEqual([unconsented.permission, unconsented.bypassConsent], ['basic', false]);
+  // Consent never outlives a switch to another mode.
+  assert.equal(normalizeSettings({ permission: 'manual', bypassConsent: true }).bypassConsent, false);
+  assert.equal(effectivePermission({ permission: 'bypass', bypassConsent: false }), 'basic');
+  assert.equal(effectivePermission({ permission: 'nonsense' }), 'basic');
+});
+
+test('reasoning preferences default to thinking on at medium effort', () => {
+  assert.deepEqual(requestReasoning({}), { thinking: true, effort: 'medium' });
+  assert.deepEqual(requestReasoning(normalizeSettings({ thinking: false, reasoningEffort: 'low' })), { thinking: false, effort: 'low' });
+  assert.equal(normalizeSettings({ reasoningEffort: 'max' }).reasoningEffort, 'medium');
+  assert.equal(normalizeSettings({ thinking: 'no' }).thinking, true);
 });

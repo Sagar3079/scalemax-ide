@@ -9,6 +9,8 @@ const DEFAULT_TOOLS = [
   { fn: 'mcp_fake_add', serverId: 'fake', toolName: 'add', readOnly: false },
 ];
 
+const BYPASS = Object.freeze({ permission: 'bypass' });
+
 const INPUT = Object.freeze({
   requestId: 'r1',
   systemPrompt: 'Be helpful.',
@@ -94,7 +96,7 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
     results: { echo: ({ arguments: args }) => ({ isError: false, text: `echo:${args.text}`, contentTypes: ['text'] }) },
   });
   const loop = createToolLoop({ provider, mcp });
-  const result = await loop.send({ ...INPUT }, { permission: 'full' });
+  const result = await loop.send({ ...INPUT }, BYPASS);
   assert.deepEqual(result, {
     text: 'Final answer.',
     model: 'm1',
@@ -102,7 +104,7 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
     toolCalls: [{ server: 'fake', tool: 'echo', ok: true, preview: 'echo:hi' }],
     toolErrors: [{ serverId: 'broken', message: 'Command not found: missing-server' }],
   });
-  assert.deepEqual(mcp.calls.chatTools, [{ readOnlyOnly: false }]);
+  assert.deepEqual(mcp.calls.chatTools, [{}]);
   assert.deepEqual(mcp.calls.callTool, [{ id: 'fake', name: 'echo', arguments: { text: 'hi' } }]);
   assert.equal(provider.calls.send.length, 0);
   const [first, second] = provider.calls.complete;
@@ -121,36 +123,131 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
   ]);
 });
 
-test('readonly permission only exposes and runs read-only tools', async () => {
+function twoCallReply() {
+  return toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"x"}'), toolCall('c2', 'mcp_fake_add', '{"a":1,"b":2}')]);
+}
+
+// Records every approval request and answers from `answers` (in order), or 'deny'.
+function approver(answers = []) {
+  const queue = [...answers];
+  const requests = [];
+  const approve = async (request, context) => {
+    requests.push({ ...request, hasSignal: context?.signal instanceof AbortSignal });
+    return queue.length ? queue.shift() : 'deny';
+  };
+  return { approve, requests };
+}
+
+test('manual permission asks before every tool call; a denial reaches the model', async () => {
+  const provider = fakeProvider([twoCallReply(), textReply('Done.')]);
+  const mcp = fakeMcp();
+  const ask = approver(['once', 'deny']);
+  const result = await createToolLoop({ provider, mcp, approve: ask.approve }).send({ ...INPUT }, { permission: 'manual' });
+  assert.deepEqual(ask.requests, [
+    { requestId: 'r1', serverId: 'fake', toolName: 'echo', readOnly: true, arguments: '{\n  "text": "x"\n}', hasSignal: true },
+    { requestId: 'r1', serverId: 'fake', toolName: 'add', readOnly: false, arguments: '{\n  "a": 1,\n  "b": 2\n}', hasSignal: true },
+  ]);
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo']);
+  const [echo, add] = toolMessages(provider.calls.complete[1]).map((message) => message.content);
+  assert.equal(echo, 'ok:echo');
+  assert.match(add, /^Error: the user denied this tool call/);
+  assert.deepEqual(result.toolCalls.map((call) => call.ok), [true, false]);
+  assert.equal(result.text, 'Done.');
+});
+
+test('basic permission runs read-only tools and asks only for the rest', async () => {
+  const provider = fakeProvider([twoCallReply(), textReply('Done.')]);
+  const mcp = fakeMcp();
+  const ask = approver(['once']);
+  await createToolLoop({ provider, mcp, approve: ask.approve }).send({ ...INPUT }, { permission: 'basic' });
+  assert.deepEqual(ask.requests.map((request) => request.toolName), ['add']);
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo', 'add']);
+});
+
+test('bypass runs everything without asking; unknown modes are treated as manual', async () => {
+  const ask = approver([]);
+  const mcp = fakeMcp();
+  await createToolLoop({ provider: fakeProvider([twoCallReply(), textReply('Done.')]), mcp, approve: ask.approve })
+    .send({ ...INPUT }, { permission: 'bypass' });
+  assert.equal(ask.requests.length, 0);
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo', 'add']);
+
+  for (const permission of [undefined, 'full', 'plan']) {
+    const strict = approver([]);
+    const other = fakeMcp();
+    await createToolLoop({ provider: fakeProvider([twoCallReply(), textReply('Done.')]), mcp: other, approve: strict.approve })
+      .send({ ...INPUT }, { permission });
+    assert.equal(strict.requests.length, 2, `permission ${permission}`);
+    assert.equal(other.calls.callTool.length, 0);
+  }
+});
+
+test('"allow all in this reply" approves the remaining calls of that reply only', async () => {
   const provider = fakeProvider([
-    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"x"}'), toolCall('c2', 'mcp_fake_add', '{"a":1,"b":2}')]),
+    twoCallReply(),
+    toolReply([toolCall('c3', 'mcp_fake_add', '{"a":3,"b":4}')]),
     textReply('Done.'),
   ]);
   const mcp = fakeMcp();
-  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT }, { permission: 'readonly' });
-  assert.deepEqual(mcp.calls.chatTools, [{ readOnlyOnly: true }]);
-  assert.deepEqual(provider.calls.complete[0].tools.map((tool) => tool.function.name), ['mcp_fake_echo']);
-  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo']);
-  assert.deepEqual(toolMessages(provider.calls.complete[1]).map((message) => message.content), ['ok:echo', 'Error: unknown tool']);
-  assert.deepEqual(result.toolCalls.map((call) => call.ok), [true, false]);
-
-  // Defense in depth: a catalog that leaks a writable tool is still refused.
-  const leaky = fakeMcp({ exposeAll: true });
-  const again = fakeProvider([toolReply([toolCall('c3', 'mcp_fake_add')]), textReply('Done.')]);
-  await createToolLoop({ provider: again, mcp: leaky }).send({ ...INPUT }, { permission: 'readonly' });
-  assert.equal(leaky.calls.callTool.length, 0);
-  assert.equal(toolMessages(again.calls.complete[1])[0].content, 'Error: this tool is not available in read-only mode');
+  const ask = approver(['request']);
+  const loop = createToolLoop({ provider, mcp, approve: ask.approve });
+  await loop.send({ ...INPUT }, { permission: 'manual' });
+  assert.equal(ask.requests.length, 1);
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo', 'add', 'add']);
+  // The next reply starts asking again.
+  const later = approver([]);
+  const next = fakeMcp();
+  await createToolLoop({ provider: fakeProvider([twoCallReply(), textReply('Done.')]), mcp: next, approve: later.approve })
+    .send({ ...INPUT, requestId: 'r2' }, { permission: 'manual' });
+  assert.equal(later.requests.length, 2);
 });
 
-test('plan permission goes straight to provider.send without tools', async () => {
-  const provider = fakeProvider();
+test('without an approver, calls that need approval are refused; a failing approver denies', async () => {
+  const provider = fakeProvider([twoCallReply(), textReply('Done.')]);
   const mcp = fakeMcp();
-  const input = { ...INPUT };
-  const result = await createToolLoop({ provider, mcp }).send(input, { permission: 'plan' });
-  assert.deepEqual(result, { text: 'plain reply', model: 'm-plain' });
-  assert.equal(provider.calls.send[0], input);
-  assert.equal(mcp.calls.chatTools.length, 0);
-  assert.equal(provider.calls.complete.length, 0);
+  await createToolLoop({ provider, mcp }).send({ ...INPUT }, { permission: 'basic' });
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo']);
+  assert.match(toolMessages(provider.calls.complete[1])[1].content, /needs the user's approval/);
+
+  const broken = fakeMcp();
+  await createToolLoop({
+    provider: fakeProvider([twoCallReply(), textReply('Done.')]),
+    mcp: broken,
+    approve: async () => { throw new Error('window gone'); },
+  }).send({ ...INPUT }, { permission: 'manual' });
+  assert.equal(broken.calls.callTool.length, 0);
+});
+
+test('cancel while an approval is pending aborts its signal and rejects the reply', async () => {
+  let seenSignal = null;
+  const provider = fakeProvider([twoCallReply(), textReply('never')]);
+  const mcp = fakeMcp();
+  const loop = createToolLoop({
+    provider,
+    mcp,
+    approve: (_request, { signal }) => {
+      seenSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  const pending = loop.send({ ...INPUT, requestId: 'r-wait' }, { permission: 'manual' });
+  while (!seenSignal) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(loop.cancel('r-wait'), true);
+  assert.equal(seenSignal.aborted, true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
+  assert.equal(mcp.calls.callTool.length, 0);
+  assert.equal(provider.calls.complete.length, 1);
+});
+
+test('reasoning preferences reach every model call and thinking text is returned', async () => {
+  const provider = fakeProvider([
+    toolReply([toolCall('c1', 'mcp_fake_echo')], { reasoning: 'Need the echo tool first.' }),
+    textReply('Done.', { reasoning: 'Echo answered.' }),
+  ]);
+  const reasoning = { thinking: true, effort: 'high' };
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT, reasoning }, BYPASS);
+  assert.deepEqual(provider.calls.complete.map((call) => call.reasoning), [reasoning, reasoning]);
+  assert.equal(result.reasoning, 'Need the echo tool first.\n\nEcho answered.');
 });
 
 test('falls back to provider.send when no tools are available', async () => {
@@ -163,14 +260,14 @@ test('falls back to provider.send when no tools are available', async () => {
 
   // Server failures are still reported when they left no tools behind.
   const failing = fakeMcp({ tools: [], errors: [{ serverId: 'broken', message: 'Command not found: x' }] });
-  const withErrors = await createToolLoop({ provider: fakeProvider(), mcp: failing }).send({ ...INPUT });
+  const withErrors = await createToolLoop({ provider: fakeProvider(), mcp: failing }).send({ ...INPUT }, BYPASS);
   assert.deepEqual(withErrors, {
     text: 'plain reply', model: 'm-plain', toolErrors: [{ serverId: 'broken', message: 'Command not found: x' }],
   });
 
   // A broken MCP manager does not break plain chat either.
   const broken = { chatTools: async () => { throw new Error('state unreadable'); }, callTool: async () => ({}) };
-  const fallback = await createToolLoop({ provider: fakeProvider(), mcp: broken }).send({ ...INPUT });
+  const fallback = await createToolLoop({ provider: fakeProvider(), mcp: broken }).send({ ...INPUT }, BYPASS);
   assert.deepEqual(fallback.toolErrors, [{ serverId: null, message: 'state unreadable' }]);
 });
 
@@ -179,7 +276,7 @@ test('stops after maxRounds with one final call without tools', async () => {
     (request) => (request.tools.length ? toolReply([toolCall(`c${request.messages.length}`, 'mcp_fake_echo')]) : textReply('Wrapped up.')),
   ]);
   const mcp = fakeMcp();
-  const result = await createToolLoop({ provider, mcp, maxRounds: 2 }).send({ ...INPUT });
+  const result = await createToolLoop({ provider, mcp, maxRounds: 2 }).send({ ...INPUT }, BYPASS);
   assert.equal(provider.calls.complete.length, 3);
   assert.equal(provider.calls.complete[0].tools.length, 2);
   assert.equal(provider.calls.complete[1].tools.length, 2);
@@ -190,7 +287,7 @@ test('stops after maxRounds with one final call without tools', async () => {
 
   // A final reply without text falls back to a fixed message.
   const silent = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_echo')])]);
-  const fallback = await createToolLoop({ provider: silent, mcp: fakeMcp(), maxRounds: 1 }).send({ ...INPUT });
+  const fallback = await createToolLoop({ provider: silent, mcp: fakeMcp(), maxRounds: 1 }).send({ ...INPUT }, BYPASS);
   assert.equal(fallback.text, 'The tool-use limit was reached before the model produced a final answer.');
 });
 
@@ -205,7 +302,7 @@ test('invalid JSON arguments and unknown tools become error results', async () =
     textReply('Recovered.'),
   ]);
   const mcp = fakeMcp();
-  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT });
+  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
   assert.equal(result.text, 'Recovered.');
   const contents = toolMessages(provider.calls.complete[1]).map((message) => [message.tool_call_id, message.content]);
   assert.deepEqual(contents, [
@@ -236,7 +333,7 @@ test('trailing junk after a valid argument object is tolerated, other junk is no
     textReply('Done.'),
   ]);
   const mcp = fakeMcp();
-  await createToolLoop({ provider, mcp }).send({ ...INPUT });
+  await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
   assert.deepEqual(mcp.calls.callTool.map((call) => call.arguments), [{}, { text: 'a}b"c' }]);
   const contents = toolMessages(provider.calls.complete[1]).map((message) => message.content);
   assert.deepEqual(contents.slice(2), ['Error: invalid JSON arguments', 'Error: invalid JSON arguments']);
@@ -256,7 +353,7 @@ test('MCP failures, isError results and oversized output are reported to the mod
       dump: () => ({ isError: false, text: 'z'.repeat(100 * 1024), contentTypes: ['text'] }),
     },
   });
-  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT });
+  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
   const [echo, add, dump] = toolMessages(provider.calls.complete[1]).map((message) => message.content);
   assert.equal(echo, 'Error: MCP server process exited with code 1.');
   assert.equal(add, 'Error: a must be a number');
@@ -272,7 +369,7 @@ test('runs at most 8 tool calls per round but answers every call id', async () =
   const calls = Array.from({ length: 10 }, (_, index) => toolCall(`c${index}`, 'mcp_fake_add', '{"a":1,"b":2}'));
   const provider = fakeProvider([toolReply(calls), textReply('Done.')]);
   const mcp = fakeMcp({ results: { add: () => ({ isError: false, text: '', structured: { sum: 3 }, contentTypes: [] }) } });
-  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT });
+  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
   assert.equal(mcp.calls.callTool.length, 8);
   const messages = toolMessages(provider.calls.complete[1]);
   assert.deepEqual(messages.map((message) => message.tool_call_id), calls.map((call) => call.id));
@@ -310,7 +407,7 @@ test('cancel during a slow tool call rejects without another round', async () =>
   const provider = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_echo'), toolCall('c2', 'mcp_fake_add')]), textReply('never')]);
   const mcp = fakeMcp({ results: { echo: async () => { await gate; return { isError: false, text: 'late' }; } } });
   const loop = createToolLoop({ provider, mcp });
-  const pending = loop.send({ ...INPUT, requestId: 'r-tool' });
+  const pending = loop.send({ ...INPUT, requestId: 'r-tool' }, BYPASS);
   while (mcp.calls.callTool.length === 0) await new Promise((resolve) => setImmediate(resolve));
   loop.cancel('r-tool');
   await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
@@ -376,7 +473,7 @@ test('integrates provider.complete with a real stdio MCP server', async (t) => {
   t.after(() => mcp.closeAll());
   mcp.save({ name: 'Fake', transport: 'stdio', command: process.execPath, args: [path.join(__dirname, 'fixtures', 'fake-mcp-server.cjs')] });
 
-  const result = await createToolLoop({ provider, mcp }).send({ requestId: 'int-1', messages: [{ role: 'user', content: 'Add 2 and 40' }] });
+  const result = await createToolLoop({ provider, mcp }).send({ requestId: 'int-1', messages: [{ role: 'user', content: 'Add 2 and 40' }] }, BYPASS);
   assert.equal(result.text, 'The sum is 42.');
   assert.deepEqual(result.toolCalls, [{ server: 'fake', tool: 'add', ok: true, preview: '42' }]);
   assert.deepEqual(result.toolErrors, []);
