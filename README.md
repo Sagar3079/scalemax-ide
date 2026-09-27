@@ -48,6 +48,8 @@ npm install
 npm start
 ```
 
+On macOS this starts a branded copy of the Electron runtime (`node_modules/.scalemax-dev/ScaleMax.app`, created on first run in about a second), so the Dock and the menu bar show ScaleMax and its icon instead of Electron.
+
 ### Electron runtime missing after installation
 
 If npm reports `install scripts not yet covered by allowScripts`, it skipped Electron's `postinstall` download. The JavaScript package can exist while its desktop runtime and `path.txt` are missing. Do not delete the dependency tree or disable install-script protection globally.
@@ -154,7 +156,7 @@ scalemax-ide/
 - **Theme** — switch between the light and dark token sets in **Preferences & about**, or edit the custom properties in `src/sm-tokens.css`
 - **Accent color** — edit `--sm-brand-primary` in `src/sm-tokens.css`; primary accents, badges and brand marks derive from it
 - **Brand name** — update the `ScaleMax` strings in `src/index.html` (title bar, sidebar, headings) and the `productName` field in `package.json`
-- **App icon** — replace the files in `assets/icons/`, then re-run `npm run build`
+- **App icon** — edit the SVG sources in `assets/icons/` (`scalemax-icon.svg`, `scalemax-icon-small.svg` for 16/32 px, `scalemax-mark.svg` for the sidebar), run `npm run icons` to re-render `icon.png` and `icon.icns`, then `npm run build`
 - **Catalog content** — edit the arrays in `src/data.js` (`skill-catalog.js` and `connector-catalog.js` hold the full libraries)
 
 ## License

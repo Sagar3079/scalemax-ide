@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- ScaleMax app icon, simplified for 16 and 32 px: bigger head, no mic, no shoulders. -->
+  <defs>
+    <linearGradient id="tile" x1="0.12" y1="0" x2="0.88" y2="1">
+      <stop offset="0" stop-color="#3FEBC5"/>
+      <stop offset="0.5" stop-color="#00C29A"/>
+      <stop offset="1" stop-color="#008A72"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <path d="M512 330V250" stroke="#0B2A24" stroke-width="48" stroke-linecap="round"/>
+  <path d="M512 142 568 174v64l-56 32-56-32v-64Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="16" stroke-linejoin="round"/>
+  <rect x="166" y="452" width="96" height="236" rx="48" fill="#0B2A24"/>
+  <rect x="762" y="452" width="96" height="236" rx="48" fill="#0B2A24"/>
+  <rect x="226" y="318" width="572" height="520" rx="200" fill="#FFFFFF"/>
+  <rect x="290" y="428" width="444" height="290" rx="145" fill="#0B2A24"/>
+  <g fill="#7CFFE0">
+    <rect x="390" y="490" width="84" height="134" rx="42"/>
+    <rect x="550" y="490" width="84" height="134" rx="42"/>
+  </g>
+  <path d="M458 662q54 30 108 0" fill="none" stroke="#7CFFE0" stroke-width="24" stroke-linecap="round"/>
+</svg>

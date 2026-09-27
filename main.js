@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell, clipboard, protocol } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol } = require('electron');
 const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
 const path = require('path');
@@ -12,6 +12,7 @@ const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
 const { createMediaStudio } = require('./lib/media.cjs');
+const { applyBranding, ICON_PATH } = require('./lib/app-branding.cjs');
 
 // Generated images and videos are served to the renderer from the app's media folder through
 // scalemax-media://<id>/ (registered before ready so <video> can stream and seek).
@@ -70,6 +71,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 700,
     title: 'ScaleMax',
+    // Windows and Linux window icon; macOS uses the bundle / Dock icon.
+    icon: ICON_PATH,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#fafafa',
     show: false,
@@ -601,6 +604,8 @@ for (const [channel, run] of Object.entries(mediaChannels)) {
 }
 
 app.whenReady().then(() => {
+  // "ScaleMax" menu labels, About panel and Dock icon (app.name itself stays the package name).
+  applyBranding({ app, Menu, shell });
   protocol.handle('scalemax-media', serveMedia);
   // safeStorage is available for encrypting secrets at rest in future revisions.
   if (typeof safeStorage?.isEncryptionAvailable === 'function') {

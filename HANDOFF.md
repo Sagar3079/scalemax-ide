@@ -20,13 +20,14 @@ Complete context for an AI or engineer taking over this project. Everything belo
 git clone https://github.com/Sagar3079/scalemax-ide.git && cd scalemax-ide
 npm install                # devDeps only (electron, electron-builder)
 
-npm start                  # runs prestart runtime check, then electron .
-npm test                   # node --test test/*.test.cjs test/*.test.mjs → 188 unit tests
+npm start                  # runtime check, then the branded dev runtime (build/dev-app.cjs; Dock/menu bar say ScaleMax)
+npm test                   # node --test test/*.test.cjs test/*.test.mjs → 249 unit tests
+npm run icons              # re-render icon.png + icon.icns from assets/icons/*.svg
 npm run build              # electron-builder --mac → dist/ScaleMax-1.0.0-arm64.dmg + .zip
 
 # Hermetic end-to-end smoke check (boots the real app, isolated userData):
-SCALEMAX_SMOKE=1 npm start                     # 42 checks
-# With live provider verification (discover → save → chat → clear): 47 checks
+SCALEMAX_SMOKE=1 npm start                     # 48 checks
+# With live provider verification (discover → save → chat → clear): 53 checks
 SCALEMAX_SMOKE=1 SCALEMAX_LIVE_KEY='sm_live_…' SCALEMAX_LIVE_MODEL='deepseek-v4-flash' npm start
 # Prints "SMOKE_RESULT {ok, checks, …}" and exits 0/1.
 
@@ -149,7 +150,9 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 
 ## 5. Design system provenance
 
-The palette, tokens and shell metrics come from a shipped production renderer bundle: 38px titlebar, 220px sidebar, 22px statusbar, 8px control radius; brand `--sm-palette-brand-8: #00C29A` (light) / `#4cf0ce` (dark); Assistant typeface; near-black primary buttons. App logo = ScaleMax hexagon mark (`assets/icons/scalemax-mark.svg`, icons regenerated in session 2).
+The palette, tokens and shell metrics come from a shipped production renderer bundle: 38px titlebar, 220px sidebar, 22px statusbar, 8px control radius; brand `--sm-palette-brand-8: #00C29A` (light) / `#4cf0ce` (dark); Assistant typeface; near-black primary buttons. **Logo** = the ScaleMax agent, drawn for this app (2026-09-27): a friendly robot head with a dark display visor (mint eyes, smile, cheeks), a headset with microphone and an antenna tipped with the brand hexagon, on a brand-green macOS tile. Sources in `assets/icons/`: `scalemax-icon.svg` (1024 px app icon), `scalemax-icon-small.svg` (simplified drawing used for the 16 and 32 px icon sizes), `scalemax-mark.svg` (single-colour `currentColor` mark, inlined twice in `src/index.html`: sidebar brand tile and the About card; `test/branding.test.cjs` checks they match). `npm run icons` (`build/render-icons.cjs`, Electron's own Chromium + `iconutil`) renders `icon.png` (1024, Dock/window icon) and `icon.icns` (16–1024).
+
+**App name.** Everything the OS shows says ScaleMax: packaged bundle `CFBundleName`/`CFBundleDisplayName` (electron-builder `productName`), and `lib/app-branding.cjs` sets the app menu (About / Hide / Quit ScaleMax, Help → ScaleMax Website), the About panel and, for unpackaged runs, the Dock icon. `app.name` deliberately stays the package name `scalemax-ide`: Electron derives the userData folder and the keychain item protecting saved keys (`scalemax-ide Safe Storage`) from it, so renaming it would orphan existing keys and settings. In development `npm start` launches `node_modules/.scalemax-dev/ScaleMax.app` (`build/dev-app.cjs`), an APFS clone of Electron.app with only Info.plist (name ScaleMax, id `com.scalemax.ide.dev`) and the bundle icon changed. The Electron executable is not re-signed, so the copy keeps Electron's code identity (cdhash) and the keychain trusts it without a new prompt (verified: save + decrypt across two launches). The copy is rebuilt automatically when Electron or `icon.icns` changes; if the code identity ever differed it falls back to plain Electron.
 
 **Gotcha:** `--sm-bg-*` tokens are component-scoped. Use the shell aliases `--sm-app-page/surface/surface-hover/chrome/sidebar/border/muted` for shell surfaces.
 
@@ -174,11 +177,11 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 
 ## 7. Verification (how to prove things work)
 
-**Unit** — `npm test` → **241 tests**: connectors 45, provider 34, mcp 32, domain 31, oauth 26, tool-loop 19, cli-auth 8, media 6, mcp-presets 2, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
+**Unit** — `npm test` → **249 tests**: connectors 45, provider 34, mcp 32, domain 31, oauth 26, tool-loop 19, cli-auth 8, branding 8, media 6, mcp-presets 2, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
 
 **Smoke** — `SCALEMAX_SMOKE=1 npm start` → **48 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (15 provider, 6 media, 3 approvals, 8 workspace, 2 dialog, 15 connector, 7 mcp), composer controls (icon attach, permission chip defaulting to Basic, model button, menus, dialogs), Manual-mode approval end to end (prompt appears in the window → Allow runs the tool; Deny blocks it), reserved keys incl. `providerProfiles`/`connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
 
-**UI** — Playwright 1.60 is installed outside the repo at `~/Desktop/node_modules/playwright` (not a project dep). Launch pattern: `_electron.launch({ args: ['.'], cwd: repo, executablePath: '<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', env: { ...process.env, SCALEMAX_USER_DATA: '/private/tmp/…' } })`, then wait for `document.body.dataset.appReady === 'true'`. Payload capture: `const { default: app } = await import('./app.js')` in `win.evaluate`, wrap `app.getProviderBridge()`.
+**UI** — Playwright 1.60 is installed outside the repo at `~/Desktop/node_modules/playwright` (not a project dep). Launch pattern: `_electron.launch({ args: ['.'], cwd: repo, executablePath: <output of node build/dev-app.cjs --path> (or '<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'), env: { ...process.env, SCALEMAX_USER_DATA: '/private/tmp/…' } })`, then wait for `document.body.dataset.appReady === 'true'`. Payload capture: `const { default: app } = await import('./app.js')` in `win.evaluate`, wrap `app.getProviderBridge()`.
 
 **Verified in session 3 (all green):** 187/187 unit · 42/42 smoke · 47/47 live smoke · Playwright click-through of every tab in the real app (light + dark) with the live key: provider test/save via UI, system prompt + temperature reach the payload and shape the live reply, expert persona and skill Run on a real file (live replies), automation Run now (live), custom expert/skill create/edit/delete/persist/search, reduced-motion, OAuth dialog states for GitHub/OneDrive/Intercom, live GitHub token rejection, MCP stdio tool call through the live model, remote DeepWiki MCP over HTTP, Workspace tabs/save/filter/Git/diff/terminal/splitters, highlight overlay alignment probe · browser preview (web shim) 0 errors · 0 console errors in the app.
 
@@ -259,6 +262,8 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 11. The OAuth callback port is fixed at 53682 (registered redirect URIs depend on it; one-click sign-ins register `http://127.0.0.1:53682/callback` too, so only one browser sign-in can run at a time).
 15. `lib/mcp-directory.cjs` (main) and `src/mcp-directory.js` (renderer) must stay in sync — `test/mcp-directory.test.mjs` enforces it. Re-verify a listing live before adding it: it must answer 401, publish resource + authorization-server metadata with a `registration_endpoint` and PKCE S256, accept the registration, and serve a real consent page for the resulting authorize URL.
 16. `lib/state.cjs` refuses one object stored under two keys ("cycles or shared objects"): the active provider record is copied (`structuredClone`) into `providerProfiles`. The provider tests' memory store enforces the same rule.
+18. Scrollbars are styled once, globally, in `styles.css` §01 (thin rounded thumb, transparent track, `--sm-scrollbar-thumb`). A second `::-webkit-scrollbar` block later in the cascade brought back the square grey classic bars users with a mouse see. Elements with the standard `scrollbar-width` property ignore these pseudo-elements.
+19. Don't call `app.setName()` or rename the package: see §5 "App name" (keychain + userData).
 17. Image/video generation costs money: tests use a fake provider; a live check should generate at most one image and one video with the cheapest options (low quality, 480p, 1–2 s).
 12. `lib/oauth-catalog.cjs` (main) and `src/oauth-catalog.js` (renderer) must stay in sync — `test/oauth-catalog.test.mjs` enforces it.
 13. Workspace element ids used by app.js/terminal.js/smoke-check must stay: `workspace-open/refresh/path/status`, `file-tree`, `editor-tab/title/path/save/status/input/gutter`, `git-refresh/status/files/diff`, `terminal-form/command/run/cancel/output`.
@@ -297,6 +302,8 @@ Then **one-click connector sign-in** (users no longer have to register an OAuth 
 - GitHub device flow: the owner's OAuth app (`ScaleMax IDE (local)`) currently answers `device_flow_disabled`.
 
 Then (2026-09-27): **image & video generation** (`lib/media.cjs`, `src/media-ui.js`, `scalemax-media:` protocol; model menu Chat / Image / Video tabs; per-model options with list prices; inline results with Download / Edit / Animate; one image and one video generated live, see §4), **several saved providers** (`providerProfiles`, Assistant → Saved providers, model menu grouped by provider), the **folder chip** next to the permission chip, **MCP presets** (29 servers, all connected live) and **Add by URL** with automatic sign-in, and the removal of per-model enabling (every model of the key is available immediately). 241 unit, 48 smoke, 53 live smoke.
+
+Then: **ScaleMax name and agent logo** (§5): new app icon, sidebar/About mark, ScaleMax menus and About panel, branded dev runtime so the Dock and menu bar say ScaleMax in `npm start` too; slim scrollbars (the classic grey ones looked like stray dividers). Verified in the real dev app and the rebuilt dmg (bundle name, icon, menus, running-app name and icon via LaunchServices); a real screenshot of the Dock/menu bar was not possible from the test harness (no Screen Recording permission). 249 unit, 48 smoke, 53 live smoke.
 
 ### Suggested next session
 

@@ -9,7 +9,8 @@
     "prestart": "node build/electron-runtime.cjs --check",
     "repair:electron": "node build/electron-runtime.cjs --repair",
     "check:electron": "node build/electron-runtime.cjs --check",
-    "start": "electron .",
+    "start": "node build/dev-app.cjs --run",
+    "icons": "electron build/render-icons.cjs",
     "test": "node --test test/*.test.cjs test/*.test.mjs",
     "build": "electron-builder --mac",
     "build:dir": "electron-builder --mac --dir"
