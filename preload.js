@@ -66,7 +66,20 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * Reloads the model list (with chat/reasoning capabilities) using the stored key.
      * @returns {Promise<{ok: boolean, data?: object, error?: object}>} provider metadata
      */
-    refreshModels: () => ipcRenderer.invoke('provider:refresh-models')
+    refreshModels: () => ipcRenderer.invoke('provider:refresh-models'),
+
+    /**
+     * What a reply in progress is doing: the model is thinking, a tool runs, or a tool call waits
+     * for approval. Events carry the requestId of the send they belong to.
+     * @param {(progress: {requestId: string, phase: 'thinking'|'tool'|'approval', serverId?: string, toolName?: string}) => void} callback
+     * @returns {() => void} unsubscribe
+     */
+    onProgress: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, progress) => callback(progress);
+      ipcRenderer.on('provider:progress', listener);
+      return () => ipcRenderer.removeListener('provider:progress', listener);
+    }
   },
 
   approvals: {

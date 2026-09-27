@@ -68,6 +68,12 @@ function fakeMcp({ tools = DEFAULT_TOOLS, errors = [], results = {}, exposeAll =
   };
 }
 
+function withoutTiming(result) {
+  const { thinkingMs, ...rest } = result;
+  assert.ok(Number.isSafeInteger(thinkingMs) && thinkingMs >= 0, 'thinkingMs is reported');
+  return rest;
+}
+
 function toolCall(id, name, args = '{}') {
   return { id, name, arguments: args };
 }
@@ -96,7 +102,7 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
     results: { echo: ({ arguments: args }) => ({ isError: false, text: `echo:${args.text}`, contentTypes: ['text'] }) },
   });
   const loop = createToolLoop({ provider, mcp });
-  const result = await loop.send({ ...INPUT }, BYPASS);
+  const result = withoutTiming(await loop.send({ ...INPUT }, BYPASS));
   assert.deepEqual(result, {
     text: 'Final answer.',
     model: 'm1',
@@ -254,14 +260,14 @@ test('falls back to provider.send when no tools are available', async () => {
   const provider = fakeProvider();
   const input = { ...INPUT };
   const result = await createToolLoop({ provider, mcp: fakeMcp({ tools: [] }) }).send(input, {});
-  assert.deepEqual(result, { text: 'plain reply', model: 'm-plain' });
+  assert.deepEqual(withoutTiming(result), { text: 'plain reply', model: 'm-plain' });
   assert.equal(provider.calls.send[0], input);
   assert.equal(provider.calls.complete.length, 0);
 
   // Server failures are still reported when they left no tools behind.
   const failing = fakeMcp({ tools: [], errors: [{ serverId: 'broken', message: 'Command not found: x' }] });
   const withErrors = await createToolLoop({ provider: fakeProvider(), mcp: failing }).send({ ...INPUT }, BYPASS);
-  assert.deepEqual(withErrors, {
+  assert.deepEqual(withoutTiming(withErrors), {
     text: 'plain reply', model: 'm-plain', toolErrors: [{ serverId: 'broken', message: 'Command not found: x' }],
   });
 
@@ -481,4 +487,25 @@ test('integrates provider.complete with a real stdio MCP server', async (t) => {
   assert.equal(bodies[0].tool_choice, 'auto');
   assert.deepEqual(bodies[1].messages.at(-1), { role: 'tool', tool_call_id: 'call_1', content: '42' });
   assert.equal(JSON.stringify(state).includes('mcpServers'), true);
+});
+
+test('progress events follow the reply: thinking, approval, tool, thinking', async () => {
+  const provider = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_add', '{"a":1,"b":2}')]), textReply('Done.')]);
+  const events = [];
+  const result = await createToolLoop({ provider, mcp: fakeMcp(), approve: async () => 'once' })
+    .send({ ...INPUT, requestId: 'r-progress' }, { permission: 'manual', onProgress: (event) => events.push(event) });
+  assert.deepEqual(events, [
+    { requestId: 'r-progress', phase: 'thinking' },
+    { requestId: 'r-progress', phase: 'approval', serverId: 'fake', toolName: 'add' },
+    { requestId: 'r-progress', phase: 'tool', serverId: 'fake', toolName: 'add' },
+    { requestId: 'r-progress', phase: 'thinking' },
+  ]);
+  assert.ok(Number.isSafeInteger(result.thinkingMs));
+
+  // A throwing observer never breaks the reply; plain sends report thinking too.
+  const plain = [];
+  const reply = await createToolLoop({ provider: fakeProvider(), mcp: fakeMcp({ tools: [] }) })
+    .send({ ...INPUT, requestId: 'r-plain' }, { onProgress: (event) => { plain.push(event); throw new Error('observer'); } });
+  assert.equal(reply.text, 'plain reply');
+  assert.deepEqual(plain, [{ requestId: 'r-plain', phase: 'thinking' }]);
 });

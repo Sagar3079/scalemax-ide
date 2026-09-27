@@ -131,7 +131,7 @@ async function run(win) {
       return {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
-        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels'].filter((m) => typeof api.provider?.[m] === 'function'),
+        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels','onProgress'].filter((m) => typeof api.provider?.[m] === 'function'),
         workspaceMethods: ['select','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
@@ -390,7 +390,7 @@ async function run(win) {
   const checks = probe ? {
     hasBridge: probe.hasBridge,
     reservedKeysHidden: probe.reservedHidden,
-    providerMethods: probe.providerMethods.length === 9,
+    providerMethods: probe.providerMethods.length === 10,
     approvalApi: probe.approvalMethods.length === 3,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',

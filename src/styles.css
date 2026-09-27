@@ -1403,6 +1403,23 @@ input[type="range"] {
   width: 340px;
 }
 
+/* Only the model list scrolls; the title and the thinking/reasoning controls stay in view. */
+.model-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.model-menu:popover-open .model-menu-list {
+  flex: 1 1 auto;
+  min-height: 72px;
+  overflow-y: auto;
+}
+
+.model-menu:popover-open .model-menu-section {
+  flex-shrink: 0;
+}
+
 .composer-menu-title {
   margin: 4px 8px 6px;
   font-size: 11px;
@@ -1565,6 +1582,83 @@ input[type="range"] {
   .switch-thumb {
     transition: none;
   }
+}
+
+.model-menu-group {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sm-color-border-tertiary);
+}
+
+.model-menu-option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.model-menu-option:disabled:hover {
+  background: none;
+}
+
+/* Keyboard focus inside the menus: a quiet brand ring instead of the global black outline. */
+.composer-menu-option:focus-visible,
+.model-menu-option:focus-visible,
+.segmented-option:focus-visible,
+.switch:focus-visible {
+  outline: 2px solid var(--sm-palette-brand-8);
+  outline-offset: -2px;
+}
+
+/* A reply in progress: animated dots, what it is doing, elapsed time. */
+.pending-reply-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sm-text-medium);
+  font-size: 13px;
+}
+
+.pending-reply-time {
+  color: var(--sm-text-weak);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sm-palette-brand-8);
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinking-pulse {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+.msg-thought {
+  font-size: 12px;
+  color: var(--sm-text-weak);
 }
 
 /* The model's thinking, folded above an answer. */

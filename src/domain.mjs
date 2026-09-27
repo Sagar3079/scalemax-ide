@@ -47,6 +47,7 @@ export function requestReasoning(settings) {
 const MAX_PROMPT = 32000;
 const MAX_TITLE = 200;
 const MAX_MESSAGE = 100000;
+const MAX_REASONING = 65536;
 const MAX_ERROR = 2000;
 const MAX_HISTORY = 10;
 const MAX_PREVIEW = 400;
@@ -138,11 +139,19 @@ export function normalizeTasks(value, now = Date.now()) {
       for (const message of task.messages) {
         if (!isRecord(message) || !['user', 'assistant'].includes(own(message, 'role'))
           || typeof own(message, 'text') !== 'string') continue;
-        messages.push({
+        const entry = {
           role: message.role,
           text: boundedText(message.text, MAX_MESSAGE),
           time: timestamp(own(message, 'time'), fallbackTime),
-        });
+        };
+        // How long the model thought (and any thinking text it returned) survive a reload.
+        const thinkingMs = own(message, 'thinkingMs');
+        if (message.role === 'assistant' && Number.isSafeInteger(thinkingMs) && thinkingMs >= 0) entry.thinkingMs = thinkingMs;
+        const reasoning = own(message, 'reasoning');
+        if (message.role === 'assistant' && typeof reasoning === 'string' && reasoning.trim()) {
+          entry.reasoning = boundedText(reasoning, MAX_REASONING);
+        }
+        messages.push(entry);
       }
     }
     const createdAt = timestamp(own(task, 'createdAt'), fallbackTime);

@@ -198,7 +198,7 @@ test('discover picks the ScaleMax endpoint that authenticates the key', async ()
   assert.equal(result.kind, 'scalemax');
   assert.equal(result.baseUrl, 'https://api.scalemax.pro/token/v1');
   // No capabilities in the response: every capability is unknown (null).
-  const unknown = { chat: null, tools: null, reasoning: null, effortLevels: [], defaultEffort: null, effortLocked: false };
+  const unknown = { chat: null, tools: null, reasoning: null, effortLevels: [], defaultEffort: null, effortLocked: false, output: null };
   assert.deepEqual(result.models, [
     { id: 'gpt-5.5', displayName: 'GPT-5.5', available: true, ...unknown },
     { id: 'claude-sonnet-5[1m]', displayName: 'Claude Sonnet 5', available: false, ...unknown },
@@ -491,13 +491,14 @@ test('the catalog keeps chat, tools and reasoning capabilities', async () => {
   const byId = Object.fromEntries(found.models.map((model) => [model.id, model]));
   assert.deepEqual(byId['deepseek-v4-flash'], {
     id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', available: true,
-    chat: true, tools: true, reasoning: true, effortLevels: [], defaultEffort: null, effortLocked: false,
+    chat: true, tools: true, reasoning: true, effortLevels: [], defaultEffort: null, effortLocked: false, output: null,
   });
   assert.deepEqual(byId['claude-sonnet-4-6[1m]'].effortLevels, ['low']);
   assert.equal(byId['claude-sonnet-4-6[1m]'].effortLocked, true);
   assert.equal(byId['claude-sonnet-4-6[1m]'].defaultEffort, 'low');
   assert.equal(byId['space-bunny'].reasoning, false);
   assert.equal(byId['flux-2-pro'].chat, false);
+  assert.equal(byId['flux-2-pro'].output, 'image');
 });
 
 test('reasoning settings are sent only to reasoning models, adjusted to what they allow', async () => {

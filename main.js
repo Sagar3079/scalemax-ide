@@ -333,8 +333,14 @@ const providerChannels = {
   'provider:test': () => provider.test(),
   'provider:discover': (_event, input) => provider.discover(input),
   // An unconfigured provider fails fast without starting any MCP server.
-  'provider:send': (_event, input) => (provider.get().configured
-    ? toolLoop.send(input, { permission: chatPermission() })
+  // Progress (thinking / running a tool / waiting for approval) goes to the window that asked.
+  'provider:send': (event, input) => (provider.get().configured
+    ? toolLoop.send(input, {
+      permission: chatPermission(),
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);
+      }
+    })
     : provider.send(input)),
   'provider:cancel': (_event, id) => toolLoop.cancel(id),
   'provider:set-model': (_event, input) => provider.setModel(input),

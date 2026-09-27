@@ -82,6 +82,23 @@ function gitStatusClass(state) {
 }
 
 // Tool calls the model made through MCP, kept small and text-only.
+function elapsedText(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function pendingText(pending) {
+  if (pending.phase === 'approval') return `Waiting for your approval · ${pending.tool}`;
+  if (pending.phase === 'tool') return `Running ${pending.tool}…`;
+  return pending.thinking ? 'Thinking…' : 'Writing…';
+}
+
+/** "Thought for 4s" for replies from a thinking model, otherwise ''. */
+function thoughtLabel(message) {
+  if (message.role !== 'assistant' || !Number.isSafeInteger(message.thinkingMs)) return '';
+  return `Thought for ${elapsedText(Math.max(1000, message.thinkingMs))}`;
+}
+
 function normalizeToolSummaries(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => isRecord(item) && typeof item.tool === 'string').slice(0, 32).map((item) => ({
@@ -125,6 +142,7 @@ const app = {
     await this.loadState();
     await this.loadProvider();
     this.bindEvents();
+    this.bindReplyProgress();
     this.renderAll();
     bindTerminal(this);
     bindWorkspaceUi(this);
@@ -210,6 +228,13 @@ const app = {
         };
         const tools = normalizeToolSummaries(message.tools);
         if (tools.length) normalized.tools = tools;
+        // "Thought for Ns" and any thinking text stay with the answer across restarts.
+        if (message.role === 'assistant' && Number.isSafeInteger(message.thinkingMs) && message.thinkingMs >= 0) {
+          normalized.thinkingMs = message.thinkingMs;
+        }
+        if (message.role === 'assistant' && typeof message.reasoning === 'string' && message.reasoning.trim()) {
+          normalized.reasoning = message.reasoning.slice(0, 65536);
+        }
         return normalized;
       }) : [],
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
@@ -305,9 +330,9 @@ const app = {
       $('#app-status').textContent = configured ? `${kindLabel}: ${model}` : 'Provider not configured';
     }
     if ($('#provider-status')) {
-      const enabled = Array.isArray(meta.enabledModels) ? meta.enabledModels.length : 0;
+      const count = Array.isArray(meta.models) ? meta.models.length : 0;
       $('#provider-status').textContent = configured
-        ? `Connected via ${kindLabel} — ${model} at ${baseUrl}${enabled ? ` · ${enabled} model${enabled === 1 ? '' : 's'} enabled` : ''}.`
+        ? `Connected via ${kindLabel} — ${model} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
         : meta.keyStorage === 'session'
           ? 'The API key was session-only and expired after restart. Enter it again and save.'
           : 'Provider not configured. Choose a provider, add your API key, and test the connection.';
@@ -342,45 +367,17 @@ const app = {
     renderModelButton(this);
   },
 
+  // Every model the provider offers is available; there is no per-model enable step any more.
+  // The composer's model menu (src/composer-ui.js) is the main place to switch.
   renderProviderModels() {
-    const list = $('#provider-models');
-    const section = $('#provider-models-section');
-    if (!list || !section) return;
-    const catalog = this.providerCatalog || [];
-    section.hidden = catalog.length === 0;
-    if ($('#provider-models-count')) {
-      const enabled = this.enabledModels?.size || 0;
-      $('#provider-models-count').textContent = catalog.length ? `${enabled} of ${catalog.length} enabled` : '';
-    }
-    list.replaceChildren(...catalog.map((model) => {
-      const row = element('div', 'model-row');
-      const info = element('div', 'model-info');
-      info.append(
-        element('strong', 'model-name', model.displayName || model.id),
-        element('span', 'model-id', model.id),
-      );
-      const enabled = Boolean(this.enabledModels?.has(model.id));
-      const toggle = element('button', 'model-toggle', enabled ? 'Enabled' : 'Disabled');
-      toggle.dataset.modelId = model.id;
-      toggle.setAttribute('aria-pressed', String(enabled));
-      if (model.available === false) {
-        toggle.disabled = true;
-        toggle.title = 'This model is currently unavailable.';
-      }
-      row.append(
-        info,
-        element('span', 'badge', model.available === false ? 'Unavailable' : 'Available'),
-        toggle,
-      );
-      return row;
-    }));
     this.renderModelSelect();
+    renderModelButton(this);
   },
 
+  // Chat-capable, available models for the Assistant's "Model for chat" picker.
   modelOptions() {
     const catalog = this.providerCatalog || [];
-    const enabled = catalog.filter((model) => this.enabledModels?.has(model.id));
-    return enabled.length ? enabled : catalog.filter((model) => model.available !== false);
+    return catalog.filter((model) => model.available !== false && model.chat !== false);
   },
 
   renderModelSelect() {
@@ -397,7 +394,7 @@ const app = {
     button.textContent = chosen
       ? (chosen.displayName && chosen.displayName !== chosen.id
         ? `${chosen.displayName} — ${chosen.id}` : chosen.id)
-      : (options.length ? 'Choose a model' : 'No models enabled');
+      : (options.length ? 'Choose a model' : 'Test the connection to load models');
     button.disabled = options.length === 0;
     list.replaceChildren(...options.map((model) => {
       const option = element('button', 'picker-option');
@@ -421,22 +418,16 @@ const app = {
     button.setAttribute('aria-expanded', String(next));
   },
 
-  toggleModel(id) {
-    if (!id) return;
-    if (!this.enabledModels) this.enabledModels = new Set();
-    if (this.enabledModels.has(id)) this.enabledModels.delete(id);
-    else this.enabledModels.add(id);
-    this.renderProviderModels();
-  },
-
   async saveProvider() {
     const bridge = this.getProviderBridge();
     if (!bridge?.save) { this.showToast('Provider connections require the desktop app'); return; }
     const kind = this.providerKindValue();
+    const model = kind === 'custom' ? ($('#provider-model')?.value.trim() || '') : (this.selectedModel || '');
     const input = {
       kind,
-      model: kind === 'custom' ? ($('#provider-model')?.value.trim() || '') : (this.selectedModel || ''),
-      enabledModels: [...(this.enabledModels || [])],
+      model,
+      // Kept for the stored record's shape: the chat model is the only "enabled" one.
+      enabledModels: kind === 'custom' || !model ? [] : [model],
       models: this.providerCatalog || [],
     };
     if (kind === 'custom') input.baseUrl = $('#provider-base-url')?.value.trim() || '';
@@ -501,13 +492,12 @@ const app = {
       }
       this.providerBase = result.data.baseUrl;
       this.providerCatalog = Array.isArray(result.data.models) ? result.data.models : [];
-      const known = new Set(this.providerCatalog.map((model) => model.id));
-      // Keep prior selections; otherwise enable the first available model.
-      this.enabledModels = new Set([...(this.enabledModels || [])].filter((id) => known.has(id)));
-      if (!this.enabledModels.size) {
-        const first = this.providerCatalog.find((model) => model.available !== false);
-        if (first) this.enabledModels.add(first.id);
-      }
+      // Keep the chosen model if the provider still offers it; otherwise pick the first chat model.
+      const options = this.modelOptions();
+      const keep = options.find((model) => model.id === (this.selectedModel || this.provider?.model));
+      const first = keep || options[0];
+      this.selectedModel = first ? first.id : '';
+      this.enabledModels = new Set(first ? [first.id] : []);
       this.provider = {
         ...(this.provider || {}),
         kind: result.data.kind,
@@ -558,10 +548,6 @@ const app = {
       void this.clearProvider();
     });
     $('#provider-kind')?.addEventListener('change', () => this.applyProviderKind());
-    $('#provider-models')?.addEventListener('click', (event) => {
-      const button = event.target.closest('.model-toggle[data-model-id]');
-      if (button && !button.disabled) this.toggleModel(button.dataset.modelId);
-    });
     $('#model-picker-button')?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -961,19 +947,75 @@ const app = {
         }
         bubble.append(tools);
       }
-      // The model's thinking, when the provider returns it, stays folded above the answer.
+      // "Thought for Ns" above answers from a thinking model; it unfolds to the thinking text
+      // when the provider returned one.
+      const thought = thoughtLabel(message);
       if (message.reasoning) {
         const thinking = element('details', 'msg-reasoning');
-        thinking.append(element('summary', 'msg-reasoning-label', 'Thinking'), element('div', 'msg-reasoning-text', message.reasoning));
+        thinking.append(element('summary', 'msg-reasoning-label', thought || 'Thinking'), element('div', 'msg-reasoning-text', message.reasoning));
         bubble.append(thinking);
+      } else if (thought) {
+        bubble.append(element('span', 'msg-reasoning-label msg-thought', thought));
       }
       bubble.append(element('span', 'msg-text', message.text), element('span', 'msg-time', clock(message.time)));
       return bubble;
     }));
+    const pending = this.pendingReply?.taskId === this.currentTaskId ? this.pendingReply : null;
+    if (pending) container.append(this.renderPendingReply(pending));
     container.scrollTop = container.scrollHeight;
     // The welcome hero and starter controls are a first-run surface: once the
     // task has messages the view becomes a plain transcript.
-    $('.sm-home-page')?.classList.toggle('has-transcript', messages.length > 0);
+    $('.sm-home-page')?.classList.toggle('has-transcript', messages.length > 0 || Boolean(pending));
+  },
+
+  // The bubble shown while a reply is in progress: thinking, running a tool, or waiting for approval.
+  renderPendingReply(pending) {
+    const bubble = element('div', 'chat-bubble assistant pending-reply');
+    bubble.setAttribute('role', 'status');
+    const row = element('span', 'pending-reply-row');
+    const dots = element('span', 'thinking-dots');
+    dots.setAttribute('aria-hidden', 'true');
+    dots.append(element('span', 'thinking-dot'), element('span', 'thinking-dot'), element('span', 'thinking-dot'));
+    row.append(dots, element('span', 'pending-reply-text', pendingText(pending)),
+      element('span', 'pending-reply-time', elapsedText(Date.now() - pending.startedAt)));
+    bubble.append(row);
+    return bubble;
+  },
+
+  updatePendingReply() {
+    const pending = this.pendingReply;
+    const node = $('#chat-messages .pending-reply');
+    if (!pending || !node) return;
+    node.querySelector('.pending-reply-text').textContent = pendingText(pending);
+    node.querySelector('.pending-reply-time').textContent = elapsedText(Date.now() - pending.startedAt);
+  },
+
+  startPendingReply(taskId, requestId) {
+    const model = (this.providerCatalog || []).find((item) => item.id === this.provider?.model);
+    // "Thinking" only for models that reason with thinking on; others are "Writing".
+    const thinking = model?.reasoning === true && this.settings.thinking !== false;
+    this.pendingReply = { taskId, requestId, phase: 'thinking', thinking, tool: '', startedAt: Date.now() };
+    window.clearInterval(this.pendingTimer);
+    this.pendingTimer = window.setInterval(() => this.updatePendingReply(), 1000);
+    this.renderChat();
+  },
+
+  stopPendingReply() {
+    window.clearInterval(this.pendingTimer);
+    const had = Boolean(this.pendingReply);
+    this.pendingReply = null;
+    if (had) this.renderChat();
+  },
+
+  bindReplyProgress() {
+    this.getProviderBridge()?.onProgress?.((progress) => {
+      const pending = this.pendingReply;
+      if (!pending || !progress || progress.requestId !== pending.requestId) return;
+      if (!['thinking', 'tool', 'approval'].includes(progress.phase)) return;
+      pending.phase = progress.phase;
+      pending.tool = progress.toolName ? `${progress.serverId ? `${progress.serverId} · ` : ''}${progress.toolName}` : '';
+      this.updatePendingReply();
+    });
   },
 
   updateTask(task, time = Date.now()) {
@@ -992,6 +1034,7 @@ const app = {
     const tools = normalizeToolSummaries(extra.tools);
     if (tools.length) message.tools = tools;
     if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
+    if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) this.renderChat();
@@ -1054,16 +1097,24 @@ const app = {
     payload.reasoning = requestReasoning(this.settings);
 
     this.setChatBusy(true, requestId);
+    this.startPendingReply(taskId, requestId);
+    const thinking = Boolean(this.pendingReply?.thinking);
+    const startedAt = Date.now();
     try {
       const result = await bridge.send(payload);
+      this.stopPendingReply();
       if (!result?.ok) {
         const message = result?.error?.message || 'Provider request failed';
         if (result?.error?.code === 'CANCELLED') this.showToast('Response cancelled');
         else this.showToast(message);
         return;
       }
+      // Model time only (tool runs and approvals excluded); plain sends report the whole wait.
+      const thinkingMs = Number.isSafeInteger(result.data.thinkingMs) ? result.data.thinkingMs : Date.now() - startedAt;
       this.appendMessage('assistant', result.data.text, taskId, {
-        tools: result.data.toolCalls, reasoning: result.data.reasoning,
+        tools: result.data.toolCalls,
+        reasoning: result.data.reasoning,
+        ...(thinking ? { thinkingMs } : {}),
       });
       // A broken MCP server never blocks the reply, but the user should know.
       const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
@@ -1073,6 +1124,7 @@ const app = {
     } catch (error) {
       this.showToast(error?.message || 'Provider request failed');
     } finally {
+      this.stopPendingReply();
       this.setChatBusy(false);
     }
   },

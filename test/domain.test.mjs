@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildSystemPrompt, searchItems, normalizeAutomations, nextRunAt,
-  normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission,
+  normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -282,4 +282,20 @@ test('reasoning preferences default to thinking on at medium effort', () => {
   assert.deepEqual(requestReasoning(normalizeSettings({ thinking: false, reasoningEffort: 'low' })), { thinking: false, effort: 'low' });
   assert.equal(normalizeSettings({ reasoningEffort: 'max' }).reasoningEffort, 'medium');
   assert.equal(normalizeSettings({ thinking: 'no' }).thinking, true);
+});
+
+test('assistant messages keep their thinking time and thinking text across a reload', () => {
+  const [task] = normalizeTasks([{
+    id: 't1', title: 'Math', createdAt: 1, updatedAt: 2,
+    messages: [
+      { role: 'user', text: '17*23?', time: 1, thinkingMs: 5 },
+      { role: 'assistant', text: '391', time: 2, thinkingMs: 4200, reasoning: '17 × 23 = 391' },
+      { role: 'assistant', text: 'x', time: 3, thinkingMs: -1, reasoning: '   ' },
+    ],
+  }]);
+  assert.equal(task.messages[0].thinkingMs, undefined);
+  assert.equal(task.messages[1].thinkingMs, 4200);
+  assert.equal(task.messages[1].reasoning, '17 × 23 = 391');
+  assert.equal(task.messages[2].thinkingMs, undefined);
+  assert.equal(task.messages[2].reasoning, undefined);
 });

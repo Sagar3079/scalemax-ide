@@ -27,7 +27,7 @@ function providerBridge() {
 /** Chat models the menu offers: available, not image/video-only. */
 export function chatModelOptions(app) {
   const catalog = Array.isArray(app.providerCatalog) ? app.providerCatalog : [];
-  const options = catalog.filter((model) => model.available !== false && model.chat !== false);
+  const options = catalog.filter((model) => model.chat !== false);
   const current = app.provider?.model;
   // A custom provider has no catalog: its one configured model is the only choice.
   if (current && !options.some((model) => model.id === current)) {
@@ -90,25 +90,54 @@ export function renderModelButton(app) {
   if ($('#model-menu')?.matches(':popover-open')) renderModelMenu(app);
 }
 
+/** Models the provider offers that chat cannot use (image and video generation). */
+export function mediaModels(app) {
+  const catalog = Array.isArray(app.providerCatalog) ? app.providerCatalog : [];
+  return catalog.filter((model) => model.chat === false);
+}
+
+function modelOption(model, active, selectable) {
+  const option = element('button', 'model-menu-option');
+  option.dataset.modelId = model.id;
+  option.setAttribute('role', 'radio');
+  option.setAttribute('aria-checked', String(selectable && model.id === active));
+  const text = element('span', 'model-menu-option-text');
+  text.append(element('span', 'picker-option-name', model.displayName || model.id),
+    element('span', 'picker-option-id', model.id));
+  option.append(text);
+  if (!selectable) {
+    option.disabled = true;
+    option.setAttribute('aria-disabled', 'true');
+    option.title = 'Chat cannot use image or video models yet.';
+    option.append(element('span', 'badge', model.output === 'video' ? 'Video' : 'Image'));
+  } else if (model.available === false) {
+    option.disabled = true;
+    option.title = 'This model is currently unavailable.';
+    option.append(element('span', 'badge', 'Unavailable'));
+  } else if (model.reasoning === true) {
+    option.append(element('span', 'badge', 'Reasoning'));
+  }
+  return option;
+}
+
 function renderModelMenu(app) {
   const list = $('#model-menu-list');
   if (!list) return;
   const options = chatModelOptions(app);
+  const media = mediaModels(app);
   const active = app.provider?.model || '';
   const custom = app.provider?.kind === 'custom';
-  list.replaceChildren(...options.map((model) => {
-    const option = element('button', 'model-menu-option');
-    option.dataset.modelId = model.id;
-    option.setAttribute('role', 'radio');
-    option.setAttribute('aria-checked', String(model.id === active));
-    const text = element('span', 'model-menu-option-text');
-    text.append(element('span', 'picker-option-name', model.displayName || model.id),
-      element('span', 'picker-option-id', model.id));
-    option.append(text);
-    if (model.reasoning === true) option.append(element('span', 'badge', 'Reasoning'));
+  const nodes = options.map((model) => {
+    const option = modelOption(model, active, true);
     if (custom && model.id === active && options.length === 1) option.title = 'Change the custom model in Assistant.';
     return option;
-  }));
+  });
+  // Every model the provider offers is listed; the ones chat cannot use are shown, not selectable.
+  if (media.length) {
+    nodes.push(element('p', 'composer-menu-title model-menu-group', 'Image & video · not available in chat'));
+    nodes.push(...media.map((model) => modelOption(model, active, false)));
+  }
+  list.replaceChildren(...nodes);
   const empty = $('#model-menu-empty');
   if (empty) {
     empty.hidden = options.length > 0;
@@ -168,12 +197,12 @@ async function updateReasoning(app, patch) {
   renderModelMenu(app);
 }
 
-// Older saved catalogs have no capability data; refresh them once with the stored key.
-async function refreshCatalogIfNeeded(app) {
+// The provider's model list is reloaded once per start with the stored key, so new models (and
+// capability data older saved lists lack) show up without testing the connection again.
+export async function refreshCatalog(app) {
   const bridge = providerBridge();
   const catalog = Array.isArray(app.providerCatalog) ? app.providerCatalog : [];
   if (!bridge?.refreshModels || !app.provider?.configured || app.provider.kind === 'custom') return;
-  if (catalog.length && catalog.some((model) => model.chat === true || model.chat === false)) return;
   const result = await bridge.refreshModels();
   if (!result?.ok) return;
   app.provider = result.data;
@@ -185,14 +214,28 @@ async function refreshCatalogIfNeeded(app) {
 
 // Popovers render in the top layer; they are placed above their button (the composer sits at
 // the bottom of the window) and kept inside the viewport.
+// Opens above the button when it fits (the composer usually sits at the bottom), otherwise on
+// whichever side has more room; the menu never extends past the window and scrolls instead.
 function placeAbove(menu, anchor, align) {
   const rect = anchor.getBoundingClientRect();
-  const width = menu.offsetWidth;
   const margin = 8;
+  const gap = 6;
+  const spaceAbove = rect.top - gap - margin;
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin;
+  menu.style.removeProperty('max-height');
+  menu.style.removeProperty('top');
+  menu.style.removeProperty('bottom');
+  const cap = 520;
+  const natural = Math.min(menu.scrollHeight, cap);
+  const above = natural <= spaceAbove || spaceAbove >= spaceBelow;
+  const room = Math.max(160, above ? spaceAbove : spaceBelow);
+  menu.style.setProperty('max-height', `${Math.round(Math.min(room, cap))}px`);
+  if (above) menu.style.setProperty('bottom', `${Math.round(window.innerHeight - rect.top + gap)}px`);
+  else menu.style.setProperty('top', `${Math.round(rect.bottom + gap)}px`);
+  const width = menu.offsetWidth;
   let left = align === 'end' ? rect.right - width : rect.left;
   left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
   menu.style.setProperty('left', `${Math.round(left)}px`);
-  menu.style.setProperty('bottom', `${Math.round(window.innerHeight - rect.top + 6)}px`);
 }
 
 function bindPopover(menuSelector, buttonSelector, align, onOpen) {
@@ -420,5 +463,5 @@ export function bindComposerUi(app) {
   bindApprovals(app);
   renderPermission(app);
   renderModelButton(app);
-  void refreshCatalogIfNeeded(app);
+  void refreshCatalog(app);
 }
