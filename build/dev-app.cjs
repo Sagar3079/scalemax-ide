@@ -24,7 +24,14 @@ const ROOT = path.resolve(__dirname, '..');
 const NAME = 'ScaleMax';
 const BUNDLE_ID = 'com.scalemax.ide.dev';
 // Bump when the branding steps below change, so existing copies are rebuilt.
-const RECIPE = 1;
+const RECIPE = 2;
+// Shown by macOS when a folder on the Desktop, in Documents or in Downloads is opened (the same
+// text as build.mac.extendInfo in package.json).
+const FOLDER_USAGE = [
+  ['NSDesktopFolderUsageDescription', 'ScaleMax opens the project folders you choose on your Desktop.'],
+  ['NSDocumentsFolderUsageDescription', 'ScaleMax opens the project folders you choose in Documents.'],
+  ['NSDownloadsFolderUsageDescription', 'ScaleMax opens the project folders you choose in Downloads.'],
+];
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 
 function devAppPaths(root = ROOT) {
@@ -83,7 +90,7 @@ function ensureDevApp({ root = ROOT, log = console.log } = {}) {
     execFileSync('ditto', [source, partial], { stdio: 'ignore' });
   }
   const plist = path.join(partial, 'Contents', 'Info.plist');
-  for (const [key, value] of [['CFBundleName', NAME], ['CFBundleDisplayName', NAME], ['CFBundleIdentifier', BUNDLE_ID]]) {
+  for (const [key, value] of [['CFBundleName', NAME], ['CFBundleDisplayName', NAME], ['CFBundleIdentifier', BUNDLE_ID], ...FOLDER_USAGE]) {
     execFileSync('plutil', ['-replace', key, '-string', value, plist]);
   }
   const iconFile = execFileSync('plutil', ['-extract', 'CFBundleIconFile', 'raw', plist], { encoding: 'utf8' }).trim() || 'electron.icns';

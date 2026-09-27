@@ -2,8 +2,10 @@
 import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
 import {
   nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
-  toTemperature, searchItems, folderName, normalizeTaskFolder, DEFAULT_SETTINGS,
+  toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
+  toolCallGroups, toolActivity, DEFAULT_SETTINGS,
 } from './domain.mjs';
+import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
 import { startScheduler } from './scheduler.js';
@@ -45,6 +47,16 @@ const VIEW_NAMES = {
   automation: 'Automation', more: 'More',
 };
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
+// A task works in one folder: chat waits until there is one, and a task's folder never changes
+// after its first message (see openFolderForTask).
+const NEEDS_FOLDER_HINT = 'Choose a project folder to start…';
+const CHAT_PLACEHOLDER = 'Describe an idea, ask a question, or plan your next step…';
+const UNSAVED_FILES = 'Save or close your unsaved files first.';
+const REPLY_RUNNING = 'Wait for the reply to finish, or stop it first.';
+// Error codes main reports for a folder that was moved or deleted (lib/workspace.cjs).
+const FOLDER_GONE = ['ENOENT', 'NOT_DIRECTORY'];
+// Recent folders offered by the chat's folder picker.
+const PICKER_RECENT = 4;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -58,14 +70,41 @@ function element(tag, className, text) {
   return node;
 }
 
+// Line icons for rows built here, on the same 24px grid as the icons in index.html.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ICONS = {
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z',
+  chats: 'M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z',
+  chevron: 'm6 9 6 6 6-6',
+  plus: 'M12 5v14M5 12h14',
+};
+
+function icon(name, className) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', className);
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+
+// The same control after the task list is rebuilt: a row by its task, a group button by its folder.
+function taskListFocus(node) {
+  const row = node.closest('.task-item[data-task-id]');
+  if (row) return `.task-item[data-task-id="${CSS.escape(row.dataset.taskId)}"]`;
+  const group = node.closest('.task-group');
+  const button = node.closest('.task-group-toggle, .task-group-add');
+  if (!group || !button) return '';
+  const kind = button.classList.contains('task-group-add') ? 'task-group-add' : 'task-group-toggle';
+  return `.task-group[data-folder-path="${CSS.escape(group.dataset.folderPath)}"] .${kind}`;
+}
+
 function clock(time) {
   const date = new Date(time);
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function relativeTime(time) {
-  const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
-  return minutes < 1 ? 'Just now' : minutes < 60 ? `${minutes}m ago` : clock(time);
 }
 
 // Porcelain v1 status codes mapped to a single-letter badge for the Git panel.
@@ -98,8 +137,12 @@ function pendingText(pending) {
     const progress = Number.isFinite(pending.progress) && pending.progress > 0 ? ` ${pending.progress}%` : '';
     return `Generating ${what}${progress}…`;
   }
-  if (pending.phase === 'approval') return `Waiting for your approval · ${pending.tool}`;
-  if (pending.phase === 'tool') return `Running ${pending.tool}…`;
+  // Workspace tools read as a sentence ("Reading a file…"); other tools show server · tool.
+  const activity = pending.activity || { text: pending.tool, friendly: false };
+  if (pending.phase === 'approval') {
+    return activity.friendly ? `Waiting for your approval: ${activity.text.toLowerCase()}` : `Waiting for your approval · ${activity.text}`;
+  }
+  if (pending.phase === 'tool') return activity.friendly ? `${activity.text}…` : `Running ${activity.text}…`;
   return pending.thinking ? 'Thinking…' : 'Writing…';
 }
 
@@ -151,6 +194,16 @@ const app = {
   // Folder switches run one after another (runFolderJob); a newer selection or pick wins.
   folderSequence: 0,
   folderQueue: Promise.resolve(),
+  // Task folders that were gone when ScaleMax tried to open them (the chat card says so).
+  missingFolders: new Set(),
+  // A task selected while a reply ran; its folder opens when the reply ends (setChatBusy).
+  folderWaitsForReply: false,
+  // The task folder a queued switch is about to open: no "not open" notice meanwhile.
+  switchingTo: '',
+  // The folder picker and the folder notice wait for the start-up folder (settleStartFolder).
+  startFolderSettled: false,
+  // Sidebar projects the user folded away, by folder path ('' is "Earlier chats"); this session only.
+  collapsedFolders: new Set(),
   activeRequestId: null,
   eventsBound: false,
 
@@ -180,6 +233,7 @@ const app = {
     bindMediaUi(this);
     this.bindProfiles();
     await this.restoreWorkspace();
+    await this.settleStartFolder();
     window.scalemaxScheduler = startScheduler(this);
     this.updateSendEnabled();
     await this.loadVersion();
@@ -478,47 +532,111 @@ const app = {
     void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
-  // The open folder shows on the composer chip, in the chat header and in the sidebar footer.
+  // The current task's folder shows on the composer chip, in the chat header and in the sidebar
+  // footer; the folder picker asks for one while there is none, and a notice in the message box
+  // says so when the task's folder is not the open one.
   renderFolder() {
     this.renderFolderChip();
     this.renderChatCrumb();
     this.renderSidebarFolder();
+    this.renderFolderPicker();
+    this.renderTaskFolderNotice();
+    this.updateSendEnabled();
     if ($('#folder-menu')?.matches(':popover-open')) renderFolderMenu(this);
   },
 
-  // The folder chip in the composer: the workspace the assistant's local tools work in. It opens
-  // the folder menu (src/composer-ui.js).
+  // The folder chip in the composer: the folder the task (and the assistant's local tools) work
+  // in. It opens the folder menu (src/composer-ui.js); a fixed task shows a lock.
   renderFolderChip() {
     const chip = $('#folder-chip');
     const label = $('#folder-chip-label');
     if (!chip || !label) return;
-    const root = this.workspace?.root || '';
-    const name = folderName(root);
-    label.textContent = name || 'No folder';
-    chip.classList.toggle('empty', !root);
-    chip.title = root ? `Workspace folder: ${root}` : 'No folder open. Choose one for chat and the Workspace view.';
-    chip.setAttribute('aria-label', root ? `Workspace folder: ${name}. Folder options` : 'No workspace folder. Folder options');
+    const task = this.currentTask();
+    const folder = this.taskFolderShown(task);
+    const locked = isTaskLocked(task);
+    label.textContent = folder ? folder.name : 'Choose folder';
+    chip.classList.toggle('is-empty', !folder);
+    chip.classList.toggle('is-locked', locked);
+    chip.title = folder ? folder.path : 'Choose the folder this task works in';
+    chip.setAttribute('aria-label', locked ? `Task folder ${folder.name}, fixed for this task`
+      : folder ? `Folder for this task: ${folder.name}. Change folder` : 'Choose a project folder for this task');
   },
 
   // "<folder> / Chat" above the conversation, "Workspace / Chat" without a folder.
   renderChatCrumb() {
     const crumb = $('#chat-crumb');
     if (!crumb) return;
-    const root = this.workspace?.root || '';
+    const folder = this.taskFolderShown();
     const separator = element('span', 'chat-crumb-separator', '/');
     separator.setAttribute('aria-hidden', 'true');
-    crumb.replaceChildren(element('span', root ? 'chat-crumb-folder' : '', folderName(root) || 'Workspace'), ' ', separator, ' Chat');
-    if (root) crumb.title = root;
+    crumb.replaceChildren(element('span', folder ? 'chat-crumb-folder' : '', folder?.name || 'Workspace'), ' ', separator, ' Chat');
+    if (folder) crumb.title = folder.path;
     else crumb.removeAttribute('title');
   },
 
   renderSidebarFolder() {
     const node = $('#user-name');
     if (!node) return;
-    const root = this.workspace?.root || '';
-    node.textContent = folderName(root) || 'Local workspace';
-    if (root) node.title = root;
+    const folder = this.taskFolderShown();
+    node.textContent = folder?.name || 'Local workspace';
+    if (folder) node.title = folder.path;
     else node.removeAttribute('title');
+  },
+
+  // The chat's first step while no folder is chosen: open one, or pick a recent one.
+  renderFolderPicker() {
+    const picker = $('#folder-picker');
+    if (!picker) return;
+    const task = this.currentTask();
+    const show = this.startFolderSettled && Boolean(task) && !task.messages.length
+      && taskFolderStatus(task, this.workspace.root) === 'none';
+    picker.hidden = !show;
+    $('.sm-home-page')?.classList.toggle('needs-folder', show);
+    if (!show) return;
+    const recent = (Array.isArray(this.workspace.recent) ? this.workspace.recent : [])
+      .filter((item) => typeof item?.path === 'string' && item.path).slice(0, PICKER_RECENT);
+    const list = $('#folder-picker-recent-list');
+    if (list) {
+      const focused = list.contains(document.activeElement) ? document.activeElement.dataset.folderPath : '';
+      list.replaceChildren(...recent.map((item) => {
+        const button = element('button', 'folder-picker-recent-item');
+        button.dataset.folderPath = item.path;
+        button.title = item.path;
+        const text = element('span', 'folder-picker-recent-text');
+        text.append(element('span', 'folder-picker-recent-name', typeof item.name === 'string' && item.name ? item.name : folderName(item.path)),
+          element('span', 'folder-picker-recent-path', item.path));
+        button.append(icon('folder', 'folder-picker-recent-icon'), text);
+        return button;
+      }));
+      if (focused) [...list.children].find((node) => node.dataset.folderPath === focused)?.focus();
+    }
+    const group = $('#folder-picker-recent');
+    if (group) group.hidden = !recent.length;
+  },
+
+  // Above the message box when the current task's folder is not the open one: it opens again with
+  // "Open it", or, when it is gone, the user starts a new task.
+  renderTaskFolderNotice() {
+    const notice = $('#task-folder-notice');
+    const text = $('#task-folder-notice-text');
+    const action = $('#task-folder-notice-action');
+    if (!notice || !text || !action) return;
+    const task = this.currentTask();
+    const show = this.startFolderSettled && isTaskLocked(task) && task.folder.path !== this.workspace.root
+      && this.switchingTo !== task.folder.path;
+    notice.hidden = !show;
+    if (!show) return;
+    const { name, path } = task.folder;
+    const missing = this.missingFolders.has(path);
+    const waiting = !missing && this.replyRunning();
+    notice.classList.toggle('is-missing', missing);
+    notice.title = path;
+    text.textContent = missing ? `This task's folder "${name}" is no longer available.`
+      : waiting ? `This task works in "${name}". It opens when the running reply finishes.`
+        : `This task works in "${name}".`;
+    action.hidden = waiting;
+    action.textContent = missing ? 'New task' : 'Open it';
+    action.dataset.noticeAction = missing ? 'new-task' : 'open';
   },
 
   // Chat-capable, available models for the Assistant's "Model for chat" picker.
@@ -753,27 +871,165 @@ const app = {
     return window.scalemaxAPI?.workspace || null;
   },
 
+  // The native folder dialog (folder chip, chat folder picker, Workspace view, MCP presets).
   async openWorkspace() {
     const dialog = window.scalemaxAPI?.dialog;
-    if (!dialog?.openFolder) { this.showToast('Opening folders requires the desktop app'); return; }
+    if (!dialog?.openFolder || !this.workspaceBridge()?.select) { this.showToast('Opening folders requires the desktop app'); return null; }
+    // Asked before the dialog: whatever the user picks, unsaved edits would be lost.
+    if (this.refuseFolderChange()) return null;
     const picked = await dialog.openFolder();
-    if (!picked?.ok) { this.showToast(picked?.error?.message || 'Could not open that folder'); return; }
-    if (!picked.data?.path || !this.workspaceBridge()?.select) return;
-    // The folder the user picked wins over a task's folder that is still waiting to open.
-    this.folderSequence += 1;
-    const result = await this.runFolderJob(() => this.selectFolderNow(picked.data.path));
-    if (!result?.ok) { this.showToast(result?.error?.message || 'Could not open that folder'); return; }
-    this.showToast('Folder opened');
+    if (!picked?.ok) { this.showToast(picked?.error?.message || 'Could not open that folder'); return null; }
+    if (!picked.data?.path) return null;
+    return this.openFolderForTask(picked.data.path);
   },
 
-  // A remembered folder from the folder menu's Recent list.
+  // A remembered folder (Recent in the folder menu and in the chat's folder picker).
   async openWorkspaceAt(path) {
-    if (!this.workspaceBridge()?.select) { this.showToast('Opening folders requires the desktop app'); return; }
-    if (typeof path !== 'string' || !path) return;
-    this.folderSequence += 1;
+    if (!this.workspaceBridge()?.select) { this.showToast('Opening folders requires the desktop app'); return null; }
+    if (typeof path !== 'string' || !path) return null;
+    return this.openFolderForTask(path);
+  },
+
+  // Every folder the user opens goes through here. A task stays in the folder its first message
+  // was sent in: while the current task is fixed to another folder, the folder opens in a new
+  // task instead (the existing empty task when there is one). Otherwise it becomes the current
+  // task's folder (a draft until its first message).
+  async openFolderForTask(path) {
+    if (path === this.workspace.root) {
+      const folder = this.rootFolder();
+      if (this.lockedElsewhere(folder.path)) {
+        this.startTaskIn(folder, { show: false });
+        this.showToast(`New task in "${folder.name}"`);
+      } else {
+        this.settleCurrentTask();
+        this.showToast(`"${folder.name}" is already open`);
+      }
+      return { ok: true, data: { root: folder.path } };
+    }
+    if (this.refuseFolderChange()) return null;
+    // The folder the user picked wins over a task's folder that is still waiting to open.
+    const sequence = (this.folderSequence += 1);
+    this.switchingTo = '';
     const result = await this.runFolderJob(() => this.selectFolderNow(path));
-    if (!result?.ok) { this.showToast(result?.error?.message || 'Could not open that folder'); return; }
-    this.showToast(`Opened ${folderName(result.data.root)}`);
+    if (!result?.ok) {
+      this.showToast(this.folderErrorText(result, path));
+      if (sequence === this.folderSequence) this.settleCurrentTask();
+      return result;
+    }
+    // A newer selection or pick came after this one; its switch runs next and settles the task.
+    if (sequence !== this.folderSequence) return result;
+    const folder = this.rootFolder();
+    if (this.lockedElsewhere(folder.path)) {
+      this.startTaskIn(folder, { show: false });
+      this.showToast(`New task in "${folder.name}"`);
+    } else {
+      this.settleCurrentTask();
+      this.showToast(`Opened ${folder.name}`);
+    }
+    return result;
+  },
+
+  // The locked menu's "New task in another folder…": a new task, then the folder dialog.
+  async newTaskInAnotherFolder() {
+    if (this.refuseFolderChange()) return;
+    this.newTask();
+    await this.openWorkspace();
+  },
+
+  // Why a folder did not open, for a toast. main passes file-system errors through with their code.
+  folderErrorText(result, path) {
+    const name = folderName(path);
+    const code = result?.error?.code;
+    if (FOLDER_GONE.includes(code)) return `The folder "${name}" is no longer available.`;
+    if (code === 'EPERM' || code === 'EACCES') {
+      return `ScaleMax may not open "${name}". Allow it in System Settings > Privacy & Security > Files and Folders.`;
+    }
+    return result?.error?.message || `Could not open "${name}".`;
+  },
+
+  currentTask() {
+    return this.tasks.find((item) => item.id === this.currentTaskId) || null;
+  },
+
+  // The open folder as a task folder ({ name, path }), or null.
+  rootFolder() {
+    const root = this.workspace.root;
+    return root ? { name: folderName(root), path: root } : null;
+  },
+
+  // The folder the chip, the chat header and the sidebar footer show: the task's own folder (fixed
+  // or draft), otherwise the open one that its next message takes.
+  taskFolderShown(task = this.currentTask()) {
+    return task?.folder || this.rootFolder();
+  },
+
+  // True when the current task is fixed to a folder other than `path`.
+  lockedElsewhere(path) {
+    const task = this.currentTask();
+    return isTaskLocked(task) && task.folder.path !== path;
+  },
+
+  hasUnsavedEdits() {
+    return Boolean(this.workspace.dirty || this.workspace.tabs?.some((tab) => tab.dirty));
+  },
+
+  // A chat reply is in progress. Its tools act in the open folder, so the folder stays until it ends
+  // (image and video generation do not use the folder).
+  replyRunning() {
+    return Boolean(this.activeRequestId && !this.activeMediaRequest);
+  },
+
+  // Says why and returns true when the open folder must not change now.
+  refuseFolderChange() {
+    const reason = this.replyRunning() ? REPLY_RUNNING : this.hasUnsavedEdits() ? UNSAVED_FILES : '';
+    if (reason) this.showToast(reason);
+    return Boolean(reason);
+  },
+
+  // After a folder change: an empty task's draft folder follows the open folder, and the sidebar,
+  // chip, header, footer and Send follow the task.
+  settleCurrentTask() {
+    const task = this.currentTask();
+    if (task && !task.messages.length) {
+      const folder = this.rootFolder();
+      if ((task.folder?.path || '') !== (folder?.path || '')) {
+        if (folder) task.folder = folder;
+        else delete task.folder;
+        // The new task leads its project in the sidebar.
+        task.updatedAt = Date.now();
+        void this.persist('tasks');
+      }
+    }
+    this.renderTasks();
+    this.renderFolder();
+  },
+
+  // At start the current task's folder opens (main reopened the folder of the last run, which can
+  // be another one); an empty task without a folder takes the open one.
+  async settleStartFolder() {
+    const task = this.currentTask();
+    try {
+      if (task?.folder && task.folder.path !== this.workspace.root) await this.openTaskFolder(task);
+    } catch (error) {
+      console.warn('[app] Could not open the task folder:', error);
+    } finally {
+      this.startFolderSettled = true;
+      this.settleCurrentTask();
+    }
+  },
+
+  // Opens the task's folder (the chat card's "Open it", handleSend, the start-up folder).
+  // Resolves to what happened: 'ready' | 'unsaved' | 'waiting' | 'missing' | 'failed' | 'superseded'.
+  openTaskFolder(task = this.currentTask()) {
+    if (!task?.folder || !this.workspaceBridge()?.select) return Promise.resolve('ready');
+    return this.queueTaskFolder(task);
+  },
+
+  // Queues the switch to the task's folder behind any still in flight; the newest one wins.
+  queueTaskFolder(task) {
+    const sequence = (this.folderSequence += 1);
+    this.switchingTo = task?.folder && task.folder.path !== this.workspace.root ? task.folder.path : '';
+    return this.runFolderJob(() => this.switchToTaskFolder(task, sequence));
   },
 
   // Folder switches run one at a time: main keeps only the newest selection, and the folder it
@@ -785,9 +1041,8 @@ const app = {
     return run;
   },
 
-  // Only from inside runFolderJob. main closes the open folder before it checks the new one
-  // (lib/workspace.cjs), so after a refusal the previous folder is opened again; otherwise chat
-  // would run without a folder while the screen still showed one.
+  // Only from inside runFolderJob. The folder on screen is always the one main has open, so chat
+  // never runs in a folder other than the one shown.
   async selectFolderNow(path) {
     const bridge = this.workspaceBridge();
     const previous = this.workspace.root;
@@ -801,16 +1056,16 @@ const app = {
       this.applyWorkspace(result.data);
       return result;
     }
-    if (!previous) return result;
-    let reopened = null;
+    // A refused folder leaves main's open folder as it was (lib/workspace.cjs switches only once
+    // the new one passes every check), so there is nothing to reopen: selecting it again would
+    // restart main's workspace session and stop a running command. Show what main has open.
     try {
-      reopened = await bridge.select(previous);
-      // The previous folder is gone too: show what main has open now (nothing).
-      if (!reopened?.ok) reopened = await bridge.current?.();
+      const open = await bridge.current?.();
+      if (open?.ok && (open.data?.root || '') !== previous) this.applyWorkspace(open.data);
+      else if (open?.ok && Array.isArray(open.data?.recent)) this.workspace.recent = open.data.recent;
     } catch (error) {
-      console.warn('[app] Could not reopen the previous folder:', error);
+      console.warn('[app] Could not read the open folder:', error);
     }
-    if (reopened?.ok) this.applyWorkspace(reopened.data);
     return result;
   },
 
@@ -846,6 +1101,8 @@ const app = {
     const rootChanged = this.workspace.root !== (data?.root || '');
     this.workspace.root = data?.root || '';
     this.workspace.files = Array.isArray(data?.files) ? data.files : [];
+    // A folder that opens is there again.
+    if (this.workspace.root) this.missingFolders.delete(this.workspace.root);
     // select() and current() report the remembered folders; list() does not.
     if (Array.isArray(data?.recent)) this.workspace.recent = data.recent;
     if (rootChanged) {
@@ -990,10 +1247,30 @@ const app = {
       $('#panel-toggle-btn')?.setAttribute('aria-expanded', String(!sidebar.classList.contains('collapsed')));
     });
     $('#tasks-list')?.addEventListener('click', (event) => {
+      const group = event.target.closest('.task-group');
+      if (group && event.target.closest('.task-group-add')) {
+        const path = group.dataset.folderPath;
+        this.newTask({ folder: { name: group.querySelector('.task-group-name')?.textContent || folderName(path), path } });
+        return;
+      }
+      if (group && event.target.closest('.task-group-toggle')) {
+        this.toggleTaskGroup(group);
+        return;
+      }
       const row = event.target.closest('.task-item[data-task-id]');
       if (row) this.selectTask(row.dataset.taskId);
     });
     $('#new-task-btn')?.addEventListener('click', () => this.newTask());
+    $('#folder-picker-open')?.addEventListener('click', () => void this.openWorkspace());
+    $('#folder-picker-recent-list')?.addEventListener('click', (event) => {
+      const item = event.target.closest('.folder-picker-recent-item[data-folder-path]');
+      if (item) void this.openWorkspaceAt(item.dataset.folderPath);
+    });
+    $('#task-folder-notice-action')?.addEventListener('click', (event) => {
+      if (event.currentTarget.dataset.noticeAction === 'new-task') this.newTask();
+      else void this.openTaskFolder();
+    });
+    this.bindComposerHint();
     $('#chat-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
@@ -1117,60 +1394,172 @@ const app = {
     return { id: `task-${now}-${suffix}`, title, messages: [], createdAt: now, updatedAt: now };
   },
 
-  newTask() {
-    const task = this.makeTask('New Task');
-    this.tasks.unshift(task);
-    void this.persist('tasks');
-    this.selectTask(task.id);
+  // New task (the sidebar's top button): the empty task, in the open folder until the user picks
+  // another one. With { folder } (a project's "+"), that folder opens for it.
+  newTask({ folder } = {}) {
+    const target = normalizeTaskFolder(folder);
+    if (target && target.path !== this.workspace.root && this.refuseFolderChange()) return null;
     // A typed-but-unsent draft is kept: it belongs to the composer, not the task.
-    $('#chat-input')?.focus();
-    this.updateSendEnabled();
+    return this.startTaskIn(target || this.rootFolder());
   },
 
-  selectTask(id) {
+  // Makes the empty task current with `folder` as its draft folder. There is never more than one
+  // empty task: the existing one is reused and moves to the top.
+  startTaskIn(folder, { show = true } = {}) {
+    let task = this.tasks.find((item) => !item.messages.length);
+    this.tasks = this.tasks.filter((item) => item.messages.length || item === task);
+    if (task) {
+      task.title = 'New Task';
+      task.updatedAt = Date.now();
+    } else {
+      task = this.makeTask('New Task');
+    }
+    this.tasks = [task, ...this.tasks.filter((item) => item !== task)];
+    if (folder) task.folder = { name: folder.name, path: folder.path };
+    else delete task.folder;
+    void this.persist('tasks');
+    this.selectTask(task.id, { show });
+    if (show) $('#chat-input')?.focus();
+    return task;
+  },
+
+  // `show` brings up the chat; opening a folder from the Workspace view keeps that view.
+  selectTask(id, { show = true } = {}) {
     const task = this.tasks.find((item) => item.id === id);
     if (!task) return;
     this.currentTaskId = id;
-    this.switchView('chat');
+    // The last task used is first, so it is current again after a restart (see loadState).
+    if (this.tasks[0] !== task) {
+      this.tasks = [task, ...this.tasks.filter((item) => item !== task)];
+      void this.persist('tasks');
+    }
+    // An empty task without a folder takes the open one as its draft.
+    if (!task.messages.length && !task.folder && this.workspace.root) {
+      task.folder = this.rootFolder();
+      task.updatedAt = Date.now();
+      void this.persist('tasks');
+    }
+    this.collapsedFolders.delete(task.folder?.path || '');
+    if (show) this.switchView('chat');
+    // A task opens its folder. The switch waits for one still in flight, so its check sees the
+    // folder that switch left open; the newest selection wins. Queued before rendering, so the
+    // "not open" notice does not flash while the folder opens.
+    if (this.workspaceBridge()?.select) {
+      this.queueTaskFolder(task).catch((error) => this.showGlobalError(error?.message || 'The task folder could not be opened'));
+    }
     this.renderTasks();
     this.renderChat();
-    // A chat opens the folder it was started in. The switch waits for one still in flight, so
-    // its check sees the folder that switch left open; the newest selection wins.
-    const sequence = (this.folderSequence += 1);
-    if (task.folder && this.workspaceBridge()?.select) {
-      this.runFolderJob(() => this.switchToTaskFolder(task, sequence))
-        .catch((error) => this.showGlobalError(error?.message || 'The task folder could not be opened'));
-    }
+    this.renderFolder();
   },
 
-  // Runs inside runFolderJob (see selectTask).
+  // Runs inside runFolderJob (see selectTask): opens the task's folder unless a newer selection or
+  // pick came after it, then settles the current task. Resolves like openTaskFolder.
   async switchToTaskFolder(task, sequence) {
+    if (sequence !== this.folderSequence) return 'superseded';
     const folder = task?.folder;
-    if (!folder || sequence !== this.folderSequence || folder.path === this.workspace.root) return;
-    if (this.workspace.dirty || this.workspace.tabs?.some((tab) => tab.dirty)) {
-      this.showToast(`This task belongs to "${folder.name}". Save your edits first, then open it from the folder menu.`);
-      return;
+    let outcome = 'ready';
+    if (folder && folder.path !== this.workspace.root) {
+      const current = task.id === this.currentTaskId;
+      if (this.replyRunning()) {
+        outcome = 'waiting';
+        this.folderWaitsForReply = true;
+      } else if (this.hasUnsavedEdits()) {
+        outcome = 'unsaved';
+        if (current) this.showToast(UNSAVED_FILES);
+      } else {
+        // selectFolderNow applies the result even if the user moved on meanwhile: main has that
+        // folder open now. Only the newest selection reports anything.
+        const result = await this.selectFolderNow(folder.path);
+        const missing = !result?.ok && FOLDER_GONE.includes(result?.error?.code);
+        if (missing) this.missingFolders.add(folder.path);
+        else this.missingFolders.delete(folder.path);
+        if (sequence !== this.folderSequence) return 'superseded';
+        if (!result?.ok) {
+          outcome = missing ? 'missing' : 'failed';
+          if (current) {
+            this.showToast(missing && isTaskLocked(task) ? `This task's folder "${folder.name}" is no longer available.`
+              : this.folderErrorText(result, folder.path));
+          }
+        }
+      }
     }
-    // selectFolderNow applies the result even if the user moved on meanwhile: main has that
-    // folder open now. Only the newest selection reports anything.
-    const result = await this.selectFolderNow(folder.path);
-    if (sequence !== this.folderSequence) return;
-    this.showToast(result?.ok ? `Switched to folder ${folder.name}` : `This task's folder "${folder.name}" is not available any more.`);
+    this.switchingTo = '';
+    this.settleCurrentTask();
+    return outcome;
   },
 
+  // Sidebar projects: a group per folder with its tasks (see taskGroups), chats from before
+  // tasks had folders last.
   renderTasks() {
     const list = $('#tasks-list');
     const count = $('#task-count');
-    if (count) count.textContent = String(this.tasks.length);
-    if (list) list.replaceChildren(...this.tasks.map((task) => {
-      const row = element('button', 'task-item');
-      row.dataset.taskId = task.id;
-      row.classList.toggle('active', task.id === this.currentTaskId);
-      if (task.folder) row.title = `Folder: ${task.folder.name}`;
-      row.append(element('span', 'task-title', task.title), element('span', 'task-time', relativeTime(task.updatedAt)));
-      return row;
-    }));
+    const { groups, legacy } = taskGroups(this.tasks, this.currentTaskId);
+    if (count) count.textContent = String(groups.reduce((total, group) => total + group.tasks.length, legacy.length));
+    if (list) {
+      // Rebuilding must not drop keyboard focus from the row or button the user is on.
+      const focus = list.contains(document.activeElement) ? taskListFocus(document.activeElement) : '';
+      const nodes = groups.map((group, index) => this.renderTaskGroup(group, index));
+      if (legacy.length) nodes.push(this.renderTaskGroup({ path: '', name: 'Earlier chats', tasks: legacy }, groups.length, { legacy: true }));
+      list.replaceChildren(...nodes);
+      if (focus) list.querySelector(focus)?.focus();
+    }
     this.renderSearch();
+  },
+
+  renderTaskGroup(group, index, { legacy = false } = {}) {
+    const node = element('div', `task-group${legacy ? ' task-group-legacy' : ''}`);
+    node.dataset.folderPath = group.path;
+    const collapsed = this.collapsedFolders.has(group.path);
+    node.classList.toggle('is-collapsed', collapsed);
+    const rows = element('div', 'task-group-rows');
+    rows.id = `task-group-rows-${index}`;
+    rows.hidden = collapsed;
+    rows.setAttribute('role', 'group');
+    rows.setAttribute('aria-label', legacy ? group.name : `Tasks in ${group.name}`);
+    rows.append(...group.tasks.map((task) => this.renderTaskRow(task)));
+    const toggle = element('button', 'task-group-toggle');
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.setAttribute('aria-controls', rows.id);
+    toggle.title = legacy ? 'Chats from before tasks had a folder' : group.path;
+    toggle.append(icon(legacy ? 'chats' : 'folder', 'task-group-icon'), element('span', 'task-group-name', group.name),
+      icon('chevron', 'task-group-chevron'));
+    const header = element('div', 'task-group-header');
+    header.append(toggle);
+    if (!legacy) {
+      const add = element('button', 'task-group-add');
+      add.setAttribute('aria-label', `New task in ${group.name}`);
+      add.title = `New task in ${group.name}`;
+      add.append(icon('plus', 'task-group-add-icon'));
+      header.append(add);
+    }
+    node.append(header, rows);
+    return node;
+  },
+
+  renderTaskRow(task) {
+    const row = element('button', 'task-item');
+    row.dataset.taskId = task.id;
+    const current = task.id === this.currentTaskId;
+    row.classList.toggle('active', current);
+    if (current) row.setAttribute('aria-current', 'true');
+    // The current empty task is the new task in its folder.
+    const title = task.messages.length ? task.title : 'New task';
+    row.classList.toggle('is-draft', !task.messages.length);
+    row.title = title;
+    row.append(element('span', 'task-title', title), element('span', 'task-time', taskTime(task.updatedAt)));
+    return row;
+  },
+
+  // Folds a project in place, so keyboard focus stays on its button.
+  toggleTaskGroup(node) {
+    const path = node.dataset.folderPath;
+    const collapse = !this.collapsedFolders.has(path);
+    if (collapse) this.collapsedFolders.add(path);
+    else this.collapsedFolders.delete(path);
+    node.classList.toggle('is-collapsed', collapse);
+    node.querySelector('.task-group-toggle')?.setAttribute('aria-expanded', String(!collapse));
+    const rows = node.querySelector('.task-group-rows');
+    if (rows) rows.hidden = collapse;
   },
 
   renderChat() {
@@ -1182,12 +1571,12 @@ const app = {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
       if (message.tools?.length) {
+        // One chip per tool with a count ("Read 4 files"), not one per call.
         const tools = element('div', 'msg-tools');
         tools.setAttribute('aria-label', 'Tools used for this reply');
-        tools.append(element('span', 'msg-tools-label', 'Tools used'));
-        for (const call of message.tools) {
-          const chip = element('span', `msg-tool ${call.ok ? 'is-ok' : 'is-error'}`,
-            `${call.server ? `${call.server} · ` : ''}${call.tool}${call.ok ? '' : ' (failed)'}`);
+        for (const group of toolCallGroups(message.tools)) {
+          const chip = element('span', `msg-tool ${group.ok ? 'is-ok' : 'is-error'}`, group.label);
+          chip.title = group.title;
           tools.append(chip);
         }
         bubble.append(tools);
@@ -1202,7 +1591,15 @@ const app = {
       } else if (thought) {
         bubble.append(element('span', 'msg-reasoning-label msg-thought', thought));
       }
-      bubble.append(element('span', 'msg-text', message.text));
+      if (message.role === 'assistant') {
+        // Replies are Markdown: formatted text instead of raw ** and backticks (src/markdown.js
+        // builds elements, never HTML, so a reply cannot inject markup).
+        const body = element('div', 'msg-text md');
+        body.append(renderMarkdown(message.text));
+        bubble.append(body);
+      } else {
+        bubble.append(element('span', 'msg-text', message.text));
+      }
       if (message.mediaRequest) bubble.append(element('span', 'msg-media-request', message.mediaRequest));
       if (message.media?.length) bubble.append(renderMediaItems(this, message.media));
       if (message.notice) {
@@ -1210,7 +1607,16 @@ const app = {
         notice.setAttribute('role', 'note');
         bubble.append(notice);
       }
-      bubble.append(element('span', 'msg-time', clock(message.time)));
+      if (message.role === 'assistant' && message.text) {
+        const footer = element('div', 'msg-footer');
+        const copy = element('button', 'msg-copy', 'Copy');
+        copy.setAttribute('aria-label', 'Copy reply');
+        bindCopy(copy, message.text);
+        footer.append(element('span', 'msg-time', clock(message.time)), copy);
+        bubble.append(footer);
+      } else {
+        bubble.append(element('span', 'msg-time', clock(message.time)));
+      }
       return bubble;
     }));
     const pending = this.pendingReply?.taskId === this.currentTaskId ? this.pendingReply : null;
@@ -1267,6 +1673,7 @@ const app = {
       if (!['thinking', 'tool', 'approval'].includes(progress.phase)) return;
       pending.phase = progress.phase;
       pending.tool = progress.toolName ? `${progress.serverId ? `${progress.serverId} · ` : ''}${progress.toolName}` : '';
+      pending.activity = progress.toolName ? toolActivity(progress.serverId, progress.toolName) : null;
       this.updatePendingReply();
     });
   },
@@ -1282,9 +1689,10 @@ const app = {
     if (!task) { this.showToast('That task no longer exists'); return; }
     if (role === 'user' && !task.messages.some((message) => message.role === 'user')) {
       task.title = text.length > 40 ? `${text.slice(0, 40)}…` : text;
-      // The chat belongs to the folder it starts in; selecting the task later opens it again.
-      if (this.workspace.root) task.folder = { name: folderName(this.workspace.root), path: this.workspace.root };
     }
+    // A message fixes the task to its folder: its draft, else the open one (a chat from before
+    // tasks had folders is bound by its next message). Selecting the task later opens it again.
+    if (role === 'user' && !task.folder && this.workspace.root) task.folder = this.rootFolder();
     const message = { role, text, time: Date.now() };
     const tools = normalizeToolSummaries(extra.tools);
     if (tools.length) message.tools = tools;
@@ -1296,27 +1704,51 @@ const app = {
     if (typeof extra.notice === 'string' && extra.notice.trim()) message.notice = extra.notice.trim().slice(0, 300);
     task.messages.push(message);
     this.updateTask(task, message.time);
-    if (this.currentTaskId === taskId) this.renderChat();
+    if (this.currentTaskId === taskId) {
+      this.renderChat();
+      // The first message locks the folder chip.
+      this.renderFolder();
+    }
   },
 
   async handleSend() {
     const input = $('#chat-input');
     const text = input?.value.trim();
-    if (!text || this.activeRequestId) return;
+    if (!text || this.activeRequestId || this.demoBusy) return;
     const taskId = this.currentTaskId;
     const task = this.tasks.find((item) => item.id === taskId);
     if (!task) return;
+    // Taken before any wait: "/init" from the folder menu swaps the draft and the attachment
+    // around this call (src/composer-ui.js).
+    const attachment = this.attachment;
+    // No chat without a folder, and a task only sends from its own folder.
+    if (taskFolderStatus(task, this.workspace.root) === 'none') {
+      this.showToast('Choose a project folder first.');
+      this.focusFolderChoice();
+      return;
+    }
+    if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
+      const outcome = await this.openTaskFolder(task);
+      if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.activeRequestId || this.demoBusy) {
+        // The switch already said why when it was refused or failed.
+        if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
+        return;
+      }
+    }
+    // main refuses the request when this is not the folder it has open (FOLDER_MISMATCH).
+    const folder = this.workspace.root;
     // Image / video mode: the text is the prompt for the selected generation model.
     if (mediaMode(this)) {
-      input.value = '';
+      if (input.value.trim() === text) input.value = '';
       this.updateSendEnabled();
       const sent = await generateFromComposer(this, text, taskId);
-      if (!sent) input.value = text;
+      if (!sent && !input.value.trim()) input.value = text;
       this.updateSendEnabled();
       return;
     }
     this.appendMessage('user', text, taskId);
-    input.value = '';
+    // Only the sent text is cleared; "/init" puts the user's draft back itself.
+    if (input.value.trim() === text) input.value = '';
     this.updateSendEnabled();
 
     const bridge = this.getProviderBridge();
@@ -1335,7 +1767,6 @@ const app = {
 
     // Build the conversation from the persisted task so the reply always matches
     // the message that was sent, even if the user switches tasks meanwhile.
-    const attachment = this.attachment;
     const messages = task.messages.map((message) => ({ role: message.role, content: message.text }));
     if (attachment) {
       const last = messages[messages.length - 1];
@@ -1344,7 +1775,7 @@ const app = {
       else messages.push({ role: 'user', content: block });
       // The attachment is now part of the sent message; it must not ride
       // along with every later message.
-      this.clearAttachment();
+      if (this.attachment === attachment) this.clearAttachment();
     }
     // A connected GitHub connector feeds live repo data into the request.
     const repoMatch = GITHUB_REPO_PATTERN.exec(text);
@@ -1357,7 +1788,7 @@ const app = {
       }
     }
     const requestId = `chat-${taskId}-${Date.now()}`;
-    const payload = { requestId, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
+    const payload = { requestId, folder, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
     const temperature = requestTemperature(this.settings);
     if (temperature !== undefined) payload.temperature = temperature;
     // Thinking on/off and effort from the model menu; the provider only sends them to models
@@ -1415,6 +1846,11 @@ const app = {
     const cancel = $('#cancel-btn');
     if (cancel) { cancel.hidden = !busy; cancel.disabled = false; }
     this.updateSendEnabled();
+    // A task selected while the reply ran opens its folder now.
+    if (!busy && this.folderWaitsForReply) {
+      this.folderWaitsForReply = false;
+      void this.openTaskFolder();
+    }
   },
 
   cancelResponse() {
@@ -1465,8 +1901,42 @@ const app = {
     const input = $('#chat-input');
     const send = $('#send-btn');
     const busy = Boolean(this.activeRequestId || this.demoBusy);
+    // No chat (or image / video) without a folder, and a task only sends from its own folder.
+    const ready = taskFolderStatus(this.currentTask(), this.workspace.root) === 'ready';
     if (input) input.disabled = false;
-    if (send) send.disabled = busy || !input?.value.trim();
+    if (send) send.disabled = busy || !ready || !input?.value.trim();
+    this.renderComposerHint();
+  },
+
+  // media-ui.js sets the message box's placeholder for the mode (chat, image, video). While there
+  // is no folder the hint to choose one takes its place, and the mode's text comes back after.
+  renderComposerHint() {
+    const input = $('#chat-input');
+    if (!input) return;
+    const needsFolder = taskFolderStatus(this.currentTask(), this.workspace.root) === 'none';
+    if (needsFolder && input.placeholder !== NEEDS_FOLDER_HINT) {
+      input.dataset.modePlaceholder = input.placeholder;
+      input.placeholder = NEEDS_FOLDER_HINT;
+    } else if (!needsFolder && input.placeholder === NEEDS_FOLDER_HINT) {
+      input.placeholder = input.dataset.modePlaceholder || CHAT_PLACEHOLDER;
+    }
+  },
+
+  // Keeps the hint when media-ui.js rewrites the placeholder (mode switches, option changes).
+  bindComposerHint() {
+    const input = $('#chat-input');
+    if (!input || typeof MutationObserver !== 'function') return;
+    new MutationObserver(() => this.renderComposerHint()).observe(input, { attributes: true, attributeFilter: ['placeholder'] });
+  },
+
+  // Where the user chooses a folder: the chat's folder picker when it shows, else the folder menu.
+  focusFolderChoice() {
+    const open = $('#folder-picker-open');
+    if (open && !$('#folder-picker')?.hidden) {
+      open.focus();
+      return;
+    }
+    if (!$('#folder-menu')?.matches(':popover-open')) $('#folder-chip')?.click();
   },
 
   localDemoReply(text) {

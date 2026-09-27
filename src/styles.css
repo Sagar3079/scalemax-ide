@@ -477,26 +477,140 @@ button {
   text-transform: none;
 }
 
+/* Projects: one group per folder (a header with the folder and "+"), its tasks below. */
 #tasks-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 6px;
   min-height: 0;
   overflow-y: auto;
 }
 
+.task-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.task-group-header {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  border-radius: var(--sm-radius-md);
+}
+
+.task-group-header:hover {
+  background: var(--sm-bg-hover);
+}
+
+.task-group-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 6px;
+  border: none;
+  border-radius: var(--sm-radius-md);
+  background: none;
+  color: var(--sm-text-strong);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: left;
+}
+
+.task-group-icon,
+.task-group-chevron,
+.task-group-add-icon {
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.task-group-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.6;
+  color: var(--sm-icon-secondary);
+}
+
+.task-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Points down while open, right while folded. */
+.task-group-chevron {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2;
+  color: var(--sm-text-weak);
+  transition: transform var(--sm-motion-duration-fast) var(--sm-motion-easing-standard);
+}
+
+.task-group.is-collapsed .task-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.task-group-add {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-inline-end: 3px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sm-radius-sm);
+  background: none;
+  color: var(--sm-text-weak);
+  opacity: 0.55;
+}
+
+.task-group-header:hover .task-group-add,
+.task-group-add:focus-visible {
+  opacity: 1;
+}
+
+.task-group-add:hover {
+  background: var(--sm-bg-active);
+  color: var(--sm-text-strong);
+}
+
+.task-group-add-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+}
+
+.task-group-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Rows line up under the folder name (6px padding + 14px icon + 6px gap). */
 .task-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 5px 8px;
+  min-height: 26px;
+  padding: 4px 8px 4px 26px;
   border: none;
   border-radius: var(--sm-radius-md);
   background: none;
   color: var(--sm-text-medium);
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
   text-align: left;
 }
 
@@ -518,8 +632,22 @@ button {
 
 .task-time {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--sm-text-weak);
+}
+
+/* The sidebar scrolls sideways-clipped, so focus rings sit inside the controls. */
+.task-item:focus-visible,
+.task-group-toggle:focus-visible,
+.task-group-add:focus-visible {
+  outline: 2px solid var(--sm-palette-brand-8);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-group-chevron {
+    transition: none;
+  }
 }
 
 #sidebar-bottom {
@@ -1646,8 +1774,34 @@ input[type="range"] {
   text-overflow: ellipsis;
 }
 
-.folder-chip.empty {
-  color: var(--sm-text-weak);
+/* No folder yet: chat waits for one, so the chip asks for it. */
+.folder-chip.is-empty {
+  border-style: dashed;
+  border-color: var(--sm-brand-primary);
+  background: var(--sm-brand-primary-subtle);
+  color: var(--sm-brand-primary-deep);
+  font-weight: 500;
+}
+
+.folder-chip.is-empty:hover {
+  background: color-mix(in srgb, var(--sm-brand-primary) 20%, transparent);
+  color: var(--sm-brand-primary-deep);
+}
+
+/* A task fixed to its folder: a lock instead of the chevron. */
+.folder-chip .folder-chip-lock {
+  display: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+.folder-chip.is-locked .folder-chip-lock {
+  display: block;
+}
+
+.folder-chip.is-locked .composer-chevron {
+  display: none;
 }
 
 /* The folder chip's menu (src/composer-ui.js): the open folder, actions and recent folders. */
@@ -1678,10 +1832,208 @@ input[type="range"] {
   overflow-wrap: anywhere;
 }
 
-/* --sm-color-border-tertiary does not resolve in dark mode (sm-tokens.css), which drops the
-   .model-menu-group line there; the app border shows in both themes. */
+/* "A task stays in the folder it started in." under a fixed task's folder. */
+.folder-menu-note {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sm-text-weak);
+}
+
 .folder-menu .model-menu-group {
   border-top: 1px solid var(--sm-app-border);
+}
+
+/* While the folder picker shows nothing can be sent yet, so the starter prompts wait, and a short
+   window scrolls instead of squeezing the message box. */
+.sm-home-page.needs-folder {
+  overflow-y: auto;
+}
+
+.sm-home-page.needs-folder .sm-home-composer {
+  flex: 0 0 auto;
+}
+
+.sm-home-page.needs-folder .starter-section {
+  display: none;
+}
+
+@media (max-height: 720px) {
+  .sm-home-page.needs-folder .sm-home-header {
+    padding-top: 16px;
+    margin-bottom: 12px;
+  }
+
+  .sm-home-page.needs-folder .folder-picker {
+    margin-top: 12px;
+  }
+}
+
+/* The chat's first step while no folder is chosen (index.html #folder-picker). */
+.folder-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 440px;
+  margin-top: 20px;
+  padding: 16px 16px 14px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-app-surface);
+  box-shadow: var(--sm-shadow-sm);
+}
+
+.folder-picker-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--sm-text-strong);
+}
+
+.folder-picker-text {
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sm-text-medium);
+}
+
+.folder-picker-open {
+  height: 32px;
+  margin-top: 6px;
+  padding: 0 14px;
+}
+
+.folder-picker-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sm-color-border-tertiary);
+  text-align: left;
+}
+
+.folder-picker-recent-title {
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sm-text-weak);
+}
+
+.folder-picker-recent-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
+/* Two columns once there are two or more. */
+.folder-picker-recent-list:has(> :nth-child(2)) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.folder-picker-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--sm-radius-md);
+  background: none;
+  color: var(--sm-text-strong);
+  text-align: left;
+}
+
+.folder-picker-recent-item:hover {
+  background: var(--sm-bg-hover);
+}
+
+.folder-picker-recent-item:focus-visible {
+  outline: 2px solid var(--sm-palette-brand-8);
+  outline-offset: -2px;
+}
+
+.folder-picker-recent-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--sm-icon-secondary);
+}
+
+.folder-picker-recent-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.folder-picker-recent-name,
+.folder-picker-recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-recent-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.folder-picker-recent-path {
+  font-family: var(--sm-font-code-family);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--sm-text-weak);
+}
+
+/* In the message box when the task's folder is not the open one. */
+.task-folder-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  background: var(--sm-app-surface-hover);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sm-text-medium);
+}
+
+.task-folder-notice.is-missing {
+  border-bottom-color: var(--sm-palette-orange-2);
+  background: var(--sm-palette-orange-1);
+  color: var(--sm-palette-orange-9);
+}
+
+.task-folder-notice-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.task-folder-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-folder-notice-action {
+  flex-shrink: 0;
 }
 
 /* "<folder> / Chat" above the conversation; the folder name keeps its real case. */
@@ -2866,32 +3218,65 @@ input[type="range"] {
   white-space: normal;
 }
 
-.msg-tools-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
-}
-
+/* One quiet chip per tool ("Read 4 files"); failures stand out. */
 .msg-tool {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  padding: 0 7px;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--sm-app-border);
   border-radius: 100px;
-  font-family: var(--sm-font-code-family);
-  font-size: 10px;
+  background: var(--sm-app-surface);
+  color: var(--sm-text-medium);
+  font-size: 11.5px;
+  line-height: 1;
 }
 
-.msg-tool.is-ok {
-  background: var(--sm-palette-green-1);
-  color: var(--sm-palette-green-9);
+.msg-tool::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sm-brand-primary);
 }
 
 .msg-tool.is-error {
-  background: var(--sm-palette-red-1);
-  color: var(--sm-palette-red-9);
+  border-color: color-mix(in srgb, var(--sm-color-text-error-default) 45%, transparent);
+  color: var(--sm-color-text-error-default);
+  font-weight: 500;
+}
+
+.msg-tool.is-error::before {
+  background: var(--sm-color-text-error-default);
+}
+
+/* Time and Copy under a reply. */
+.msg-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.msg-copy {
+  border: 0;
+  border-radius: 5px;
+  padding: 1px 6px;
+  background: transparent;
+  color: var(--sm-text-weak);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.msg-copy:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+
+.msg-copy:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
 }
 
 /* ------------------------------------------------------------------ */

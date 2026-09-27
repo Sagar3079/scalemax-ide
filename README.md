@@ -16,6 +16,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
+- **Every task lives in a folder, like Kiro** — a conversation starts once you choose a folder (any folder, the Desktop included), and after the first message the task stays in that folder. The sidebar lists your projects with their tasks and a **+** to start another task in the same folder; New task lets you pick a different one
+- **Clean replies** — answers are formatted (headings, lists, tables, code blocks with a Copy button) instead of showing raw Markdown symbols
 - **Works in your project folder, like Claude Code or Codex** — pick a folder from the folder menu (recent folders included; the last one opens again at start). The model can list, read, search, edit and write its files and run commands there (reads run on their own in Basic; changes and commands ask first unless you chose Bypass all). Each chat remembers its folder. Secret files such as `.env` and keys stay off limits
 - **Project notes** — on the first message in a folder ScaleMax writes `.scalemax/SCALEMAX.md` (overview, stack, commands, structure) and reads it, plus any `AGENTS.md`, `CLAUDE.md` or Kiro steering files, into every chat there. Type `/init` to have ScaleMax rewrite the notes after reading the project; Preferences → Projects turns the automatic notes off
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
@@ -139,6 +141,7 @@ scalemax-ide/
 │   ├── custom-ui.js      # create/edit custom experts and skills
 │   ├── mcp-ui.js         # MCP server management
 │   ├── composer-ui.js    # composer model/reasoning menu, permission modes, tool approval prompts
+│   ├── markdown.js       # replies as formatted text (DOM only, never HTML) + markdown.css
 │   ├── media-ui.js       # image/video generation options, results in chat, download
 │   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)

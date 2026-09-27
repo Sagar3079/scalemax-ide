@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildSystemPrompt, searchItems, normalizeAutomations, nextRunAt,
   normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks,
+  folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime, toolCallGroups, toolActivity,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -298,4 +299,111 @@ test('assistant messages keep their thinking time and thinking text across a rel
   assert.equal(task.messages[1].reasoning, '17 × 23 = 391');
   assert.equal(task.messages[2].thinkingMs, undefined);
   assert.equal(task.messages[2].reasoning, undefined);
+});
+
+// ---- Folder-first tasks ----
+const ALPHA = { name: 'alpha', path: '/work/alpha' };
+const BETA = { name: 'beta', path: '/work/beta' };
+const said = (text, time = 1) => ({ role: 'user', text, time });
+const replied = (text, time = 2) => ({ role: 'assistant', text, time });
+
+test('folder names and stored task folders', () => {
+  assert.equal(folderName('/Users/me/Desktop'), 'Desktop');
+  assert.equal(folderName('/Users/me/project/'), 'project');
+  assert.equal(folderName('/'), '/');
+  assert.equal(folderName(''), '');
+  assert.deepEqual(normalizeTaskFolder(ALPHA), ALPHA);
+  assert.equal(normalizeTaskFolder({ name: 'alpha', path: 'work/alpha' }), null, 'relative paths are refused');
+  assert.equal(normalizeTaskFolder({ name: ' ', path: '/work/alpha' }), null);
+  assert.equal(normalizeTaskFolder('/work/alpha'), null);
+});
+
+test('a task is locked once it has a folder and a message from the user', () => {
+  assert.equal(isTaskLocked({ folder: ALPHA, messages: [said('hi'), replied('hello')] }), true);
+  // A draft: the folder follows the user's choice until the first message.
+  assert.equal(isTaskLocked({ folder: ALPHA, messages: [] }), false);
+  // Chats from before tasks had folders stay unlocked until their next message.
+  assert.equal(isTaskLocked({ messages: [said('hi')] }), false);
+  assert.equal(isTaskLocked({ folder: ALPHA, messages: [replied('automation output')] }), false);
+  assert.equal(isTaskLocked({ folder: { name: 'x', path: 'relative' }, messages: [said('hi')] }), false);
+  assert.equal(isTaskLocked(null), false);
+});
+
+test('task folder status: ready, waiting for a folder, or another folder', () => {
+  assert.equal(taskFolderStatus({ folder: ALPHA, messages: [] }, '/work/alpha'), 'ready');
+  assert.equal(taskFolderStatus({ messages: [] }, '/work/alpha'), 'ready', 'a task without a folder takes the open one');
+  assert.equal(taskFolderStatus({ messages: [] }, ''), 'none');
+  assert.equal(taskFolderStatus(undefined, ''), 'none');
+  assert.equal(taskFolderStatus({ folder: ALPHA, messages: [said('hi')] }, '/work/beta'), 'mismatch');
+  assert.equal(taskFolderStatus({ folder: ALPHA, messages: [said('hi')] }, ''), 'mismatch');
+});
+
+test('sidebar groups: folders by recent activity, tasks newest first, earlier chats last', () => {
+  const tasks = [
+    { id: 'a1', title: 'Old alpha', folder: ALPHA, messages: [said('a')], updatedAt: 100 },
+    { id: 'b1', title: 'Beta', folder: BETA, messages: [said('b')], updatedAt: 300 },
+    { id: 'a2', title: 'New alpha', folder: ALPHA, messages: [said('a')], updatedAt: 200 },
+    { id: 'l1', title: 'Before folders', messages: [said('x')], updatedAt: 900 },
+    { id: 'l2', title: 'Also before', messages: [said('y')], updatedAt: 950 },
+    { id: 'e1', title: 'New Task', messages: [], updatedAt: 999 },
+    { id: 'e2', title: 'New Task', folder: ALPHA, messages: [], updatedAt: 998 },
+  ];
+  const { groups, legacy } = taskGroups(tasks, 'b1');
+  assert.deepEqual(groups.map((group) => [group.path, group.name, group.updatedAt]), [['/work/beta', 'beta', 300], ['/work/alpha', 'alpha', 200]]);
+  assert.deepEqual(groups[1].tasks.map((task) => task.id), ['a2', 'a1']);
+  // Empty tasks are not listed unless they are the current task with a folder.
+  assert.deepEqual(legacy.map((task) => task.id), ['l2', 'l1']);
+  assert.ok(!groups.some((group) => group.tasks.some((task) => task.id.startsWith('e'))));
+  const withDraft = taskGroups(tasks, 'e2');
+  assert.deepEqual(withDraft.groups.map((group) => group.path), ['/work/alpha', '/work/beta']);
+  assert.deepEqual(withDraft.groups[0].tasks.map((task) => task.id), ['e2', 'a2', 'a1']);
+  // The current empty task without a folder stays out.
+  assert.equal(taskGroups(tasks, 'e1').groups.flatMap((group) => group.tasks).some((task) => task.id === 'e1'), false);
+  assert.deepEqual(taskGroups('nope', null), { groups: [], legacy: [] });
+});
+
+test('sidebar task times are short and relative', () => {
+  const now = new Date(2026, 4, 10, 15, 30).getTime();
+  assert.equal(taskTime(now - 20000, now), 'Just now');
+  assert.equal(taskTime(now + 5000, now), 'Just now');
+  assert.equal(taskTime(now - 12 * 60000, now), '12m ago');
+  assert.equal(taskTime(new Date(2026, 4, 10, 9, 5).getTime(), now), '09:05');
+  assert.equal(taskTime(new Date(2026, 4, 9, 23, 59).getTime(), now), 'Yesterday');
+  assert.equal(taskTime(new Date(2026, 3, 3, 12, 0).getTime(), now), 'Apr 3');
+  assert.equal(taskTime(new Date(2025, 11, 24, 12, 0).getTime(), now), 'Dec 24, 2025');
+  assert.equal(taskTime(Number.NaN, now), '');
+});
+
+test('tool calls of a reply are grouped with plain labels', () => {
+  const groups = toolCallGroups([
+    { server: 'Workspace', tool: 'read_file', ok: true },
+    { server: 'Workspace', tool: 'list_files', ok: true },
+    { server: 'Workspace', tool: 'read_file', ok: true },
+    { server: 'Workspace', tool: 'edit_file', ok: true },
+    { server: 'Workspace', tool: 'edit_file', ok: false },
+    { server: 'Workspace', tool: 'run_command', ok: false },
+    { server: 'GitHub', tool: 'search_code', ok: true },
+    { server: 'GitHub', tool: 'search_code', ok: true },
+    { server: '', tool: 'lonely', ok: true },
+    { tool: 42 },
+    null,
+  ]);
+  assert.deepEqual(groups.map((group) => [group.label, group.ok]), [
+    ['Read 2 files', true],
+    ['Listed a folder', true],
+    ['Made 2 edits · 1 failed', false],
+    ['Ran a command · failed', false],
+    ['GitHub · search_code ×2', true],
+    ['lonely', true],
+  ]);
+  assert.equal(groups[2].title, 'Workspace · edit_file: 2 calls, 1 failed');
+  assert.equal(groups[1].title, 'Workspace · list_files: 1 call');
+  assert.deepEqual(toolCallGroups(undefined), []);
+});
+
+test('tool activity reads like a sentence for workspace tools', () => {
+  assert.deepEqual(toolActivity('Workspace', 'read_file'), { text: 'Reading a file', friendly: true });
+  assert.deepEqual(toolActivity('Workspace', 'run_command'), { text: 'Running a command', friendly: true });
+  assert.deepEqual(toolActivity('GitHub', 'search_code'), { text: 'GitHub · search_code', friendly: false });
+  assert.deepEqual(toolActivity('', 'echo'), { text: 'echo', friendly: false });
 });

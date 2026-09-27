@@ -152,11 +152,27 @@ test('/init detection and helpers', () => {
 });
 
 test('a refused folder keeps the open one open', async (t) => {
-  const { root, workspace } = await folder(t, 'keep-me', { 'a.txt': 'a\n' });
+  const { root, workspace } = await folder(t, 'keep-me', { 'a.txt': 'a\n', '.ssh/config': 'Host x\n' });
   await assert.rejects(workspace.select(path.join(root, 'missing')), { code: 'ENOENT' });
-  await assert.rejects(workspace.select(os.homedir()), { code: 'UNSAFE_ROOT' });
+  // Private service folders are never a project, even when asked for directly.
+  await assert.rejects(workspace.select(path.join(root, '.ssh')), { code: 'INVALID_ROOT' });
   assert.equal(workspace.current().path, root);
   assert.equal((await workspace.read('a.txt')).content, 'a\n');
+});
+
+test('any folder can be opened: home and Desktop included', async (t) => {
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  const home = fs.realpathSync(os.homedir());
+  assert.equal((await workspace.select(home)).path, home);
+  const desktop = path.join(home, 'Desktop');
+  if (fs.existsSync(desktop) && fs.realpathSync(desktop) === desktop) {
+    assert.equal((await workspace.select(desktop)).path, desktop);
+    assert.ok(Array.isArray((await workspace.list('')).entries));
+  }
+  // Secret files stay hidden in a wide folder too.
+  const names = (await workspace.list('')).entries.map((entry) => entry.name);
+  assert.ok(!names.includes('.ssh') && !names.includes('.env'));
 });
 
 const { createWorkspaceTools } = require('../lib/workspace-tools.cjs');

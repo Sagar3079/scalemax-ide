@@ -1,10 +1,10 @@
 /**
  * ScaleMax composer controls: the model menu (model, thinking on/off, reasoning effort), the
- * tool permissions menu (Manual / Basic / Bypass all, with a consent step), the folder menu (open
- * folder, recent folders, project notes), and the prompt that asks the user to approve a tool
- * call. DOM is built with textContent and CSSOM only (CSP).
+ * tool permissions menu (Manual / Basic / Bypass all, with a consent step), the folder menu (the
+ * task's folder, open another or a recent one, new tasks, project notes), and the prompt that asks
+ * the user to approve a tool call. DOM is built with textContent and CSSOM only (CSP).
  */
-import { PERMISSION_MODES, REASONING_EFFORTS, effectivePermission, folderName } from './domain.mjs';
+import { PERMISSION_MODES, REASONING_EFFORTS, effectivePermission, folderName, isTaskLocked } from './domain.mjs';
 
 const $ = (selector) => document.querySelector(selector);
 const PERMISSION_LABELS = { manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
@@ -609,27 +609,44 @@ function folderOption(action, name, desc) {
   return option;
 }
 
-/** The folder chip's menu: the open folder, open another one, project notes, recent folders. */
+function notesOption(app) {
+  const notes = folderOption('init', 'Write project notes (/init)', 'ScaleMax reads the project and writes .scalemax/SCALEMAX.md');
+  // It is a chat request, and only one runs at a time.
+  notes.disabled = chatBusy(app);
+  return notes;
+}
+
+/**
+ * The folder chip's menu. Before the task's first message: its folder, open another one, project
+ * notes, recent folders. Once the task is fixed to its folder: that folder and new tasks instead.
+ */
 export function renderFolderMenu(app) {
   const menu = $('#folder-menu');
   if (!menu) return;
   const root = app.workspace?.root || '';
-  const nodes = [element('p', 'composer-menu-title', 'Workspace folder')];
-  if (root) {
+  const task = typeof app.currentTask === 'function' ? app.currentTask() : null;
+  const locked = isTaskLocked(task);
+  const folder = task?.folder || (root ? { name: folderName(root), path: root } : null);
+  const title = locked ? 'Task folder' : 'Folder for this task';
+  menu.setAttribute('aria-label', title);
+  const nodes = [element('p', 'composer-menu-title', title)];
+  if (folder) {
     const current = element('div', 'folder-menu-current');
-    current.append(element('span', 'composer-menu-option-name', folderName(root)), element('span', 'folder-menu-path', root));
+    current.append(element('span', 'composer-menu-option-name', folder.name), element('span', 'folder-menu-path', folder.path));
+    if (locked) current.append(element('span', 'folder-menu-note', 'A task stays in the folder it started in.'));
     nodes.push(current);
   }
-  nodes.push(folderOption('open', 'Open folder…', 'Pick a project folder for chat and the Workspace view'));
-  if (root) {
-    nodes.push(folderOption('show', 'Show in Workspace'));
-    const notes = folderOption('init', 'Write project notes (/init)', 'ScaleMax reads the project and writes .scalemax/SCALEMAX.md');
-    // It is a chat request, and only one runs at a time.
-    notes.disabled = chatBusy(app);
-    nodes.push(notes);
+  if (locked) {
+    nodes.push(folderOption('new-here', 'New task in this folder'),
+      folderOption('new-other', 'New task in another folder…'),
+      folderOption('show', 'Show in Workspace'),
+      notesOption(app));
+  } else {
+    nodes.push(folderOption('open', 'Open folder…', 'Choose the folder this task works in'));
+    if (root) nodes.push(folderOption('show', 'Show in Workspace'), notesOption(app));
   }
-  const recent = (Array.isArray(app.workspace?.recent) ? app.workspace.recent : [])
-    .filter((item) => typeof item?.path === 'string' && item.path && item.path !== root)
+  const recent = locked ? [] : (Array.isArray(app.workspace?.recent) ? app.workspace.recent : [])
+    .filter((item) => typeof item?.path === 'string' && item.path && item.path !== root && item.path !== folder?.path)
     .slice(0, RECENT_FOLDERS_SHOWN);
   if (recent.length) {
     const group = element('div', 'folder-menu-recent');
@@ -656,7 +673,8 @@ export function renderFolderMenu(app) {
 // .scalemax/SCALEMAX.md". A draft or attachment the user was preparing stays in the composer.
 function writeProjectNotes(app) {
   const input = $('#chat-input');
-  if (!input || chatBusy(app) || !app.workspace?.root) return;
+  // handleSend opens the task's folder first (or says why it cannot).
+  if (!input || chatBusy(app)) return;
   if (app.settings.composerMode !== 'chat') {
     // Project notes come from a chat request, never from an image or video prompt.
     app.settings.composerMode = 'chat';
@@ -689,6 +707,8 @@ function bindFolderMenu(app) {
     else if (action === 'show') app.switchView('workspace');
     else if (action === 'init') writeProjectNotes(app);
     else if (action === 'recent') void app.openWorkspaceAt(option.dataset.folderPath);
+    else if (action === 'new-here') app.newTask({ folder: app.currentTask()?.folder });
+    else if (action === 'new-other') void app.newTaskInAnotherFolder();
   });
 }
 

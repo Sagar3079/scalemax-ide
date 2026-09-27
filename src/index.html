@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="experts.css" />
   <link rel="stylesheet" href="workspace.css" />
+  <link rel="stylesheet" href="markdown.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -73,10 +74,11 @@
 
         <section id="tasks-section" class="sm-sidebar-nav__section" aria-labelledby="tasks-title">
           <div class="sm-sidebar-nav__section-title tasks-heading">
-            <h2 id="tasks-title">Your tasks</h2>
+            <h2 id="tasks-title">Projects</h2>
             <span id="task-count" class="count" role="status" aria-live="polite" aria-label="Task count">0</span>
           </div>
-          <div id="tasks-list" aria-label="Saved tasks"></div>
+          <!-- One group per project folder with its tasks (src/app.js renderTasks). -->
+          <div id="tasks-list" aria-label="Tasks by project folder"></div>
         </section>
 
         <div id="sidebar-bottom">
@@ -107,6 +109,19 @@
                 <h1 id="welcome-title" class="sm-home-header__title">What will you work on next?</h1>
                 <p class="sm-home-header__slogan">Think it through. Build it out. Work with AI on your terms.</p>
               </div>
+              <!-- A task starts in a folder: shown until one is chosen (src/app.js renderFolderPicker). -->
+              <section id="folder-picker" class="folder-picker" aria-labelledby="folder-picker-title" hidden>
+                <h2 id="folder-picker-title" class="folder-picker-title">Choose a project folder</h2>
+                <p class="folder-picker-text">ScaleMax works inside a folder, like a coding agent in your terminal. The folder stays with this task.</p>
+                <button id="folder-picker-open" class="button primary folder-picker-open" type="button">
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+                  <span>Open folder…</span>
+                </button>
+                <div id="folder-picker-recent" class="folder-picker-recent" role="group" aria-labelledby="folder-picker-recent-title" hidden>
+                  <span id="folder-picker-recent-title" class="folder-picker-recent-title">Recent</span>
+                  <div id="folder-picker-recent-list" class="folder-picker-recent-list"></div>
+                </div>
+              </section>
             </header>
 
             <div id="mode-switch" class="sm-scene-tabs" role="group" aria-label="Task mode">
@@ -117,7 +132,13 @@
             <div class="sm-home-composer">
               <div id="chat-messages" class="chat-transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
               <div id="chat-card" class="sm-home-composer__card">
-                <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step…"></textarea>
+                <!-- The task's folder is not the open one (src/app.js renderTaskFolderNotice). -->
+                <div id="task-folder-notice" class="task-folder-notice" role="status" hidden>
+                  <svg class="task-folder-notice-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+                  <span id="task-folder-notice-text" class="task-folder-notice-text"></span>
+                  <button id="task-folder-notice-action" class="button secondary compact task-folder-notice-action" type="button" aria-describedby="task-folder-notice-text" hidden></button>
+                </div>
+                <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step…" aria-label="Message"></textarea>
                 <div id="attachment-row" class="attachment-row" hidden>
                   <span id="attachment-status" class="attachment-chip"></span>
                   <button id="remove-attachment-btn" class="button secondary" type="button" hidden>Remove</button>
@@ -133,10 +154,12 @@
                     <span id="permission-label">Basic</span>
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                   </button>
-                  <button id="folder-chip" class="composer-chip folder-chip" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="folder-menu" title="Workspace folder">
+                  <button id="folder-chip" class="composer-chip folder-chip is-empty" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="folder-menu" title="Choose the folder this task works in">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
-                    <span id="folder-chip-label" class="folder-chip-label">No folder</span>
+                    <span id="folder-chip-label" class="folder-chip-label">Choose folder</span>
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+                    <!-- Shown instead of the chevron once the task is fixed to its folder. -->
+                    <svg class="folder-chip-lock" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3" /></svg>
                   </button>
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
@@ -169,8 +192,8 @@
                   <span class="composer-menu-option-desc">Autonomous: every tool call runs without asking. Needs your consent.</span>
                 </button>
               </div>
-              <!-- Rebuilt from the open and recent folders each time it opens (src/composer-ui.js). -->
-              <div id="folder-menu" class="composer-menu folder-menu" popover role="menu" aria-label="Workspace folder"></div>
+              <!-- Rebuilt from the task's folder and the recent folders each time it opens (src/composer-ui.js). -->
+              <div id="folder-menu" class="composer-menu folder-menu" popover role="menu" aria-label="Folder for this task"></div>
               <div id="model-menu" class="composer-menu model-menu" popover role="dialog" aria-label="Model and reasoning">
                 <div id="model-tabs" class="segmented model-tabs" role="tablist" aria-label="Model type">
                   <button class="segmented-option" type="button" role="tab" aria-selected="true" data-model-tab="chat">Chat</button>

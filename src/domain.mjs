@@ -178,6 +178,136 @@ export function normalizeTaskFolder(value) {
   return { name, path };
 }
 
+function taskFolder(task) {
+  return isRecord(task) ? normalizeTaskFolder(own(task, 'folder')) : null;
+}
+
+function hasUserMessage(task) {
+  const messages = isRecord(task) ? own(task, 'messages') : undefined;
+  return Array.isArray(messages) && messages.some((message) => isRecord(message) && message.role === 'user');
+}
+
+/**
+ * A task is fixed to its folder once the user sent a message there: that folder never changes
+ * again. Before the first message the folder is a draft that follows the user's choice.
+ */
+export function isTaskLocked(task) {
+  return Boolean(taskFolder(task)) && hasUserMessage(task);
+}
+
+/**
+ * How a task relates to the open folder (root, '' when none):
+ *   'ready'    its folder is open, or it has none yet and takes the open one
+ *   'none'     neither the task nor the app has a folder, so chat waits for one
+ *   'mismatch' it works in another folder than the open one
+ */
+export function taskFolderStatus(task, root) {
+  const folder = taskFolder(task);
+  const open = typeof root === 'string' ? root : '';
+  if (!folder) return open ? 'ready' : 'none';
+  return folder.path === open ? 'ready' : 'mismatch';
+}
+
+/**
+ * The sidebar's projects: one group per folder, the most recently active first, each with its
+ * tasks newest first; chats from before tasks had folders come separately (legacy). Empty tasks
+ * are left out, except the current one once it has its (draft) folder: the new task there.
+ * @returns {{ groups: Array<{ path: string, name: string, updatedAt: number, tasks: object[] }>, legacy: object[] }}
+ */
+export function taskGroups(tasks, currentTaskId) {
+  const byPath = new Map();
+  const legacy = [];
+  const time = (task) => (Number.isFinite(task.updatedAt) ? task.updatedAt : 0);
+  const newestFirst = (left, right) => time(right) - time(left);
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!isRecord(task) || typeof task.id !== 'string') continue;
+    const folder = taskFolder(task);
+    const empty = !Array.isArray(task.messages) || task.messages.length === 0;
+    if (empty && !(folder && task.id === currentTaskId)) continue;
+    if (!folder) {
+      legacy.push(task);
+      continue;
+    }
+    if (!byPath.has(folder.path)) byPath.set(folder.path, { path: folder.path, name: folder.name, updatedAt: 0, tasks: [] });
+    byPath.get(folder.path).tasks.push(task);
+  }
+  const groups = [...byPath.values()];
+  for (const group of groups) {
+    group.tasks.sort(newestFirst);
+    group.updatedAt = time(group.tasks[0]);
+    group.name = taskFolder(group.tasks[0]).name;
+  }
+  groups.sort((left, right) => right.updatedAt - left.updatedAt);
+  return { groups, legacy: legacy.sort(newestFirst) };
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A task's time in the sidebar: "Just now", "5m ago", "14:05" today, "Yesterday", "Sep 3". */
+export function taskTime(time, now = Date.now()) {
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.max(0, Math.floor((now - time) / 60000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const date = new Date(time);
+  const today = new Date(now);
+  const day = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const days = Math.round((day(today) - day(date)) / 86400000);
+  if (days <= 0) return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (days === 1) return 'Yesterday';
+  const label = `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+  return date.getFullYear() === today.getFullYear() ? label : `${label}, ${date.getFullYear()}`;
+}
+
+// The built-in workspace tools (lib/workspace-tools.cjs, server "Workspace") in plain words:
+// what a reply did (one call, several calls) and what it is doing right now.
+const WORKSPACE_TOOLS = {
+  list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder' },
+  read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file' },
+  search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project' },
+  write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file' },
+  edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file' },
+  run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command' },
+};
+
+/**
+ * The tool calls of one reply, one entry per tool in first-use order, with a short label
+ * ("Read 4 files", "GitHub · search_code ×2") and how many calls failed.
+ */
+export function toolCallGroups(calls) {
+  const groups = [];
+  const byKey = new Map();
+  for (const call of Array.isArray(calls) ? calls : []) {
+    if (!isRecord(call) || typeof call.tool !== 'string' || !call.tool) continue;
+    const server = typeof call.server === 'string' ? call.server : '';
+    const key = `${server}\u0000${call.tool}`;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { server, tool: call.tool, count: 0, failed: 0 };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.count += 1;
+    if (call.ok !== true) group.failed += 1;
+  }
+  return groups.map((group) => {
+    const known = group.server === 'Workspace' ? WORKSPACE_TOOLS[group.tool] : null;
+    const name = `${group.server ? `${group.server} · ` : ''}${group.tool}`;
+    const base = known ? (group.count === 1 ? known.one : known.many(group.count)) : `${name}${group.count > 1 ? ` ×${group.count}` : ''}`;
+    const failure = !group.failed ? '' : group.failed === group.count ? ' · failed' : ` · ${group.failed} failed`;
+    const calls = `${group.count} call${group.count === 1 ? '' : 's'}${group.failed ? `, ${group.failed} failed` : ''}`;
+    return { ...group, ok: group.failed === 0, label: `${base}${failure}`, title: `${name}: ${calls}` };
+  });
+}
+
+/** What a reply is doing while a tool runs or waits for approval: { text, friendly }. */
+export function toolActivity(serverId, toolName) {
+  const known = serverId === 'Workspace' ? WORKSPACE_TOOLS[toolName] : null;
+  if (known) return { text: known.doing, friendly: true };
+  const name = typeof toolName === 'string' ? toolName : '';
+  return { text: `${serverId ? `${serverId} · ` : ''}${name}`, friendly: false };
+}
+
 export function normalizeTasks(value, now = Date.now()) {
   if (!Array.isArray(value)) return [];
   const fallbackTime = timestamp(now, Date.now());

@@ -3849,9 +3849,6 @@
   --sm-dialog-btn-primary-bg: var(--sm-button-primary-bg);
   --sm-dialog-btn-primary-text: var(--sm-button-primary-fg);
   --sm-dropdown-item-selected-bg-color: var(--sm-todo-menu-bg-active);
-  --sm-palette-gray-2: var(--sm-palette-gray-2);
-  --sm-palette-gray-3: var(--sm-palette-gray-3);
-  --sm-palette-gray-4: var(--sm-palette-gray-4);
   --sm-scene-tag-bg: var(--sm-palette-brand-2);
   --sm-scene-tag-fg: var(--sm-color-text-primary);
   --sm-border-default: var(--sm-color-border-primary);

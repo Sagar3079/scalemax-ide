@@ -165,6 +165,7 @@ async function run(win) {
         providerStatus: document.querySelector('#provider-status')?.textContent,
         chatInputDisabled: Boolean(document.querySelector('#chat-input')?.disabled),
         sendDisabledAfterTyping: Boolean(document.querySelector('#send-btn')?.disabled),
+        folderPickerShown: Boolean(document.querySelector('#folder-picker') && !document.querySelector('#folder-picker').hidden),
         viewCount: document.querySelectorAll('.view').length,
         communityCards: document.querySelectorAll('#community-list .expert-card').length,
         catalogCategories: document.querySelectorAll('#catalog-category option').length,
@@ -197,7 +198,16 @@ async function run(win) {
       const afterSave = await api.provider.get();
       const testResult = await api.provider.test();
       const sendResult = await api.provider.send({ requestId: 'smoke-e2e', messages: [{ role: 'user', content: 'ping' }] });
+      // Built-in workspace tools: none without a folder, and the instructions say so.
+      const noFolder = await api.provider.send({ requestId: 'smoke-ws-none', messages: [{ role: 'user', content: 'which folder am I in?' }] });
+      // A chat cannot start without a folder: Send stays off until one is open.
       const input = document.querySelector('#chat-input');
+      input.value = 'ping';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const uiSendBlockedNoFolder = Boolean(document.querySelector('#send-btn')?.disabled);
+      const { default: app } = await import('./app.js');
+      await app.openWorkspaceAt(${JSON.stringify(wsToolsDir)});
+      const wsToolsSelected = await api.workspace.current();
       input.value = 'ping';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('#send-btn').click();
@@ -205,6 +215,13 @@ async function run(win) {
       const answered = () => [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].some((node) => node.textContent === 'pong');
       for (let i = 0; i < 50 && !answered(); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
       const replies = [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].map((node) => node.textContent);
+      // The first message binds the task to the folder: notes created, chip locked, task listed under the folder.
+      const uiNotice = [...document.querySelectorAll('#chat-messages .msg-notice')].map((node) => node.textContent).join(' ');
+      const uiTask = app.tasks.find((task) => task.id === app.currentTaskId);
+      const uiTaskFolder = uiTask && uiTask.folder ? uiTask.folder.path : null;
+      const uiChipLocked = Boolean(document.querySelector('#folder-chip')?.classList.contains('is-locked'));
+      const uiGroupHasTask = [...document.querySelectorAll('#tasks-list .task-group')].some((group) => group.dataset.folderPath === ${JSON.stringify(wsToolsDir)}
+        && Boolean(group.querySelector('.task-item[data-task-id="' + (uiTask ? uiTask.id : '') + '"]')));
 
       // MCP: a real stdio server (the test fixture run by this Electron binary as Node).
       const mcpSaved = await api.mcp.save({
@@ -235,10 +252,11 @@ async function run(win) {
       if (mcpSaved.ok) await api.mcp.remove({ id: mcpSaved.data.id });
       // Built-in workspace tools: none without a folder; with one, the model is told its name and
       // can list it (read-only, so Basic runs it without asking).
-      const noFolder = await api.provider.send({ requestId: 'smoke-ws-none', messages: [{ role: 'user', content: 'which folder am I in?' }] });
-      const wsToolsSelected = await api.workspace.select(${JSON.stringify(wsToolsDir)});
       const folderReply = await api.provider.send({ requestId: 'smoke-ws-folder', messages: [{ role: 'user', content: 'which folder am I in?' }] });
       const wsToolChat = await api.provider.send({ requestId: 'smoke-ws-list', messages: [{ role: 'user', content: 'Please use workspace list.' }] });
+      // A task's messages only run in its own folder.
+      const mismatch = await api.provider.send({ requestId: 'smoke-ws-mismatch', folder: '/private/tmp/scalemax-folder-not-open', messages: [{ role: 'user', content: 'ping' }] });
+      const matched = await api.provider.send({ requestId: 'smoke-ws-match', folder: ${JSON.stringify(wsToolsDir)}, messages: [{ role: 'user', content: 'ping' }] });
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -272,7 +290,14 @@ async function run(win) {
         toolChatText: toolChat && toolChat.ok ? toolChat.data.text : (toolChat?.error?.message || null),
         toolChatCalls: toolChat && toolChat.ok ? toolChat.data.toolCalls : null,
         wsNoFolderText: noFolder && noFolder.ok ? noFolder.data.text : (noFolder?.error?.message || null),
-        wsSelected: Boolean(wsToolsSelected && wsToolsSelected.ok),
+        wsSelected: Boolean(wsToolsSelected && wsToolsSelected.ok && wsToolsSelected.data.root === ${JSON.stringify(wsToolsDir)}),
+        uiSendBlockedNoFolder,
+        uiNotice,
+        uiTaskFolder,
+        uiChipLocked,
+        uiGroupHasTask,
+        mismatchCode: mismatch && !mismatch.ok ? mismatch.error.code : null,
+        matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
         wsToolText: wsToolChat && wsToolChat.ok ? wsToolChat.data.text : (wsToolChat?.error?.message || null),
         wsToolCalls: wsToolChat && wsToolChat.ok ? wsToolChat.data.toolCalls : null,
@@ -354,7 +379,7 @@ async function run(win) {
       const git = await api.workspace.gitStatus();
       const terminal = await api.workspace.run({ command: 'printf terminal-ok' });
       const { default: app } = await import('./app.js');
-      app.applyWorkspace(selected.data);
+      await app.openWorkspaceAt(${JSON.stringify(wsDir)});
       await app.openFile('hello.txt');
       const tabs = document.querySelectorAll('#editor-tabs .ws-tab').length;
       const title = document.querySelector('#editor-title')?.textContent;
@@ -439,10 +464,12 @@ async function run(win) {
     providerGetOk: probe.providerGetOk,
     providerConfiguredFalse: probe.providerConfigured,
     cancelOk: probe.cancelOk,
-    taskSeeded: probe.taskCount === '1',
+    // The seeded task is empty and has no folder yet, so the task list starts empty.
+    taskListStartsEmpty: probe.taskCount === '0',
     versionLoaded: probe.version === '1.0.0',
     chatInputEnabled: probe.chatInputDisabled === false,
-    sendEnabledAfterTyping: probe.sendDisabledAfterTyping === false,
+    // No chat without a folder: Send stays off and the folder picker is shown.
+    sendNeedsFolder: probe.sendDisabledAfterTyping === true && probe.folderPickerShown === true,
     views: probe.viewCount === 6,
     communityCards: probe.communityCards === 7,
     catalogCategories: probe.catalogCategories > 1,
@@ -468,9 +495,13 @@ async function run(win) {
     workspaceToolLoop: Boolean(e2e && typeof e2e.wsToolText === 'string' && e2e.wsToolText.startsWith('tool said: ')
       && e2e.wsToolText.includes('smoke-note.txt') && Array.isArray(e2e.wsToolCalls) && e2e.wsToolCalls.length === 1
       && e2e.wsToolCalls[0].server === 'Workspace' && e2e.wsToolCalls[0].tool === 'list_files' && e2e.wsToolCalls[0].ok === true),
-    projectNotesCreated: Boolean(e2e && e2e.wsNotesFirst && e2e.wsNotesFirst.created === true
-      && e2e.wsNotesFirst.path === '.scalemax/SCALEMAX.md' && e2e.wsNotesSecond === null
+    // The first message in the folder (sent from the window) created the notes; later ones do not.
+    projectNotesCreated: Boolean(e2e && typeof e2e.uiNotice === 'string' && e2e.uiNotice.includes('Created .scalemax/SCALEMAX.md')
+      && e2e.wsNotesFirst === null && e2e.wsNotesSecond === null
       && typeof wsNotesOnDisk === 'string' && wsNotesOnDisk.startsWith(`# ${path.basename(wsToolsDir)}\n`)),
+    uiNeedsFolder: Boolean(e2e && e2e.uiSendBlockedNoFolder === true),
+    taskFolderLocked: Boolean(e2e && e2e.uiTaskFolder === wsToolsDir && e2e.uiChipLocked === true && e2e.uiGroupHasTask === true),
+    folderMismatchRefused: Boolean(e2e && e2e.mismatchCode === 'FOLDER_MISMATCH' && e2e.matchedText === 'pong'),
     workspaceRemembered: Boolean(e2e && e2e.wsCurrent && e2e.wsCurrent.ok && e2e.wsCurrent.data.root === wsToolsDir
       && e2e.wsCurrent.data.recent.some((item) => item.path === wsToolsDir)),
     manualApprovalDeny: Boolean(e2e && Array.isArray(e2e.deniedCalls) && e2e.deniedCalls.length === 1

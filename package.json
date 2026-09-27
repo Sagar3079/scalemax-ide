@@ -28,7 +28,12 @@
         "zip"
       ],
       "category": "public.app-category.developer-tools",
-      "icon": "assets/icons/icon.icns"
+      "icon": "assets/icons/icon.icns",
+      "extendInfo": {
+        "NSDesktopFolderUsageDescription": "ScaleMax opens the project folders you choose on your Desktop.",
+        "NSDocumentsFolderUsageDescription": "ScaleMax opens the project folders you choose in Documents.",
+        "NSDownloadsFolderUsageDescription": "ScaleMax opens the project folders you choose in Downloads."
+      }
     },
     "files": [
       "main.js",

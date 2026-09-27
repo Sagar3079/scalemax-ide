@@ -95,6 +95,18 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
 
+  // Links in replies open in the browser (web and mail links only); the app window itself never
+  // navigates away from the app or opens other windows.
+  const webLink = (url) => /^(https?:|mailto:)/i.test(url);
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (webLink(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (webLink(url)) void shell.openExternal(url);
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
@@ -231,6 +243,26 @@ const toolLoop = createToolLoop({
 // a folder that has none, and read, with any AGENTS.md / CLAUDE.md / Kiro steering files, into
 // every chat there. Preferences can turn the automatic creation off (settings.projectNotes).
 const projectNotes = createProjectNotes({ getWorkspace: () => getWorkspace() });
+
+/**
+ * A chat task works in the folder of its first message, and the window sends that folder with
+ * every message (input.folder). A request whose folder is not the open one is refused, so a
+ * reply never reads or changes files in another project.
+ */
+async function requireTaskFolder(input) {
+  const expected = input && typeof input === 'object' && !Array.isArray(input) ? input.folder : undefined;
+  if (expected === undefined || expected === null) return;
+  if (typeof expected !== 'string' || !path.isAbsolute(expected) || expected.length > 4096) {
+    throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
+  }
+  await restoreFolder();
+  const open = workspaceTools.folder();
+  if (open && open.path === expected) return;
+  const name = path.basename(expected) || expected;
+  throw bridgeError('FOLDER_MISMATCH', open
+    ? `This task works in "${name}", but "${open.name}" is open. Select the task again to switch back.`
+    : `This task works in "${name}", which is not open.`);
+}
 
 function projectNotesEnabled() {
   try {
@@ -462,6 +494,7 @@ const providerChannels = {
   'provider:send': async (event, input) => {
     if (!provider.get().configured) return provider.send(input);
     await shellPathReady;
+    await requireTaskFolder(input);
     const prepared = await prepareChatRequest(input, { workspaceTools, projectNotes, notesEnabled: projectNotesEnabled() });
     const result = await toolLoop.send(prepared.input, {
       permission: chatPermission(),

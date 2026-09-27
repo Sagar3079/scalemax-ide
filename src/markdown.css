@@ -1,0 +1,215 @@
+/*
+ * Chat replies rendered from Markdown (src/markdown.js). Everything is scoped to .md, the class
+ * of the reply body, and uses the app's theme variables, so light and dark both follow them.
+ */
+.md {
+  color: var(--sm-text-strong);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p {
+  margin: 0 0 8px;
+}
+.md strong {
+  font-weight: 600;
+}
+.md del {
+  color: var(--sm-text-weak);
+}
+
+/* Headings stay modest: a reply is not a document. */
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 14px 0 6px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--sm-text-strong);
+}
+.md .md-h1 {
+  font-size: 17px;
+}
+.md .md-h2 {
+  font-size: 16px;
+}
+.md .md-h3 {
+  font-size: 15px;
+}
+.md .md-h4,
+.md .md-h5,
+.md .md-h6 {
+  font-size: 14px;
+}
+
+/* Lists */
+.md ul,
+.md ol {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+.md li {
+  margin: 2px 0;
+}
+.md li::marker {
+  color: var(--sm-text-weak);
+}
+.md li > ul,
+.md li > ol {
+  margin: 2px 0 0;
+}
+.md li > p {
+  margin: 0 0 6px;
+}
+.md li > p:last-child {
+  margin-bottom: 0;
+}
+.md .md-task {
+  list-style: none;
+}
+.md .md-checkbox {
+  margin: 0 6px 0 -20px;
+  vertical-align: -2px;
+  accent-color: var(--sm-brand-primary);
+}
+
+/* Code */
+.md code {
+  font-family: var(--sm-font-code-family);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--sm-app-muted);
+  color: var(--sm-text-strong);
+}
+.md .md-code {
+  margin: 4px 0 10px;
+  border: 1px solid var(--sm-app-border);
+  border-radius: 8px;
+  background: var(--sm-app-muted);
+  overflow: hidden;
+}
+.md .md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 4px 2px 12px;
+  border-bottom: 1px solid var(--sm-app-border);
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+.md .md-code-lang {
+  font-family: var(--sm-font-code-family);
+  text-transform: lowercase;
+}
+.md .md-copy {
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--sm-text-weak);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.md .md-copy:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.md .md-copy:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
+}
+.md pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.md pre code {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: normal;
+}
+
+/* Tables scroll sideways instead of squeezing the reply. */
+.md .md-table-wrap {
+  margin: 4px 0 10px;
+  overflow-x: auto;
+  border: 1px solid var(--sm-app-border);
+  border-radius: 8px;
+}
+.md table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  overflow-wrap: normal;
+}
+.md th,
+.md td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--sm-app-border);
+  text-align: left;
+  vertical-align: top;
+}
+.md th + th,
+.md td + td {
+  border-left: 1px solid var(--sm-app-border);
+}
+.md tbody tr:last-child td {
+  border-bottom: 0;
+}
+.md th {
+  background: var(--sm-app-muted);
+  font-weight: 600;
+}
+.md .md-left {
+  text-align: left;
+}
+.md .md-center {
+  text-align: center;
+}
+.md .md-right {
+  text-align: right;
+}
+
+.md blockquote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--sm-app-border);
+  color: var(--sm-text-medium);
+}
+.md hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--sm-app-border);
+}
+.md .md-link {
+  color: var(--sm-brand-primary);
+  text-decoration: none;
+}
+.md .md-link:hover,
+.md .md-link:focus-visible {
+  text-decoration: underline;
+}
+.md .md-link:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.md .md-plain {
+  white-space: pre-wrap;
+}
