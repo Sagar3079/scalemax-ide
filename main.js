@@ -11,6 +11,7 @@ const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
+const { collectNames, restoreNames, modelNames } = require('./lib/reply-names.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
 const { createMediaStudio } = require('./lib/media.cjs');
 const { applyBranding, ICON_PATH } = require('./lib/app-branding.cjs');
@@ -199,14 +200,40 @@ function denyAllApprovals() {
 // The workspace tools use the same workspace service as the Workspace tab (getWorkspace below),
 // so they always act on the folder the user has open, and only while one is open.
 const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace() });
-const toolLoop = createToolLoop({ provider, mcp: combineToolSources({ workspaceTools, mcp }), approve: requestToolApproval });
+// The ScaleMax API replaces the word "kiro" in reply text with the model's name, which turned a
+// folder called "kiro-scalemax-ide" into "DeepSeek V4 Flash-scalemax-ide" (lib/reply-names.cjs).
+// Names the model was given in the request (folder, file paths, the user's words) are put back.
+function restoreReplyText(text, sources, { model } = {}) {
+  const config = provider.get();
+  const entry = Array.isArray(config.models) ? config.models.find((item) => item.id === config.model) : null;
+  const folder = workspaceTools.folder();
+  const names = collectNames(sources, folder ? [folder.name] : []);
+  return restoreNames(text, { names, replacements: modelNames({ modelId: config.model, displayName: entry?.displayName, responseModel: model }) });
+}
+
+const toolLoop = createToolLoop({
+  provider,
+  mcp: combineToolSources({ workspaceTools, mcp }),
+  approve: requestToolApproval,
+  restoreText: restoreReplyText
+});
 
 /** Adds the open workspace folder (name only, never its full path) to the chat instructions. */
+// The newest user message also carries the folder name, because models follow the conversation
+// over the instructions: after a folder switch they kept describing the previous folder.
 function withWorkspaceContext(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   const note = workspaceTools.describe();
   const base = typeof input.systemPrompt === 'string' ? input.systemPrompt : '';
-  return { ...input, systemPrompt: base.trim() ? `${base}\n\n${note}` : note };
+  const next = { ...input, systemPrompt: base.trim() ? `${base}\n\n${note}` : note };
+  const marker = workspaceTools.marker();
+  const messages = Array.isArray(input.messages) ? input.messages : null;
+  const last = messages?.[messages.length - 1];
+  if (marker && last && last.role === 'user' && typeof last.content === 'string'
+    && Buffer.byteLength(last.content) < 1024 * 1024 - 1024) {
+    next.messages = [...messages.slice(0, -1), { ...last, content: `${last.content}\n\n${marker}` }];
+  }
+  return next;
 }
 
 // GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's

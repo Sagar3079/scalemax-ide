@@ -36,6 +36,7 @@ test('without an open folder there are no tools and the prompt says so', async (
   assert.deepEqual(tools.definitions(), []);
   assert.equal(tools.folder(), null);
   assert.match(tools.describe(), /No workspace folder is open/);
+  assert.equal(tools.marker(), '');
   await assert.rejects(tools.call('list_files', {}), { code: 'NO_WORKSPACE' });
   workspace.dispose();
 });
@@ -57,13 +58,14 @@ test('an open folder offers five tools; reads are read-only, writes and commands
   const note = tools.describe();
   assert.ok(note.includes(`"${path.basename(root)}"`));
   assert.ok(!note.includes(root));
+  assert.equal(tools.marker(), `[Workspace folder right now: "${path.basename(root)}"]`);
   assert.equal(TOOLS.length, 5);
 });
 
 test('list_files shows one level and hides secrets and build folders', async (t) => {
   const { tools } = await openTools(t);
   const { text } = await tools.call('list_files', {});
-  assert.match(text, /^\(workspace root\): 1 folders, 1 files/);
+  assert.match(text, /^sm-ws-tools-\w+ \(the workspace folder\): 1 folders, 1 files/);
   assert.ok(text.includes('src/') && text.includes('README.md'));
   assert.ok(!text.includes('.env') && !text.includes('node_modules'));
   assert.match((await tools.call('list_files', { path: './src/' })).text, /src\/app\.js/);
@@ -217,3 +219,13 @@ for (const [permission, decision, created, approvals] of [
     assert.equal(provider.calls[0].tools.length, 5);
   });
 }
+
+test('an empty folder is reported as empty, by name', async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-empty-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  await workspace.select(root);
+  const { text } = await createWorkspaceTools({ getWorkspace: () => workspace }).call('list_files', {});
+  assert.match(text, new RegExp(`^${path.basename(root)} \\(the workspace folder\\) is empty: it has no files or folders\\.`));
+});
