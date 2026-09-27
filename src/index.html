@@ -2,7 +2,7 @@
 <html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self';script-src 'self';style-src 'self';img-src 'self' data:;connect-src 'none';object-src 'none';base-uri 'none';form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';script-src 'self';style-src 'self';img-src 'self' data: scalemax-media:;media-src scalemax-media:;connect-src 'none';object-src 'none';base-uri 'none';form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <title>ScaleMax — Local AI workspace</title>
@@ -122,6 +122,8 @@
                   <span id="attachment-status" class="attachment-chip"></span>
                   <button id="remove-attachment-btn" class="button secondary" type="button" hidden>Remove</button>
                 </div>
+                <!-- Image / video generation options for the selected model (src/media-ui.js). -->
+                <div id="media-bar" class="media-bar" role="group" aria-label="Generation options" hidden></div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
                   <button id="attach-btn" class="composer-icon-button" type="button" aria-label="Attach file" title="Attach file">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" /></svg>
@@ -130,6 +132,10 @@
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6l-7-3Z" /></svg>
                     <span id="permission-label">Basic</span>
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+                  </button>
+                  <button id="folder-chip" class="composer-chip folder-chip" type="button" title="Open a folder">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+                    <span id="folder-chip-label" class="folder-chip-label">No folder</span>
                   </button>
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
@@ -141,7 +147,7 @@
                     </button>
                     <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
                     <button id="send-btn" class="button primary" type="button">
-                      Send message
+                      <span id="send-label">Send message</span>
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                     </button>
                   </div>
@@ -163,10 +169,15 @@
                 </button>
               </div>
               <div id="model-menu" class="composer-menu model-menu" popover role="dialog" aria-label="Model and reasoning">
-                <p class="composer-menu-title">Model</p>
-                <div id="model-menu-list" class="model-menu-list" role="radiogroup" aria-label="Chat model"></div>
+                <div id="model-tabs" class="segmented model-tabs" role="tablist" aria-label="Model type">
+                  <button class="segmented-option" type="button" role="tab" aria-selected="true" data-model-tab="chat">Chat</button>
+                  <button class="segmented-option" type="button" role="tab" aria-selected="false" data-model-tab="image">Image</button>
+                  <button class="segmented-option" type="button" role="tab" aria-selected="false" data-model-tab="video">Video</button>
+                </div>
+                <div id="model-menu-list" class="model-menu-list" role="radiogroup" aria-label="Models"></div>
                 <p id="model-menu-empty" class="status-text" hidden></p>
-                <div class="model-menu-section">
+                <p id="model-menu-media-note" class="status-text model-menu-note" hidden></p>
+                <div id="model-menu-reasoning" class="model-menu-section">
                   <div class="model-menu-row">
                     <span id="thinking-label" class="model-menu-label">Thinking</span>
                     <button id="thinking-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="thinking-label"><span class="switch-thumb"></span></button>
@@ -308,6 +319,16 @@
               <div class="card-heading"><span class="section-number" aria-hidden="true">01</span><div><h2 id="provider-title">Provider connection</h2></div></div>
 
               <div class="form-group">
+                <label for="profile-select">Saved providers</label>
+                <div class="profile-row">
+                  <select id="profile-select" aria-describedby="profile-hint"></select>
+                  <input id="profile-name" type="text" maxlength="60" autocomplete="off" spellcheck="false" aria-label="Name of this provider" placeholder="Name" />
+                  <button id="profile-add" class="button secondary" type="button">Add provider</button>
+                  <button id="profile-remove" class="button danger" type="button">Remove</button>
+                </div>
+                <p id="profile-hint" class="status-text">Each provider keeps its own key and models. Models from every saved provider appear in the model menu next to Send.</p>
+              </div>
+              <div class="form-group">
                 <label for="provider-kind">Provider</label>
                 <select id="provider-kind">
                   <option value="scalemax" selected>ScaleMax (preconfigured)</option>
@@ -380,9 +401,19 @@
             <section id="mcp-card" class="settings-card" aria-labelledby="mcp-title">
               <div class="card-heading mcp-heading">
                 <span class="section-number" aria-hidden="true">03</span>
-                <div class="mcp-heading-text"><h2 id="mcp-title">Tools from MCP servers</h2><p class="status-text">Enabled Model Context Protocol servers offer their tools to the model in chat. ScaleMax runs each tool call and lists it under the reply. Read-only permission offers only tools marked read-only; Plan only offers none.</p></div>
-                <button id="mcp-add-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="mcp-dialog">Add server</button>
+                <div class="mcp-heading-text"><h2 id="mcp-title">Tools from MCP servers</h2><p class="status-text">Enabled Model Context Protocol servers offer their tools to the model in chat. ScaleMax runs each tool call and lists it under the reply. The permission chip next to the message box decides which tool calls ask first (Manual, Basic or Bypass all).</p></div>
+                <button id="mcp-add-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="mcp-dialog">Custom server</button>
               </div>
+              <form id="mcp-quick-url" class="mcp-quick-url" novalidate>
+                <label for="mcp-quick-url-input" class="small-label">Add by URL</label>
+                <div class="mcp-quick-url-row">
+                  <input id="mcp-quick-url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="https://example.com/mcp" aria-describedby="mcp-quick-url-hint" />
+                  <button id="mcp-quick-url-add" class="button primary" type="submit">Add</button>
+                </div>
+                <p id="mcp-quick-url-hint" class="status-text">Paste a remote MCP server URL. If it needs an account, its sign-in page opens in your browser.</p>
+              </form>
+              <div id="mcp-presets" class="mcp-presets" aria-label="Popular MCP servers"></div>
+              <h3 class="mcp-subtitle">Your servers</h3>
               <div id="mcp-list" class="mcp-list" aria-label="MCP servers"></div>
             </section>
           </div>

@@ -18,6 +18,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
 - **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
+- **Image & video** — pick an image or video model in the model menu; its options (size, quality, aspect ratio, resolution, duration, edit, image-to-video) appear above the message box, results show in the chat with Download
+- **Several providers** — save more than one provider; the model menu lists all of their models
 - **Six views**, one click away in the sidebar:
   - **Chat** — the chat-first workspace with Working/Coding modes and starting-point chips
   - **Workspace** — an IDE layout: file tree with filter and Git decorations, tabbed editor with syntax highlighting, Terminal / Git changes / Diff panel, resizable panes
@@ -117,6 +119,7 @@ scalemax-ide/
 │   ├── oauth-catalog.cjs # provider OAuth endpoints and rules (main process only)
 │   ├── cli-auth.cjs      # GitHub sign-in through the GitHub CLI (downloads gh if missing)
 │   ├── mcp.cjs           # MCP client: stdio + Streamable HTTP servers
+│   ├── media.cjs         # image/video generation, polling, downloads (main process)
 │   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
 │   ├── tool-loop.cjs     # chat tool-calling loop over MCP tools
@@ -129,6 +132,8 @@ scalemax-ide/
 │   ├── custom-ui.js      # create/edit custom experts and skills
 │   ├── mcp-ui.js         # MCP server management
 │   ├── composer-ui.js    # composer model/reasoning menu, permission modes, tool approval prompts
+│   ├── media-ui.js       # image/video generation options, results in chat, download
+│   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)
 │   ├── avatars.js        # animated expert characters (SVG)
 │   ├── data.js           # experts, skills, community references, connectors

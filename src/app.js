@@ -11,7 +11,8 @@ import { renderAvatar } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
 import { bindMcpUi } from './mcp-ui.js';
-import { bindComposerUi, renderModelButton, renderPermission, setPermission } from './composer-ui.js';
+import { bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles } from './composer-ui.js';
+import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
   bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
   activeTabContent, updateGutter, showPanel, setGitDecorations,
@@ -88,6 +89,13 @@ function elapsedText(ms) {
 }
 
 function pendingText(pending) {
+  if (pending.phase === 'media') {
+    const what = pending.kind === 'video' ? 'video' : 'image';
+    if (pending.mediaPhase === 'queued') return `Video queued at the provider…`;
+    if (pending.mediaPhase === 'downloading') return `Downloading the ${what}…`;
+    const progress = Number.isFinite(pending.progress) && pending.progress > 0 ? ` ${pending.progress}%` : '';
+    return `Generating ${what}${progress}…`;
+  }
   if (pending.phase === 'approval') return `Waiting for your approval · ${pending.tool}`;
   if (pending.phase === 'tool') return `Running ${pending.tool}…`;
   return pending.thinking ? 'Thinking…' : 'Writing…';
@@ -97,6 +105,12 @@ function pendingText(pending) {
 function thoughtLabel(message) {
   if (message.role !== 'assistant' || !Number.isSafeInteger(message.thinkingMs)) return '';
   return `Thought for ${elapsedText(Math.max(1000, message.thinkingMs))}`;
+}
+
+function normalizeMediaItems(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => isRecord(item) && /^m-[a-f0-9]{16}$/.test(item.id) && ['image', 'video'].includes(item.kind))
+    .slice(0, 10).map((item) => ({ id: item.id, kind: item.kind, mime: typeof item.mime === 'string' ? item.mime.slice(0, 40) : '' }));
 }
 
 function normalizeToolSummaries(value) {
@@ -150,6 +164,9 @@ const app = {
     bindCustomCatalogUi(this);
     bindMcpUi(this);
     bindComposerUi(this);
+    bindMediaUi(this);
+    this.bindProfiles();
+    this.renderFolderChip();
     window.scalemaxScheduler = startScheduler(this);
     this.updateSendEnabled();
     await this.loadVersion();
@@ -235,6 +252,10 @@ const app = {
         if (message.role === 'assistant' && typeof message.reasoning === 'string' && message.reasoning.trim()) {
           normalized.reasoning = message.reasoning.slice(0, 65536);
         }
+        // Generated images and videos (files stay in the app's media folder).
+        const media = normalizeMediaItems(message.media);
+        if (media.length) normalized.media = media;
+        if (typeof message.mediaRequest === 'string' && message.mediaRequest) normalized.mediaRequest = message.mediaRequest.slice(0, 300);
         return normalized;
       }) : [],
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
@@ -372,6 +393,86 @@ const app = {
   renderProviderModels() {
     this.renderModelSelect();
     renderModelButton(this);
+    renderMediaBar(this);
+  },
+
+  // ---- Saved providers (Assistant) -----------------------------------------------
+  renderProfiles() {
+    const select = $('#profile-select');
+    if (!select) return;
+    const profiles = Array.isArray(this.providerProfiles) ? this.providerProfiles : [];
+    const activeId = this.provider?.profileId;
+    select.replaceChildren(...profiles.map((profile) => {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      const status = profile.id === activeId ? (this.provider?.configured ? 'active' : 'active · not connected')
+        : (profile.configured ? profile.model || 'connected' : 'not connected');
+      option.textContent = `${profile.name} — ${status}`;
+      return option;
+    }));
+    if (activeId) select.value = activeId;
+    const name = $('#profile-name');
+    const active = profiles.find((profile) => profile.id === activeId);
+    if (name && document.activeElement !== name) name.value = active?.name || this.provider?.profileName || '';
+    const remove = $('#profile-remove');
+    if (remove) remove.disabled = profiles.length < 2;
+  },
+
+  async afterProfileChange(result, message) {
+    if (!result?.ok) { this.showToast(result?.error?.message || 'Provider settings could not be changed'); return; }
+    this.providerProfiles = result.data.profiles;
+    await this.loadProvider();
+    this.renderProfiles();
+    if (message) this.showToast(message);
+  },
+
+  bindProfiles() {
+    const bridge = this.getProviderBridge();
+    window.addEventListener('scalemax:profiles-changed', () => this.renderProfiles());
+    $('#profile-select')?.addEventListener('change', async (event) => {
+      const result = await bridge?.selectProfile?.({ id: event.target.value });
+      await this.afterProfileChange(result, `Provider: ${this.providerProfiles?.find((item) => item.id === event.target.value)?.name || 'switched'}`);
+    });
+    $('#profile-add')?.addEventListener('click', async () => {
+      const result = await bridge?.addProfile?.({});
+      await this.afterProfileChange(result, 'New provider added. Choose its type, add the key, then Test and Save.');
+      $('#provider-api-key')?.focus();
+    });
+    $('#profile-remove')?.addEventListener('click', async () => {
+      const active = this.providerProfiles?.find((item) => item.id === this.provider?.profileId);
+      if (!active || !window.confirm(`Remove the provider "${active.name}" and its stored key?`)) return;
+      const result = await bridge?.removeProfile?.({ id: active.id });
+      await this.afterProfileChange(result, `Removed ${active.name}`);
+    });
+    const rename = async () => {
+      const input = $('#profile-name');
+      const id = this.provider?.profileId;
+      const name = input?.value.trim();
+      const current = this.providerProfiles?.find((item) => item.id === id);
+      if (!id || !name || name === current?.name) { if (input && current) input.value = current.name; return; }
+      const result = await bridge?.renameProfile?.({ id, name });
+      if (!result?.ok) { this.showToast(result?.error?.message || 'Could not rename'); return; }
+      this.providerProfiles = result.data.profiles;
+      this.provider = { ...this.provider, profileName: name };
+      this.renderProfiles();
+      this.showToast('Provider renamed');
+    };
+    $('#profile-name')?.addEventListener('change', () => void rename());
+    $('#profile-name')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void rename(); } });
+    void refreshProfiles(this).then(() => this.renderProfiles());
+  },
+
+  // The folder chip in the composer: the workspace the assistant's local tools work in.
+  renderFolderChip() {
+    const chip = $('#folder-chip');
+    const label = $('#folder-chip-label');
+    if (!chip || !label) return;
+    const root = this.workspace?.root || '';
+    const name = root ? root.split(/[\\/]/).filter(Boolean).pop() || root : '';
+    label.textContent = name || 'No folder';
+    chip.classList.toggle('empty', !root);
+    chip.title = root ? `Workspace: ${root}. Click to open it.` : 'No folder open. Click to open one.';
+    chip.setAttribute('aria-label', root ? `Workspace folder ${name}. Open the Workspace view` : 'No workspace folder. Open a folder');
   },
 
   // Chat-capable, available models for the Assistant's "Model for chat" picker.
@@ -450,6 +551,7 @@ const app = {
     this.renderProviderStatus();
     this.renderProviderModels();
     this.showToast('Provider settings saved');
+    void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
   // Green on success, red on failure or when the check takes too long.
@@ -532,6 +634,7 @@ const app = {
     this.renderProviderStatus();
     this.renderProviderModels();
     this.showToast('Provider cleared');
+    void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
   bindProvider() {
@@ -648,6 +751,7 @@ const app = {
       if ($('#git-status')) $('#git-status').textContent = 'Open a repository to review its changes.';
     }
     renderCrumb(this.workspace.root);
+    this.renderFolderChip();
     if ($('#workspace-status')) {
       const count = this.workspace.files.length;
       $('#workspace-status').textContent = this.workspace.root
@@ -812,6 +916,10 @@ const app = {
       input.focus();
       this.updateSendEnabled();
     });
+    $('#folder-chip')?.addEventListener('click', () => {
+      if (this.workspace?.root) this.switchView('workspace');
+      else void this.openWorkspace();
+    });
     $('#attach-btn')?.addEventListener('click', (event) => {
       event.preventDefault();
       void this.attachFile();
@@ -957,7 +1065,10 @@ const app = {
       } else if (thought) {
         bubble.append(element('span', 'msg-reasoning-label msg-thought', thought));
       }
-      bubble.append(element('span', 'msg-text', message.text), element('span', 'msg-time', clock(message.time)));
+      bubble.append(element('span', 'msg-text', message.text));
+      if (message.mediaRequest) bubble.append(element('span', 'msg-media-request', message.mediaRequest));
+      if (message.media?.length) bubble.append(renderMediaItems(this, message.media));
+      bubble.append(element('span', 'msg-time', clock(message.time)));
       return bubble;
     }));
     const pending = this.pendingReply?.taskId === this.currentTaskId ? this.pendingReply : null;
@@ -990,11 +1101,11 @@ const app = {
     node.querySelector('.pending-reply-time').textContent = elapsedText(Date.now() - pending.startedAt);
   },
 
-  startPendingReply(taskId, requestId) {
+  startPendingReply(taskId, requestId, extra = {}) {
     const model = (this.providerCatalog || []).find((item) => item.id === this.provider?.model);
     // "Thinking" only for models that reason with thinking on; others are "Writing".
     const thinking = model?.reasoning === true && this.settings.thinking !== false;
-    this.pendingReply = { taskId, requestId, phase: 'thinking', thinking, tool: '', startedAt: Date.now() };
+    this.pendingReply = { taskId, requestId, phase: 'thinking', thinking, tool: '', startedAt: Date.now(), ...extra };
     window.clearInterval(this.pendingTimer);
     this.pendingTimer = window.setInterval(() => this.updatePendingReply(), 1000);
     this.renderChat();
@@ -1035,6 +1146,9 @@ const app = {
     if (tools.length) message.tools = tools;
     if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
     if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
+    const media = normalizeMediaItems(extra.media);
+    if (media.length) message.media = media;
+    if (typeof extra.mediaRequest === 'string' && extra.mediaRequest) message.mediaRequest = extra.mediaRequest.slice(0, 300);
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) this.renderChat();
@@ -1047,6 +1161,15 @@ const app = {
     const taskId = this.currentTaskId;
     const task = this.tasks.find((item) => item.id === taskId);
     if (!task) return;
+    // Image / video mode: the text is the prompt for the selected generation model.
+    if (mediaMode(this)) {
+      input.value = '';
+      this.updateSendEnabled();
+      const sent = await generateFromComposer(this, text, taskId);
+      if (!sent) input.value = text;
+      this.updateSendEnabled();
+      return;
+    }
     this.appendMessage('user', text, taskId);
     input.value = '';
     this.updateSendEnabled();
@@ -1137,6 +1260,11 @@ const app = {
   },
 
   cancelResponse() {
+    if (cancelGeneration(this)) {
+      const cancel = $('#cancel-btn');
+      if (cancel) cancel.disabled = true;
+      return;
+    }
     const bridge = this.getProviderBridge();
     if (!this.activeRequestId || !bridge?.cancel) return;
     void bridge.cancel(this.activeRequestId);

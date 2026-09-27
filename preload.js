@@ -79,6 +79,59 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
       const listener = (_event, progress) => callback(progress);
       ipcRenderer.on('provider:progress', listener);
       return () => ipcRenderer.removeListener('provider:progress', listener);
+    },
+
+    /**
+     * Every saved provider (the active one is what chat and generation use), with its models.
+     * Keys are never returned, only whether one is stored.
+     * @returns {Promise<{ok: boolean, data?: {activeId: string, profiles: Array<{id: string, name: string, active: boolean, kind: string, baseUrl: string, model: string, configured: boolean, hasKey: boolean, models: Array<object>}>}, error?: object}>}
+     */
+    profiles: () => ipcRenderer.invoke('provider:profiles'),
+
+    /** Adds an empty provider and makes it active. @param {{name?: string}} input */
+    addProfile: (input) => ipcRenderer.invoke('provider:profile-add', input),
+
+    /** Makes a saved provider active, optionally with one of its models. @param {{id: string, model?: string}} input */
+    selectProfile: (input) => ipcRenderer.invoke('provider:profile-select', input),
+
+    /** @param {{id: string, name: string}} input */
+    renameProfile: (input) => ipcRenderer.invoke('provider:profile-rename', input),
+
+    /** Deletes a saved provider and its key (not the last one). @param {{id: string}} input */
+    removeProfile: (input) => ipcRenderer.invoke('provider:profile-remove', input)
+  },
+
+  media: {
+    /**
+     * Generates images or a video with the active provider. Every option is checked against the
+     * model's advertised capabilities first. Results are stored by the app and shown through
+     * scalemax-media://<id>/ URLs; nothing else about the file system is exposed.
+     * @param {{requestId: string, kind: 'image'|'video', model: string, prompt: string, mode?: 'generate'|'edit'|'animate', sourceId?: string, options?: {size?: string, quality?: string, n?: number, aspectRatio?: string, resolution?: string, duration?: number}}} input
+     * @returns {Promise<{ok: boolean, data?: {items: Array<{id: string, kind: string, mime: string, model: string}>, request: object}, error?: object}>}
+     */
+    generate: (input) => ipcRenderer.invoke('media:generate', input),
+
+    /** Stops waiting for a generation (a job the provider already started may still be billed). */
+    cancel: (requestId) => ipcRenderer.invoke('media:cancel', requestId),
+
+    /** @param {{id: string}} input @returns {Promise<{ok: boolean, data?: object|null}>} */
+    info: (input) => ipcRenderer.invoke('media:info', input),
+
+    /** Opens a file picker and imports an image to edit or animate. @returns {Promise<{ok: boolean, data?: object|null}>} */
+    pickImage: () => ipcRenderer.invoke('media:pick-image'),
+
+    /** Saves a generated file where the user chooses. @param {{id: string}} input */
+    save: (input) => ipcRenderer.invoke('media:save', input),
+
+    /**
+     * Generation progress: {requestId, kind, phase: 'starting'|'queued'|'generating'|'downloading', status?, progress?}.
+     * @returns {() => void} unsubscribe
+     */
+    onProgress: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, progress) => callback(progress);
+      ipcRenderer.on('media:progress', listener);
+      return () => ipcRenderer.removeListener('media:progress', listener);
     }
   },
 

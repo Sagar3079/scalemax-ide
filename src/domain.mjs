@@ -20,7 +20,30 @@ export const DEFAULT_SETTINGS = Object.freeze({
   bypassConsent: false,
   thinking: true,
   reasoningEffort: 'medium',
+  // What the composer sends: chat, or an image / video generation with the chosen model.
+  composerMode: 'chat',
+  imageModel: '',
+  videoModel: '',
+  imageOptions: {},
+  videoOptions: {},
 });
+
+const MEDIA_OPTION = /^[A-Za-z0-9:x._-]{1,32}$/;
+const MODEL_ID = /^[^\x00-\x1f\x7f]{1,256}$/;
+
+// Remembered generation choices; the model's own option lists are checked again in main.
+function mediaOptions(value, kind) {
+  const result = {};
+  if (!isRecord(value)) return result;
+  const text = kind === 'image' ? ['size', 'quality'] : ['aspectRatio', 'resolution'];
+  for (const key of text) {
+    if (typeof value[key] === 'string' && MEDIA_OPTION.test(value[key])) result[key] = value[key];
+  }
+  const numberKey = kind === 'image' ? 'n' : 'duration';
+  const number = value[numberKey];
+  if (Number.isSafeInteger(number) && number >= 1 && number <= 60) result[numberKey] = number;
+  return result;
+}
 
 export const PERMISSION_MODES = Object.freeze(['manual', 'basic', 'bypass']);
 export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
@@ -114,6 +137,12 @@ export function normalizeSettings(value) {
   result.bypassConsent = own(value, 'bypassConsent') === true && result.permission === 'bypass';
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
+  if (['chat', 'image', 'video'].includes(own(value, 'composerMode'))) result.composerMode = value.composerMode;
+  for (const key of ['imageModel', 'videoModel']) {
+    if (typeof own(value, key) === 'string' && MODEL_ID.test(value[key])) result[key] = value[key];
+  }
+  result.imageOptions = mediaOptions(own(value, 'imageOptions'), 'image');
+  result.videoOptions = mediaOptions(own(value, 'videoOptions'), 'video');
   result.systemPrompt = boundedText(own(value, 'systemPrompt'), MAX_PROMPT);
   const temperature = toTemperature(own(value, 'temperature'));
   if (temperature !== undefined) result.temperature = temperature;

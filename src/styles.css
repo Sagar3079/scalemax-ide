@@ -1608,6 +1608,183 @@ input[type="range"] {
   outline-offset: -2px;
 }
 
+/* The workspace folder the assistant's local tools use, next to the permission chip. */
+.folder-chip {
+  max-width: 200px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.folder-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-chip.empty {
+  color: var(--sm-text-weak);
+}
+
+/* Chat / Image / Video tabs at the top of the model menu. */
+.model-tabs {
+  display: flex;
+  margin: 2px 2px 8px;
+}
+
+.model-tabs .segmented-option {
+  flex: 1 1 0;
+}
+
+.model-tabs .segmented-option[aria-selected="true"] {
+  background: var(--sm-app-surface);
+  color: var(--sm-text-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+/* Generation options of the selected image / video model, above the toolbar. */
+.media-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--sm-color-border-tertiary);
+  background: var(--sm-app-surface-hover);
+}
+
+.media-modes {
+  flex-shrink: 0;
+}
+
+.media-modes .segmented-option {
+  height: 26px;
+}
+
+.media-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sm-text-medium);
+}
+
+.media-field-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sm-text-weak);
+}
+
+.media-select,
+.media-number {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-md);
+  background: var(--sm-app-surface);
+  color: var(--sm-text-strong);
+  font-size: 12px;
+}
+
+.media-select {
+  width: auto;
+}
+
+.media-number {
+  width: 56px;
+}
+
+.media-select:disabled {
+  opacity: 0.6;
+}
+
+.media-cost {
+  margin-inline-start: auto;
+  font-size: 12px;
+  color: var(--sm-text-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.media-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.media-source-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--sm-radius-sm);
+  object-fit: cover;
+}
+
+.media-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.media-source-label.muted {
+  color: var(--sm-text-weak);
+}
+
+/* Generated images and videos in the chat. */
+.msg-media-request {
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+.msg-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 4px 0;
+}
+
+.msg-media-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  max-width: min(480px, 100%);
+}
+
+.msg-media-view {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-lg);
+  background: var(--sm-app-surface-hover);
+  object-fit: contain;
+}
+
+.msg-media-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Saved providers in Assistant. */
+.profile-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.profile-row select {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.profile-row input {
+  flex: 0 1 160px;
+  min-width: 0;
+}
+
 /* A reply in progress: animated dots, what it is doing, elapsed time. */
 .pending-reply-row {
   display: inline-flex;
@@ -2342,6 +2519,108 @@ input[type="range"] {
 
 .mcp-heading-text .status-text {
   margin-top: 4px;
+}
+
+/* Add by URL and the popular-server presets (src/mcp-presets.js). */
+.mcp-quick-url {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 14px;
+}
+
+.mcp-quick-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-quick-url-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mcp-subtitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sm-text-strong);
+}
+
+.mcp-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.mcp-preset-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+.mcp-preset-group-head .status-text {
+  font-size: 11px;
+}
+
+.mcp-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.mcp-preset {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-lg);
+  background: var(--sm-app-surface);
+}
+
+.mcp-preset.is-added {
+  border-color: var(--sm-palette-green-3);
+  background: var(--sm-palette-green-1);
+}
+
+.mcp-preset-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mcp-preset-name {
+  font-size: 13px;
+  color: var(--sm-text-strong);
+}
+
+.mcp-preset-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--sm-text-medium);
+}
+
+.mcp-preset-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mcp-preset-status {
+  font-size: 11px;
+  color: var(--sm-palette-green-9);
+  white-space: nowrap;
+}
+
+.mcp-preset-status.is-error {
+  color: var(--sm-palette-red-7);
 }
 
 .mcp-list {

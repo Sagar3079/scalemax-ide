@@ -69,6 +69,21 @@ export function renderModelButton(app) {
   const reasoning = $('#model-button-reasoning');
   const button = $('#model-button');
   if (!name || !button) return;
+  const mode = app.settings.composerMode;
+  if (mode === 'image' || mode === 'video') {
+    const media = currentMediaModel(app, mode);
+    const label = mode === 'image' ? 'Image' : 'Video';
+    name.textContent = media?.displayName || `Choose a ${mode} model`;
+    button.classList.toggle('empty', !media);
+    if (reasoning) {
+      reasoning.hidden = false;
+      reasoning.textContent = label;
+    }
+    button.title = media ? `${label} model: ${media.id}. Click to change.` : `Choose a ${mode} model`;
+    button.setAttribute('aria-label', `${label} model: ${media?.displayName || 'none'}. Change model`);
+    if ($('#model-menu')?.matches(':popover-open')) renderModelMenu(app);
+    return;
+  }
   const model = currentModel(app);
   const configured = Boolean(app.provider?.configured);
   const id = app.provider?.model || '';
@@ -90,59 +105,135 @@ export function renderModelButton(app) {
   if ($('#model-menu')?.matches(':popover-open')) renderModelMenu(app);
 }
 
-/** Models the provider offers that chat cannot use (image and video generation). */
-export function mediaModels(app) {
-  const catalog = Array.isArray(app.providerCatalog) ? app.providerCatalog : [];
-  return catalog.filter((model) => model.chat === false);
+/** Models of one kind ('image' | 'video') from a catalog. */
+export function mediaModels(catalog, kind) {
+  return (Array.isArray(catalog) ? catalog : []).filter((model) => model.output === kind && model.media);
 }
 
-function modelOption(model, active, selectable) {
+/** The selected image or video model of the active provider, or null. */
+export function currentMediaModel(app, kind) {
+  const id = kind === 'image' ? app.settings.imageModel : app.settings.videoModel;
+  return mediaModels(app.providerCatalog, kind).find((model) => model.id === id) || null;
+}
+
+// The menu's tab: which kind of model it lists. Opens on the composer's current mode.
+let menuTab = 'chat';
+
+// Saved providers, each with its models; the active one uses the live catalog.
+function providerGroups(app) {
+  const saved = Array.isArray(app.providerProfiles) ? app.providerProfiles : [];
+  const activeId = app.provider?.profileId;
+  const groups = saved.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    active: profile.id === activeId,
+    configured: profile.id === activeId ? Boolean(app.provider?.configured) : profile.configured,
+    models: profile.id === activeId ? (app.providerCatalog || []) : (profile.models || []),
+  }));
+  if (!groups.some((group) => group.active)) {
+    groups.unshift({ id: activeId || 'default', name: app.provider?.profileName || 'Provider', active: true,
+      configured: Boolean(app.provider?.configured), models: app.providerCatalog || [] });
+  }
+  return groups.sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+function modelsForTab(app, group, tab) {
+  if (tab !== 'chat') return mediaModels(group.models, tab);
+  if (group.active) return chatModelOptions(app);
+  return group.models.filter((model) => model.chat !== false);
+}
+
+function isChecked(app, group, model, tab) {
+  if (!group.active || app.settings.composerMode !== tab) return false;
+  if (tab === 'chat') return model.id === app.provider?.model;
+  return model.id === (tab === 'image' ? app.settings.imageModel : app.settings.videoModel);
+}
+
+function modelOption(model, { checked, profileId, tab }) {
   const option = element('button', 'model-menu-option');
   option.dataset.modelId = model.id;
+  option.dataset.profileId = profileId;
+  option.dataset.tab = tab;
   option.setAttribute('role', 'radio');
-  option.setAttribute('aria-checked', String(selectable && model.id === active));
+  option.setAttribute('aria-checked', String(checked));
   const text = element('span', 'model-menu-option-text');
   text.append(element('span', 'picker-option-name', model.displayName || model.id),
     element('span', 'picker-option-id', model.id));
   option.append(text);
-  if (!selectable) {
-    option.disabled = true;
-    option.setAttribute('aria-disabled', 'true');
-    option.title = 'Chat cannot use image or video models yet.';
-    option.append(element('span', 'badge', model.output === 'video' ? 'Video' : 'Image'));
-  } else if (model.available === false) {
+  if (model.available === false) {
     option.disabled = true;
     option.title = 'This model is currently unavailable.';
     option.append(element('span', 'badge', 'Unavailable'));
-  } else if (model.reasoning === true) {
+  } else if (tab === 'chat' && model.reasoning === true) {
     option.append(element('span', 'badge', 'Reasoning'));
+  } else if (tab !== 'chat') {
+    const price = priceLabel(model);
+    if (price) option.append(element('span', 'badge', price));
   }
   return option;
+}
+
+/** A short list-price label for a media model ("$0.01–0.42", "$0.05/s"). */
+export function priceLabel(model) {
+  const pricing = model?.media?.pricing;
+  if (!pricing) return '';
+  const money = (value) => `$${value < 0.1 ? value.toFixed(3).replace(/0+$/, '') : value.toFixed(2)}`;
+  if (model.media.kind === 'image') {
+    if (pricing.min === null || pricing.max === null) return '';
+    return pricing.min === pricing.max ? `${money(pricing.min)}/image` : `${money(pricing.min)}–${money(pricing.max).slice(1)}`;
+  }
+  const rates = Object.values(pricing.perSecond || {});
+  return rates.length ? `from ${money(Math.min(...rates))}/s` : '';
+}
+
+function renderTabs(app) {
+  for (const tab of document.querySelectorAll('#model-tabs [data-model-tab]')) {
+    const kind = tab.dataset.modelTab;
+    const count = providerGroups(app).reduce((total, group) => total + modelsForTab(app, group, kind).length, 0);
+    tab.setAttribute('aria-selected', String(kind === menuTab));
+    tab.textContent = `${kind[0].toUpperCase()}${kind.slice(1)}${count ? ` · ${count}` : ''}`;
+  }
 }
 
 function renderModelMenu(app) {
   const list = $('#model-menu-list');
   if (!list) return;
-  const options = chatModelOptions(app);
-  const media = mediaModels(app);
-  const active = app.provider?.model || '';
-  const custom = app.provider?.kind === 'custom';
-  const nodes = options.map((model) => {
-    const option = modelOption(model, active, true);
-    if (custom && model.id === active && options.length === 1) option.title = 'Change the custom model in Assistant.';
-    return option;
-  });
-  // Every model the provider offers is listed; the ones chat cannot use are shown, not selectable.
-  if (media.length) {
-    nodes.push(element('p', 'composer-menu-title model-menu-group', 'Image & video · not available in chat'));
-    nodes.push(...media.map((model) => modelOption(model, active, false)));
+  renderTabs(app);
+  const groups = providerGroups(app);
+  const several = groups.length > 1;
+  const nodes = [];
+  let total = 0;
+  for (const group of groups) {
+    const models = modelsForTab(app, group, menuTab);
+    if (several) {
+      const title = element('p', 'composer-menu-title model-menu-group', `${group.name}${group.active ? ' · active' : ''}`);
+      nodes.push(title);
+      if (!models.length) {
+        nodes.push(element('p', 'status-text model-menu-note', group.configured
+          ? `No ${menuTab} models on this provider.` : 'Not connected yet: add its key in Assistant.'));
+      }
+    }
+    for (const model of models) {
+      nodes.push(modelOption(model, { checked: isChecked(app, group, model, menuTab), profileId: group.id, tab: menuTab }));
+    }
+    total += models.length;
   }
+  list.setAttribute('aria-label', `${menuTab[0].toUpperCase()}${menuTab.slice(1)} models`);
   list.replaceChildren(...nodes);
   const empty = $('#model-menu-empty');
   if (empty) {
-    empty.hidden = options.length > 0;
-    empty.textContent = app.provider?.configured ? 'No chat models are available.' : 'Connect a provider in Assistant first.';
+    empty.hidden = total > 0;
+    empty.textContent = !app.provider?.configured ? 'Connect a provider in Assistant first.'
+      : `No ${menuTab} models are available with ${several ? 'these providers' : 'this key'}.`;
   }
+  const reasoningSection = $('#model-menu-reasoning');
+  if (reasoningSection) reasoningSection.hidden = menuTab !== 'chat';
+  const mediaNote = $('#model-menu-media-note');
+  if (mediaNote) {
+    mediaNote.hidden = menuTab === 'chat' || total === 0;
+    mediaNote.textContent = 'Pick a model to see its options above the message box. Nothing is generated (or billed) until you press Generate. Prices are the provider\'s list prices.';
+  }
+  if (menuTab !== 'chat') return;
   const model = currentModel(app);
   const support = reasoningSupport(model);
   const thinkingOn = app.settings.thinking !== false;
@@ -172,22 +263,77 @@ function renderModelMenu(app) {
   }
 }
 
-async function chooseModel(app, id) {
-  const bridge = providerBridge();
-  if (!bridge?.setModel || !id || id === app.provider?.model) return;
-  const result = await bridge.setModel({ model: id });
-  if (!result?.ok) {
-    app.showToast(result?.error?.message || 'The model could not be changed');
-    return;
-  }
-  app.provider = result.data;
-  app.providerCatalog = Array.isArray(result.data.models) ? result.data.models : app.providerCatalog;
-  app.enabledModels = new Set(Array.isArray(result.data.enabledModels) ? result.data.enabledModels : []);
-  app.selectedModel = result.data.model;
+function applyProviderMeta(app, meta) {
+  app.provider = meta;
+  app.providerCatalog = Array.isArray(meta.models) ? meta.models : app.providerCatalog;
+  app.enabledModels = new Set(Array.isArray(meta.enabledModels) ? meta.enabledModels : []);
+  app.selectedModel = meta.model;
   app.renderProviderStatus();
   app.renderProviderModels();
+}
+
+/** Reloads the saved providers (for the menu groups and the Assistant list). */
+export async function refreshProfiles(app) {
+  const bridge = providerBridge();
+  if (!bridge?.profiles) return;
+  const result = await bridge.profiles();
+  if (!result?.ok) return;
+  app.providerProfiles = result.data.profiles;
+  window.dispatchEvent(new CustomEvent('scalemax:profiles-changed'));
+  if ($('#model-menu')?.matches(':popover-open')) renderModelMenu(app);
+}
+
+// Switches to another saved provider when the model belongs to it; returns false on failure.
+async function useProfile(app, profileId, chatModel) {
+  const bridge = providerBridge();
+  if (!profileId || profileId === app.provider?.profileId) return true;
+  const result = await bridge?.selectProfile?.({ id: profileId, ...(chatModel ? { model: chatModel } : {}) });
+  if (!result?.ok) {
+    app.showToast(result?.error?.message || 'Could not switch provider');
+    return false;
+  }
+  app.providerProfiles = result.data.profiles;
+  const meta = await bridge.get();
+  if (meta?.ok) applyProviderMeta(app, meta.data);
+  window.dispatchEvent(new CustomEvent('scalemax:profiles-changed'));
+  app.showToast(`Provider: ${app.provider?.profileName || 'switched'}`);
+  return true;
+}
+
+async function chooseModel(app, id, profileId = app.provider?.profileId, tab = 'chat') {
+  const bridge = providerBridge();
+  if (!id) return;
+  if (tab !== 'chat') {
+    if (!(await useProfile(app, profileId))) return;
+    app.settings[tab === 'image' ? 'imageModel' : 'videoModel'] = id;
+    app.settings.composerMode = tab;
+    await app.persist('settings');
+    renderModelButton(app);
+    window.dispatchEvent(new CustomEvent('scalemax:composer-mode'));
+    const model = currentMediaModel(app, tab);
+    app.showToast(`${tab === 'image' ? 'Image' : 'Video'} model: ${model?.displayName || id}`);
+    return;
+  }
+  const switching = profileId && profileId !== app.provider?.profileId;
+  if (switching) {
+    if (!(await useProfile(app, profileId, id))) return;
+  } else if (id !== app.provider?.model) {
+    if (!bridge?.setModel) return;
+    const result = await bridge.setModel({ model: id });
+    if (!result?.ok) {
+      app.showToast(result?.error?.message || 'The model could not be changed');
+      return;
+    }
+    applyProviderMeta(app, { ...result.data, profileId: app.provider?.profileId, profileName: app.provider?.profileName });
+  }
+  if (app.settings.composerMode !== 'chat') {
+    app.settings.composerMode = 'chat';
+    await app.persist('settings');
+    window.dispatchEvent(new CustomEvent('scalemax:composer-mode'));
+  }
+  renderModelButton(app);
   const model = currentModel(app);
-  app.showToast(`Model: ${model?.displayName || result.data.model}`);
+  app.showToast(`Model: ${model?.displayName || app.provider?.model}`);
 }
 
 async function updateReasoning(app, patch) {
@@ -436,15 +582,42 @@ function bindApprovals(app) {
 export function bindComposerUi(app) {
   if (!app || bound.has(app)) return;
   bound.add(app);
-  bindPopover('#model-menu', '#model-button', 'end', () => renderModelMenu(app));
+  bindPopover('#model-menu', '#model-button', 'end', () => {
+    menuTab = ['image', 'video'].includes(app.settings.composerMode) ? app.settings.composerMode : 'chat';
+    renderModelMenu(app);
+    void refreshProfiles(app);
+  });
   bindPopover('#permission-menu', '#permission-button', 'start', () => renderPermission(app));
   bindArrowKeys($('#model-menu-list'), '.model-menu-option');
   bindArrowKeys($('#permission-menu'), '.composer-menu-option');
 
+  $('#model-tabs')?.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-model-tab]');
+    if (!tab || tab.dataset.modelTab === menuTab) return;
+    menuTab = tab.dataset.modelTab;
+    renderModelMenu(app);
+    const menu = $('#model-menu');
+    const button = $('#model-button');
+    if (menu && button && menu.matches(':popover-open')) placeAbove(menu, button, 'end');
+  });
+  $('#model-tabs')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const tabs = [...document.querySelectorAll('#model-tabs [data-model-tab]')];
+    const index = tabs.findIndex((tab) => tab.dataset.modelTab === menuTab);
+    const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    menuTab = next.dataset.modelTab;
+    renderModelMenu(app);
+    next.focus();
+  });
   $('#model-menu-list')?.addEventListener('click', (event) => {
     const option = event.target.closest('.model-menu-option[data-model-id]');
-    if (!option) return;
-    void chooseModel(app, option.dataset.modelId).then(() => renderModelMenu(app));
+    if (!option || option.disabled) return;
+    void chooseModel(app, option.dataset.modelId, option.dataset.profileId, option.dataset.tab)
+      .then(() => {
+        renderModelMenu(app);
+        // A media model is picked for its options, which appear above the message box.
+        if (option.dataset.tab !== 'chat') $('#model-menu')?.hidePopover?.();
+      });
   });
   $('#thinking-toggle')?.addEventListener('click', () => {
     void updateReasoning(app, { thinking: app.settings.thinking === false });
@@ -464,4 +637,5 @@ export function bindComposerUi(app) {
   renderPermission(app);
   renderModelButton(app);
   void refreshCatalog(app);
+  void refreshProfiles(app);
 }

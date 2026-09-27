@@ -4,6 +4,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createProvider } = require('../lib/provider.cjs');
 
+function assertNoSharedObjects(root) {
+  const seen = new Set();
+  const walk = (value) => {
+    if (value === null || typeof value !== 'object') return;
+    if (seen.has(value)) throw new TypeError('State JSON cannot contain cycles or shared objects.');
+    seen.add(value);
+    for (const item of Object.values(value)) walk(item);
+  };
+  walk(root);
+}
+
 function memoryStore(initial = {}) {
   let state = structuredClone(initial);
   return {
@@ -12,6 +23,8 @@ function memoryStore(initial = {}) {
       const draft = structuredClone(state);
       const result = mutator(draft);
       state = result === undefined ? draft : result;
+      // Like lib/state.cjs: one object stored under two keys is refused.
+      assertNoSharedObjects(state);
       return structuredClone(state);
     },
     snapshot: () => structuredClone(state),
@@ -198,7 +211,7 @@ test('discover picks the ScaleMax endpoint that authenticates the key', async ()
   assert.equal(result.kind, 'scalemax');
   assert.equal(result.baseUrl, 'https://api.scalemax.pro/token/v1');
   // No capabilities in the response: every capability is unknown (null).
-  const unknown = { chat: null, tools: null, reasoning: null, effortLevels: [], defaultEffort: null, effortLocked: false, output: null };
+  const unknown = { chat: null, tools: null, reasoning: null, effortLevels: [], defaultEffort: null, effortLocked: false, output: null, media: null };
   assert.deepEqual(result.models, [
     { id: 'gpt-5.5', displayName: 'GPT-5.5', available: true, ...unknown },
     { id: 'claude-sonnet-5[1m]', displayName: 'Claude Sonnet 5', available: false, ...unknown },
@@ -491,7 +504,7 @@ test('the catalog keeps chat, tools and reasoning capabilities', async () => {
   const byId = Object.fromEntries(found.models.map((model) => [model.id, model]));
   assert.deepEqual(byId['deepseek-v4-flash'], {
     id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', available: true,
-    chat: true, tools: true, reasoning: true, effortLevels: [], defaultEffort: null, effortLocked: false, output: null,
+    chat: true, tools: true, reasoning: true, effortLevels: [], defaultEffort: null, effortLocked: false, output: null, media: null,
   });
   assert.deepEqual(byId['claude-sonnet-4-6[1m]'].effortLevels, ['low']);
   assert.equal(byId['claude-sonnet-4-6[1m]'].effortLocked, true);
@@ -565,4 +578,119 @@ test('refreshModels reloads capabilities with the stored key', async () => {
   assert.equal(meta.models.find((model) => model.id === 'deepseek-v4-flash').reasoning, true);
   assert.deepEqual(meta.enabledModels, ['deepseek-v4-flash']);
   assert.equal(store.snapshot().provider.models.length, 4);
+});
+
+// ---- Media capabilities, provider profiles, media fetch ------------------------------
+
+// Shaped like the live ScaleMax /models entries for media models (2026-09-27).
+const MEDIA_MODELS = {
+  data: [
+    { id: 'deepseek-v4-flash', display_name: 'DeepSeek V4 Flash', capabilities: { chat: true, tools: true, reasoning: true } },
+    {
+      id: 'gpt-image-2', display_name: 'ScaleMax Image 2', family: 'image',
+      capabilities: { image_generation: true, sizes: ['1024x1024', '1536x864', '864x1536'], quality: ['low', 'medium', 'high'], max_images_per_request: 1 },
+      pricing: { credit_usd_per_image_min: 0.012, credit_usd_per_image_max: 0.422 },
+    },
+    {
+      id: 'qwen-image-3.0-pro', display_name: 'Qwen Image 3.0 Pro', family: 'image',
+      capabilities: { image_generation: true, sizes: ['1024x1024', '<script>'], quality: ['low'], max_images_per_request: 4 },
+      pricing: { credit_usd_per_image_min: 0.2, credit_usd_per_image_max: 0.2 },
+    },
+    {
+      id: 'grok-imagine-video', display_name: 'Grok Imagine Video', family: 'video',
+      capabilities: {
+        video_generation: true, aspect_ratios: ['1:1', '16:9'], resolutions: ['480p', '720p'],
+        supports_t2v: true, supports_i2v: true, requires_image: false, supports_edit: true, supports_extend: false,
+      },
+      pricing: { credit_usd_per_second: { '480p': 0.046667, '720p': 0.066667 }, discount_percent: 20, reference_duration_seconds: 6 },
+    },
+  ],
+};
+
+test('media models keep their generation options and prices', async () => {
+  const { provider } = makeProvider({ respond: () => jsonResponse(MEDIA_MODELS) });
+  const { models } = await provider.discover({ kind: 'scalemax', apiKey: 'sm_live_test_key_1234567890' });
+  const byId = Object.fromEntries(models.map((model) => [model.id, model]));
+  assert.equal(byId['deepseek-v4-flash'].media, null);
+  assert.deepEqual(byId['gpt-image-2'].media, {
+    kind: 'image', sizes: ['1024x1024', '1536x864', '864x1536'], qualities: ['low', 'medium', 'high'],
+    maxImages: 1, edit: true, pricing: { min: 0.012, max: 0.422 },
+  });
+  // Unsafe option values are dropped; editing is only claimed where the API supports it.
+  assert.deepEqual(byId['qwen-image-3.0-pro'].media.sizes, ['1024x1024']);
+  assert.equal(byId['qwen-image-3.0-pro'].media.edit, false);
+  assert.equal(byId['qwen-image-3.0-pro'].media.maxImages, 4);
+  assert.deepEqual(byId['grok-imagine-video'].media, {
+    kind: 'video', aspectRatios: ['1:1', '16:9'], resolutions: ['480p', '720p'], textToVideo: true, imageToVideo: true,
+    requiresImage: false, edit: true, extend: false, durationMin: 1, durationMax: 15, defaultDuration: 6,
+    pricing: { perSecond: { '480p': 0.046667, '720p': 0.066667 }, discountPercent: 20 },
+  });
+});
+
+function profileProvider() {
+  const store = memoryStore();
+  const { provider, calls } = makeProvider({
+    store,
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`enc:${value}`),
+      decryptString: (buffer) => buffer.toString().replace(/^enc:/, ''),
+    },
+    respond: (url, options) => jsonResponse({ url, auth: options.headers?.Authorization || null, choices: [{ message: { content: 'ok' } }] }),
+  });
+  return { provider, store, calls };
+}
+
+test('several providers can be saved, switched and removed; each keeps its own key and model', async () => {
+  const { provider, store, calls } = profileProvider();
+  await provider.save({ kind: 'scalemax', baseUrl: 'https://api.scalemax.pro/v1', model: 'deepseek-v4-flash', apiKey: 'sm_live_first_key_1234567890' });
+  let listing = provider.profiles();
+  assert.equal(listing.profiles.length, 1);
+  assert.equal(listing.profiles[0].name, 'ScaleMax');
+  assert.equal(provider.get().profileName, 'ScaleMax');
+
+  listing = await provider.addProfile({ name: 'Local Ollama' });
+  assert.equal(listing.profiles.length, 2);
+  const localId = listing.activeId;
+  assert.equal(provider.get().configured, false);
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3' });
+  assert.equal(provider.get().model, 'llama3');
+
+  // The inactive ScaleMax profile keeps its encrypted key and model; nothing is decrypted to list it.
+  listing = provider.profiles();
+  const scalemax = listing.profiles.find((profile) => profile.id !== localId);
+  assert.deepEqual([scalemax.active, scalemax.model, scalemax.hasKey, scalemax.configured], [false, 'deepseek-v4-flash', true, true]);
+  assert.equal(JSON.stringify(listing).includes('sm_live_first_key'), false);
+
+  // Switching loads that provider's key again: the next request carries it.
+  await provider.selectProfile({ id: scalemax.id });
+  assert.equal(provider.get().model, 'deepseek-v4-flash');
+  await provider.send({ requestId: 'r1', messages: [{ role: 'user', content: 'Hi' }] });
+  assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer sm_live_first_key_1234567890');
+  await provider.selectProfile({ id: localId });
+  await provider.send({ requestId: 'r2', messages: [{ role: 'user', content: 'Hi' }] });
+  assert.equal(calls.at(-1).url, 'http://127.0.0.1:11434/v1/chat/completions');
+  assert.equal(calls.at(-1).options.headers.Authorization, undefined);
+
+  listing = await provider.renameProfile({ id: localId, name: '  Ollama  ' });
+  assert.equal(listing.profiles.find((profile) => profile.id === localId).name, 'Ollama');
+  // Removing the active provider switches to the remaining one; the last cannot be removed.
+  listing = await provider.removeProfile({ id: localId });
+  assert.equal(listing.profiles.length, 1);
+  assert.equal(provider.get().model, 'deepseek-v4-flash');
+  await assert.rejects(() => provider.removeProfile({ id: listing.activeId }), /last provider cannot be removed/);
+  assert.equal(JSON.stringify(store.snapshot()).includes('sm_live_first_key'), false);
+});
+
+test('mediaFetch sends the key only to the provider origin and refuses plain http elsewhere', async () => {
+  const { provider, calls } = profileProvider();
+  await provider.save({ kind: 'scalemax', baseUrl: 'https://api.scalemax.pro/v1', model: 'deepseek-v4-flash', apiKey: 'sm_live_first_key_1234567890' });
+  await provider.mediaFetch('images/generations', { method: 'POST', body: '{}' });
+  assert.equal(calls.at(-1).url, 'https://api.scalemax.pro/v1/images/generations');
+  assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer sm_live_first_key_1234567890');
+  assert.equal(calls.at(-1).options.redirect, 'manual');
+  await provider.mediaFetch('https://cdn.example.com/image.png');
+  assert.equal(calls.at(-1).options.headers.Authorization, undefined);
+  assert.throws(() => provider.mediaFetch('http://cdn.example.com/image.png'), /non-HTTPS/);
+  assert.equal(provider.redact('error for sm_live_first_key_1234567890'), 'error for [redacted]');
 });

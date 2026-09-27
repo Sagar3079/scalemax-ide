@@ -118,7 +118,7 @@ async function run(win) {
       const api = window.scalemaxAPI || {};
       const providerResult = await (api.provider && api.provider.get ? api.provider.get() : Promise.resolve(null));
       const cancelResult = await (api.provider && api.provider.cancel ? api.provider.cancel('smoke') : Promise.resolve(null));
-      const reservedKeys = ['provider', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user'];
+      const reservedKeys = ['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user'];
       const reserved = {};
       for (const key of reservedKeys) reserved[key] = 'bridge-missing';
       if (api.store && api.store.get) {
@@ -131,10 +131,11 @@ async function run(win) {
       return {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
-        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels','onProgress'].filter((m) => typeof api.provider?.[m] === 'function'),
+        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels','onProgress','profiles','addProfile','selectProfile','renameProfile','removeProfile'].filter((m) => typeof api.provider?.[m] === 'function'),
         workspaceMethods: ['select','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
+        mediaMethods: ['generate','cancel','info','pickImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
         approvalMethods: ['onRequest','onClosed','respond'].filter((m) => typeof api.approvals?.[m] === 'function'),
         composerControls: ['#attach-btn svg', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
           .every((selector) => Boolean(document.querySelector(selector))),
@@ -390,7 +391,8 @@ async function run(win) {
   const checks = probe ? {
     hasBridge: probe.hasBridge,
     reservedKeysHidden: probe.reservedHidden,
-    providerMethods: probe.providerMethods.length === 10,
+    providerMethods: probe.providerMethods.length === 15,
+    mediaApi: probe.mediaMethods.length === 6,
     approvalApi: probe.approvalMethods.length === 3,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',

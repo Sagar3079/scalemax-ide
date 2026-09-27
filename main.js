@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell, clipboard, protocol } = require('electron');
+const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -10,6 +11,13 @@ const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
+const { createMediaStudio } = require('./lib/media.cjs');
+
+// Generated images and videos are served to the renderer from the app's media folder through
+// scalemax-media://<id>/ (registered before ready so <video> can stream and seek).
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'scalemax-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+]);
 
 // The automated smoke check must never read or write the real user data.
 if (process.env.SCALEMAX_SMOKE === '1') {
@@ -187,6 +195,10 @@ const toolLoop = createToolLoop({ provider, mcp, approve: requestToolApproval })
 // GitHub's MCP server, never in the renderer. The one-time code is copied for the user.
 // When gh is missing it is downloaded (checksum + GitHub signature verified) into the app's own
 // tools folder, so no admin rights or Homebrew are needed.
+// Image and video generation (lib/media.cjs). Results live in <userData>/media and reach the
+// renderer only through the scalemax-media: protocol below, never as file paths.
+const mediaStudio = createMediaStudio({ provider, dir: path.join(app.getPath('userData'), 'media') });
+
 const cliConnect = createCliConnect({
   connectors,
   mcp,
@@ -288,7 +300,7 @@ ipcMain.handle('app:quit', async () => {
 // reachable through the provider:*/connector:*/mcp:* channels, which return
 // metadata and never a stored secret. The legacy `user` record is unreachable
 // for the same reason. (lib/state.cjs also refuses every non-public key.)
-const RESERVED_STATE_KEYS = new Set(['provider', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user']);
+const RESERVED_STATE_KEYS = new Set(['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user']);
 
 ipcMain.handle('store:get', async (_event, key) => {
   if (typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return undefined;
@@ -345,6 +357,12 @@ const providerChannels = {
   'provider:cancel': (_event, id) => toolLoop.cancel(id),
   'provider:set-model': (_event, input) => provider.setModel(input),
   'provider:refresh-models': () => provider.refreshModels(),
+  // Several saved providers; the active one is what chat and generation use.
+  'provider:profiles': () => provider.profiles(),
+  'provider:profile-add': (_event, input) => provider.addProfile(input),
+  'provider:profile-select': (_event, input) => provider.selectProfile(input),
+  'provider:profile-rename': (_event, input) => provider.renameProfile(input),
+  'provider:profile-remove': (_event, input) => provider.removeProfile(input),
   'provider:clear': () => provider.clear()
 };
 
@@ -512,7 +530,78 @@ ipcMain.handle('workspace:cancel', wrap(
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Media: scalemax-media://<id>/ serves one stored file (with Range for video seeking)
+// ---------------------------------------------------------------------------
+function serveMedia(request) {
+  let id = '';
+  try { id = new URL(request.url).hostname; } catch { id = ''; }
+  const file = mediaStudio.filePath(id);
+  const meta = file ? mediaStudio.item(id) : null;
+  if (!file || !meta) return new Response('Not found', { status: 404 });
+  const size = fs.statSync(file).size;
+  const headers = {
+    'Content-Type': meta.mime,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff'
+  };
+  const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.get('range') || '');
+  if (range && size > 0) {
+    let start = range[1] === '' ? size - Number(range[2]) : Number(range[1]);
+    let end = range[1] === '' || range[2] === '' ? size - 1 : Number(range[2]);
+    start = Math.max(0, start);
+    end = Math.min(size - 1, end);
+    if (!(start <= end)) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+    return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })), {
+      status: 206,
+      headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) }
+    });
+  }
+  return new Response(Readable.toWeb(fs.createReadStream(file)), { status: 200, headers: { ...headers, 'Content-Length': String(size) } });
+}
+
+// Media channels: generation runs in main with the stored key; the renderer only sees ids.
+const MEDIA_FALLBACK = { code: 'MEDIA_ERROR', message: 'Media request failed.' };
+const MEDIA_ID = /^m-[a-f0-9]{16}$/;
+
+const mediaChannels = {
+  'media:generate': (event, input) => mediaStudio.generate(input, {
+    onProgress: (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('media:progress', progress);
+    }
+  }),
+  'media:cancel': (_event, requestId) => mediaStudio.cancel(requestId),
+  'media:info': (_event, input) => {
+    const meta = mediaStudio.item(input?.id);
+    return meta ? { id: meta.id, kind: meta.kind, mime: meta.mime, model: meta.model || null, source: meta.source } : null;
+  },
+  // A source image for editing or image-to-video, copied into the media folder.
+  'media:pick-image': async () => {
+    const { canceled, filePaths } = await showOpenDialog({
+      title: 'Choose an image',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+    });
+    if (canceled || !filePaths.length) return null;
+    return mediaStudio.importImage(filePaths[0]);
+  },
+  'media:save': async (_event, input) => {
+    const id = typeof input?.id === 'string' && MEDIA_ID.test(input.id) ? input.id : '';
+    if (!mediaStudio.filePath(id)) throw bridgeError('NOT_FOUND', 'That file no longer exists.');
+    const options = { title: 'Save', defaultPath: path.join(app.getPath('downloads'), mediaStudio.suggestedName(id)) };
+    const { canceled, filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+    if (canceled || !filePath) return { saved: false };
+    return { ...mediaStudio.saveAs(id, filePath), name: path.basename(filePath) };
+  }
+};
+
+for (const [channel, run] of Object.entries(mediaChannels)) {
+  ipcMain.handle(channel, wrap(run, MEDIA_FALLBACK));
+}
+
 app.whenReady().then(() => {
+  protocol.handle('scalemax-media', serveMedia);
   // safeStorage is available for encrypting secrets at rest in future revisions.
   if (typeof safeStorage?.isEncryptionAvailable === 'function') {
     console.log(
@@ -548,6 +637,7 @@ app.whenReady().then(() => {
 // MCP stdio servers run in their own process groups; stop them with the app.
 app.on('before-quit', () => {
   cliConnect.closeAll();
+  mediaStudio.closeAll();
   void mcp.closeAll();
 });
 
