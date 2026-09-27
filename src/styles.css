@@ -1228,6 +1228,26 @@ input[type="range"] {
   background-color: var(--sm-bg-pill-active-hover);
 }
 
+/* A reply is running: the mode it was sent with cannot change until it ends. */
+.sm-scene-tabs__pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The mode pills carry their explanation right below, so the gap moves to that line. */
+#mode-switch {
+  margin-bottom: 6px;
+}
+
+/* One line under the pills saying what the chosen mode does (src/composer-ui.js renderMode). */
+.mode-note {
+  margin: 0 0 20px;
+  padding-inline-start: 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sm-text-medium);
+}
+
 .sm-home-composer {
   display: flex;
   flex-direction: column;
@@ -1244,6 +1264,7 @@ input[type="range"] {
 
 .sm-home-page.has-transcript .sm-home-header,
 .sm-home-page.has-transcript .sm-scene-tabs,
+.sm-home-page.has-transcript .mode-note,
 .sm-home-page.has-transcript .starter-section {
   display: none;
 }
@@ -1842,6 +1863,60 @@ input[type="range"] {
 
 .folder-menu .model-menu-group {
   border-top: 1px solid var(--sm-app-border);
+}
+
+/* The active mode, next to the folder chip: it stays once the pills above the box are gone. */
+.mode-chip-label {
+  color: var(--sm-text-strong);
+  font-weight: 500;
+}
+
+/* Two icons live in the markup; the chip's mode picks the one that is shown. */
+.mode-chip .mode-chip-icon {
+  display: none;
+}
+
+#mode-chip[data-mode="working"] .mode-chip-icon-working,
+#mode-chip[data-mode="coding"] .mode-chip-icon-coding {
+  display: block;
+}
+
+/* The mode chip's menu (src/composer-ui.js renderModeMenu). */
+.mode-menu {
+  width: 296px;
+}
+
+/* The second description line is the quieter one: what the mode can reach. */
+.mode-option-detail {
+  color: var(--sm-text-weak);
+}
+
+/* Why the options are off while a reply runs. */
+.mode-menu-reason {
+  margin: 2px 8px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sm-text-weak);
+}
+
+/* What the active mode can use, from one list of labels (src/domain.mjs MODE_TOOLS). */
+.mode-menu-tools {
+  margin: 8px 8px 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sm-app-border);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sm-text-weak);
+}
+
+/* An option that cannot be chosen right now (mode while a reply runs, project notes). */
+.composer-menu-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.composer-menu-option:disabled:hover {
+  background: none;
 }
 
 /* While the folder picker shows nothing can be sent yet, so the starter prompts wait, and a short

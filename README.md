@@ -16,6 +16,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
+- **Two modes that really differ** — **Working** researches on the web, works with your files and hands results back (it can put something on your clipboard or open a file you asked for); **Coding** explores your project, makes focused changes and runs your tests before it reports. The pills above the message box and the mode chip both switch it
 - **Every task lives in a folder, like Kiro** — a conversation starts once you choose a folder (any folder, the Desktop included), and after the first message the task stays in that folder. The sidebar lists your projects with their tasks and a **+** to start another task in the same folder; New task lets you pick a different one
 - **Clean replies** — answers are formatted (headings, lists, tables, code blocks with a Copy button) instead of showing raw Markdown symbols
 - **Works in your project folder, like Claude Code or Codex** — pick a folder from the folder menu (recent folders included; the last one opens again at start). The model can list, read, search, edit and write its files and run commands there (reads run on their own in Basic; changes and commands ask first unless you chose Bypass all). Each chat remembers its folder. Secret files such as `.env` and keys stay off limits
@@ -130,6 +131,9 @@ scalemax-ide/
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
 │   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools
 │   ├── workspace-tools.cjs # built-in chat tools for the open folder
+│   ├── modes.cjs         # what Working and Coding mean: tools, working agreement, rounds
+│   ├── web-tools.cjs     # web search and reading a page (guarded fetches)
+│   ├── computer-tools.cjs # clipboard, open in the default app, show in the Finder
 │   ├── project-notes.cjs # .scalemax/SCALEMAX.md and the per-chat project context
 │   ├── shell-path.cjs    # login-shell PATH for apps opened from the Finder
 │   ├── state.cjs         # atomic, validated JSON state store

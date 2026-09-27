@@ -1,10 +1,14 @@
 /**
  * ScaleMax composer controls: the model menu (model, thinking on/off, reasoning effort), the
- * tool permissions menu (Manual / Basic / Bypass all, with a consent step), the folder menu (the
- * task's folder, open another or a recent one, new tasks, project notes), and the prompt that asks
- * the user to approve a tool call. DOM is built with textContent and CSSOM only (CSP).
+ * tool permissions menu (Manual / Basic / Bypass all, with a consent step), the mode chip and its
+ * menu (Working / Coding, which decides the assistant's tools), the folder menu (the task's folder,
+ * open another or a recent one, new tasks, project notes), and the prompt that asks the user to
+ * approve a tool call. DOM is built with textContent and CSSOM only (CSP).
  */
-import { PERMISSION_MODES, REASONING_EFFORTS, effectivePermission, folderName, isTaskLocked } from './domain.mjs';
+import {
+  MODE_IDS, PERMISSION_MODES, REASONING_EFFORTS, effectivePermission, folderName, isTaskLocked,
+  modeInfo, modeSummary, normalizeMode,
+} from './domain.mjs';
 
 const $ = (selector) => document.querySelector(selector);
 const PERMISSION_LABELS = { manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
@@ -485,6 +489,84 @@ export async function setPermission(app, mode) {
   return mode;
 }
 
+// ---- Mode (Working / Coding) -----------------------------------------------------
+
+/**
+ * Everything that shows the mode: the pills above the message box (only on an empty task), the chip
+ * in the composer toolbar, the line under the pills, and the menu while it is open.
+ */
+export function renderMode(app) {
+  const mode = normalizeMode(app.settings.mode);
+  const info = modeInfo(mode);
+  const busy = chatBusy(app);
+  const chip = $('#mode-chip');
+  const label = $('#mode-chip-label');
+  if (chip && label) {
+    label.textContent = info.label;
+    // The chip's icon follows the mode (CSS picks one of the two in the markup).
+    chip.dataset.mode = mode;
+    chip.title = `${info.label}: ${info.note}`;
+    chip.setAttribute('aria-label', `Mode: ${info.label}. ${info.note} Change mode`);
+  }
+  for (const button of document.querySelectorAll('#mode-switch .mode-btn[data-mode]')) {
+    const pill = modeInfo(button.dataset.mode);
+    const selected = pill.id === mode;
+    button.classList.toggle('sm-scene-tabs__pill--active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.title = pill.note;
+    button.setAttribute('aria-label', `${pill.label} mode: ${pill.note}`);
+    // The mode is read from the saved settings for the next request, so it waits for the reply.
+    button.disabled = busy;
+  }
+  const note = $('#mode-note');
+  if (note) note.textContent = info.note;
+  if ($('#mode-menu')?.matches(':popover-open')) renderModeMenu(app);
+}
+
+/** The mode chip's menu: one option per mode, and a dim line with what the active mode can use. */
+export function renderModeMenu(app) {
+  const menu = $('#mode-menu');
+  if (!menu) return;
+  const mode = normalizeMode(app.settings.mode);
+  const busy = chatBusy(app);
+  const nodes = [element('p', 'composer-menu-title', 'Mode')];
+  for (const id of MODE_IDS) {
+    const info = modeInfo(id);
+    const option = element('button', 'composer-menu-option');
+    option.dataset.mode = id;
+    option.setAttribute('role', 'menuitemradio');
+    option.setAttribute('aria-checked', String(id === mode));
+    option.disabled = busy;
+    option.append(element('span', 'composer-menu-option-name', info.label),
+      element('span', 'composer-menu-option-desc', info.desc),
+      element('span', 'composer-menu-option-desc mode-option-detail', info.detail));
+    nodes.push(option);
+  }
+  if (busy) nodes.push(element('p', 'mode-menu-reason', 'Wait for the reply to finish'));
+  nodes.push(element('p', 'mode-menu-tools', `${modeInfo(mode).label} can use: ${modeSummary(mode)}`));
+  const focused = menu.contains(document.activeElement);
+  menu.replaceChildren(...nodes);
+  // Rebuilt while open (a reply started or ended): keyboard focus stays in the menu.
+  if (focused) menu.querySelector('button:not(:disabled)')?.focus();
+}
+
+/** Switches the mode. The pills and the chip both come through here, so they cannot disagree. */
+export async function setMode(app, mode) {
+  const next = normalizeMode(mode);
+  const current = normalizeMode(app.settings.mode);
+  // A reply already went out with the old mode; changing it now would only confuse.
+  if (next === current || chatBusy(app)) {
+    renderMode(app);
+    return current;
+  }
+  app.settings.mode = next;
+  // Main reads the persisted settings for every chat request, so this must land first.
+  await app.persist('settings');
+  renderMode(app);
+  app.showToast(`${modeInfo(next).label} mode: ${modeInfo(next).note}`);
+  return next;
+}
+
 // ---- Tool approval prompts -------------------------------------------------------
 
 const approvals = { queue: [], showing: null };
@@ -499,10 +581,20 @@ const WORKSPACE_SUMMARIES = {
   edit_file: 'The model wants to change part of a file in your workspace folder. The previous version is backed up first.',
   run_command: 'The model wants to run a command in your workspace folder (30-second limit).',
 };
+// Working-mode tools that reach past the folder (lib/computer-tools.cjs).
+const COMPUTER_SUMMARIES = {
+  write_clipboard: 'The model wants to put text on your clipboard, replacing what is on it now.',
+  open: 'The model wants to open something in the app that owns it.',
+  reveal: 'The model wants to show a file of your project in the Finder.',
+};
 function approvalSummary(request) {
   if (request.kind === 'workspace') {
     return WORKSPACE_SUMMARIES[request.toolName] || 'The model wants to read files in your workspace folder.';
   }
+  if (request.kind === 'computer') {
+    return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
+  }
+  if (request.kind === 'web') return 'The model wants to search the web or read a page.';
   return request.readOnly
     ? `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data.`
     : `The model wants to run "${request.toolName}" on ${request.serverName}. This tool can change data there.`;
@@ -557,7 +649,7 @@ function bindApprovals(app) {
       approvalId: request.approvalId,
       requestId: String(request.requestId || ''),
       serverName: String(request.serverName || request.serverId || 'MCP server'),
-      kind: request.kind === 'workspace' ? 'workspace' : 'mcp',
+      kind: ['workspace', 'web', 'computer'].includes(request.kind) ? request.kind : 'mcp',
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
@@ -723,8 +815,10 @@ export function bindComposerUi(app) {
     void refreshProfiles(app);
   });
   bindPopover('#permission-menu', '#permission-button', 'start', () => renderPermission(app));
+  bindPopover('#mode-menu', '#mode-chip', 'start', () => renderModeMenu(app));
   bindArrowKeys($('#model-menu-list'), '.model-menu-option');
   bindArrowKeys($('#permission-menu'), '.composer-menu-option');
+  bindArrowKeys($('#mode-menu'), '.composer-menu-option');
   bindFolderMenu(app);
 
   $('#model-tabs')?.addEventListener('click', (event) => {
@@ -769,8 +863,15 @@ export function bindComposerUi(app) {
     $('#permission-menu')?.hidePopover?.();
     void setPermission(app, option.dataset.permission);
   });
+  $('#mode-menu')?.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-mode]');
+    if (!option || option.disabled) return;
+    $('#mode-menu')?.hidePopover?.();
+    void setMode(app, option.dataset.mode);
+  });
   bindApprovals(app);
   renderPermission(app);
+  renderMode(app);
   renderModelButton(app);
   void refreshCatalog(app);
   void refreshProfiles(app);

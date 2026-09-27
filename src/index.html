@@ -124,10 +124,14 @@
               </section>
             </header>
 
+            <!-- The mode decides which tools the assistant is offered (lib/modes.cjs). The pills
+                 show on an empty task; the mode chip in the toolbar below takes over while chatting.
+                 Titles, labels and the note are written by src/composer-ui.js renderMode. -->
             <div id="mode-switch" class="sm-scene-tabs" role="group" aria-label="Task mode">
-              <button class="mode-btn sm-scene-tabs__pill sm-scene-tabs__pill--active" data-mode="working" type="button" aria-pressed="true">Working</button>
-              <button class="mode-btn sm-scene-tabs__pill" data-mode="coding" type="button" aria-pressed="false">Coding</button>
+              <button class="mode-btn sm-scene-tabs__pill sm-scene-tabs__pill--active" data-mode="working" type="button" aria-pressed="true" aria-describedby="mode-note">Working</button>
+              <button class="mode-btn sm-scene-tabs__pill" data-mode="coding" type="button" aria-pressed="false" aria-describedby="mode-note">Coding</button>
             </div>
+            <p id="mode-note" class="mode-note">Researches on the web, works with your files and hands results back.</p>
 
             <div class="sm-home-composer">
               <div id="chat-messages" class="chat-transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
@@ -160,6 +164,13 @@
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     <!-- Shown instead of the chevron once the task is fixed to its folder. -->
                     <svg class="folder-chip-lock" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3" /></svg>
+                  </button>
+                  <!-- The active mode, still visible once the pills above are gone. -->
+                  <button id="mode-chip" class="composer-chip mode-chip" type="button" data-mode="working" aria-haspopup="menu" aria-expanded="false" aria-controls="mode-menu">
+                    <svg class="mode-chip-icon mode-chip-icon-working" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Z" /><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" /></svg>
+                    <svg class="mode-chip-icon mode-chip-icon-coding" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m9 8-4 4 4 4" /><path d="m15 8 4 4-4 4" /></svg>
+                    <span id="mode-chip-label" class="mode-chip-label">Working</span>
+                    <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                   </button>
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
@@ -194,6 +205,8 @@
               </div>
               <!-- Rebuilt from the task's folder and the recent folders each time it opens (src/composer-ui.js). -->
               <div id="folder-menu" class="composer-menu folder-menu" popover role="menu" aria-label="Folder for this task"></div>
+              <!-- Rebuilt each time it opens (src/composer-ui.js renderModeMenu): the two modes and what they can use. -->
+              <div id="mode-menu" class="composer-menu mode-menu" popover role="menu" aria-label="Mode"></div>
               <div id="model-menu" class="composer-menu model-menu" popover role="dialog" aria-label="Model and reasoning">
                 <div id="model-tabs" class="segmented model-tabs" role="tablist" aria-label="Model type">
                   <button class="segmented-option" type="button" role="tab" aria-selected="true" data-model-tab="chat">Chat</button>

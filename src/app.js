@@ -15,6 +15,7 @@ import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui
 import { bindMcpUi } from './mcp-ui.js';
 import {
   bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles, renderFolderMenu,
+  renderMode, setMode,
 } from './composer-ui.js';
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
@@ -1282,16 +1283,11 @@ const app = {
       event.preventDefault();
       this.handleSend();
     });
+    // The pills and the composer's mode chip share one place that switches the mode.
     $('#mode-switch')?.addEventListener('click', (event) => {
       const button = event.target.closest('.mode-btn[data-mode]');
-      if (!button) return;
-      this.settings.mode = button.dataset.mode;
-      $$('#mode-switch .mode-btn[data-mode]').forEach((node) => {
-        const selected = node.dataset.mode === this.settings.mode;
-        node.classList.toggle('sm-scene-tabs__pill--active', selected);
-        node.setAttribute('aria-pressed', String(selected));
-      });
-      void this.persist('settings');
+      if (!button || button.disabled) return;
+      void setMode(this, button.dataset.mode);
     });
     $('#tag-row')?.addEventListener('click', (event) => {
       const chip = event.target.closest('.tag-chip[data-tag]');
@@ -1788,7 +1784,8 @@ const app = {
       }
     }
     const requestId = `chat-${taskId}-${Date.now()}`;
-    const payload = { requestId, folder, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
+    // The mode (Working or Coding) decides which tools main offers and how the assistant works.
+    const payload = { requestId, folder, mode: this.settings.mode, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
     const temperature = requestTemperature(this.settings);
     if (temperature !== undefined) payload.temperature = temperature;
     // Thinking on/off and effort from the model menu; the provider only sends them to models
@@ -1905,6 +1902,8 @@ const app = {
     const ready = taskFolderStatus(this.currentTask(), this.workspace.root) === 'ready';
     if (input) input.disabled = false;
     if (send) send.disabled = busy || !ready || !input?.value.trim();
+    // The mode cannot change while a reply runs, so the pills and the menu follow the busy state.
+    renderMode(this);
     this.renderComposerHint();
   },
 
@@ -1955,11 +1954,7 @@ const app = {
   },
 
   applySettingsToUI() {
-    $$('#mode-switch .mode-btn[data-mode]').forEach((button) => {
-      const selected = button.dataset.mode === this.settings.mode;
-      button.classList.toggle('sm-scene-tabs__pill--active', selected);
-      button.setAttribute('aria-pressed', String(selected));
-    });
+    renderMode(this);
     if ($('#system-prompt')) $('#system-prompt').value = this.settings.systemPrompt;
     if ($('#temperature')) $('#temperature').value = this.settings.temperature;
     if ($('#temperature-enabled')) $('#temperature-enabled').checked = Boolean(this.settings.temperatureEnabled);

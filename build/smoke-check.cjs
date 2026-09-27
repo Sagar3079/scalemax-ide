@@ -22,6 +22,9 @@ function stubReply(body) {
   const tools = Array.isArray(body?.tools) ? body.tools : [];
   const echo = tools.find((tool) => /_echo$/.test(tool?.function?.name || ''));
   const list = tools.find((tool) => tool?.function?.name === 'workspace_list');
+  if (typeof last.content === 'string' && last.content.includes('name your tools')) {
+    return { role: 'assistant', content: `tools: ${tools.map((tool) => tool.function.name).join(',')}` };
+  }
   if (last.role === 'tool') return { role: 'assistant', content: `tool said: ${last.content}` };
   // Built-in workspace tools: list the open folder, or say which folder the instructions name.
   if (list && typeof last.content === 'string' && last.content.includes('use workspace list')) {
@@ -255,6 +258,12 @@ async function run(win) {
       const folderReply = await api.provider.send({ requestId: 'smoke-ws-folder', messages: [{ role: 'user', content: 'which folder am I in?' }] });
       const wsToolChat = await api.provider.send({ requestId: 'smoke-ws-list', messages: [{ role: 'user', content: 'Please use workspace list.' }] });
       // A task's messages only run in its own folder.
+      // Working and Coding offer different tools (lib/modes.cjs); an unknown mode falls back to Working.
+      const modeTools = {};
+      for (const mode of ['working', 'coding', 'nonsense']) {
+        const reply = await api.provider.send({ requestId: 'smoke-mode-' + mode, mode, messages: [{ role: 'user', content: 'Please name your tools.' }] });
+        modeTools[mode] = reply && reply.ok ? reply.data.text : (reply && reply.error ? reply.error.message : null);
+      }
       const mismatch = await api.provider.send({ requestId: 'smoke-ws-mismatch', folder: '/private/tmp/scalemax-folder-not-open', messages: [{ role: 'user', content: 'ping' }] });
       const matched = await api.provider.send({ requestId: 'smoke-ws-match', folder: ${JSON.stringify(wsToolsDir)}, messages: [{ role: 'user', content: 'ping' }] });
       await api.provider.clear();
@@ -297,6 +306,7 @@ async function run(win) {
         uiChipLocked,
         uiGroupHasTask,
         mismatchCode: mismatch && !mismatch.ok ? mismatch.error.code : null,
+        modeTools,
         matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
         wsToolText: wsToolChat && wsToolChat.ok ? wsToolChat.data.text : (wsToolChat?.error?.message || null),
@@ -502,6 +512,16 @@ async function run(win) {
     uiNeedsFolder: Boolean(e2e && e2e.uiSendBlockedNoFolder === true),
     taskFolderLocked: Boolean(e2e && e2e.uiTaskFolder === wsToolsDir && e2e.uiChipLocked === true && e2e.uiGroupHasTask === true),
     folderMismatchRefused: Boolean(e2e && e2e.mismatchCode === 'FOLDER_MISMATCH' && e2e.matchedText === 'pong'),
+    modeToolSets: (() => {
+      const sets = (e2e && e2e.modeTools) || {};
+      const names = (value) => (typeof value === 'string' && value.startsWith('tools: ') ? value.slice(7).split(',') : []);
+      const working = names(sets.working);
+      const coding = names(sets.coding);
+      const fallback = names(sets.nonsense);
+      return working.includes('web_search') && working.includes('web_open') && working.includes('computer_clipboard_read')
+        && working.includes('workspace_read') && coding.includes('web_search') && coding.includes('workspace_edit')
+        && !coding.some((name) => name.startsWith('computer_')) && fallback.join(',') === working.join(',');
+    })(),
     workspaceRemembered: Boolean(e2e && e2e.wsCurrent && e2e.wsCurrent.ok && e2e.wsCurrent.data.root === wsToolsDir
       && e2e.wsCurrent.data.recent.some((item) => item.path === wsToolsDir)),
     manualApprovalDeny: Boolean(e2e && Array.isArray(e2e.deniedCalls) && e2e.deniedCalls.length === 1

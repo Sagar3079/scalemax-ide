@@ -49,6 +49,45 @@ function mediaOptions(value, kind) {
 
 export const PERMISSION_MODES = Object.freeze(['manual', 'basic', 'bypass']);
 export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+
+// The two modes the pills above the message box choose. lib/modes.cjs decides which tools each
+// mode is offered and how it works; the window only keeps the words for them, in one place, so the
+// pills, the chip and the menu always say the same thing.
+export const MODE_IDS = Object.freeze(['working', 'coding']);
+export const MODE_TOOLS = Object.freeze({
+  working: Object.freeze(['Files', 'Web', 'Clipboard']),
+  coding: Object.freeze(['Files', 'Web']),
+});
+const MODE_TEXT = {
+  working: {
+    label: 'Working',
+    note: 'Researches on the web, works with your files and hands results back.',
+    desc: 'Everyday work on this computer.',
+    detail: 'The web, your files, commands, the clipboard.',
+  },
+  coding: {
+    label: 'Coding',
+    note: 'Explores your project, makes focused changes and runs your tests.',
+    desc: 'A coding agent in your project.',
+    detail: 'Your files, commands and the web; runs your tests.',
+  },
+};
+
+/** The mode to work with: only 'working' and 'coding' exist, anything else is Working. */
+export function normalizeMode(value) {
+  return MODE_IDS.includes(value) ? value : 'working';
+}
+
+/** What the window shows for a mode: its name, the line under the pills, the menu wording. */
+export function modeInfo(value) {
+  const mode = normalizeMode(value);
+  return { id: mode, ...MODE_TEXT[mode], tools: [...MODE_TOOLS[mode]] };
+}
+
+/** What a mode can use, for the dim line in the mode menu ("Files · Web"). */
+export function modeSummary(value) {
+  return MODE_TOOLS[normalizeMode(value)].join(' · ');
+}
 // Earlier permission values: plan/read-only become manual; the others become basic, because
 // bypassing everything always needs a fresh consent.
 const LEGACY_PERMISSIONS = { ask: 'basic', 'auto-write': 'basic', full: 'basic', readonly: 'manual', plan: 'manual' };
@@ -126,7 +165,7 @@ export function normalizeSettings(value) {
   const result = { ...DEFAULT_SETTINGS };
   if (!isRecord(value)) return result;
   for (const [key, allowed] of [
-    ['mode', ['working', 'coding']],
+    ['mode', MODE_IDS],
     // catalog-ui.js offers 'system'; dropping it here reset the theme on reload.
     ['theme', ['light', 'dark', 'system']],
     ['reasoningEffort', REASONING_EFFORTS],
@@ -261,14 +300,28 @@ export function taskTime(time, now = Date.now()) {
 
 // The built-in workspace tools (lib/workspace-tools.cjs, server "Workspace") in plain words:
 // what a reply did (one call, several calls) and what it is doing right now.
-const WORKSPACE_TOOLS = {
-  list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder' },
-  read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file' },
-  search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project' },
-  write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file' },
-  edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file' },
-  run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command' },
+const TOOL_LABELS = {
+  Workspace: {
+    list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder' },
+    read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file' },
+    search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project' },
+    write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file' },
+    edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file' },
+    run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command' },
+  },
+  Web: {
+    search: { one: 'Searched the web', many: (n) => `Searched the web ${n} times`, doing: 'Searching the web' },
+    open_page: { one: 'Read a web page', many: (n) => `Read ${n} web pages`, doing: 'Reading a web page' },
+  },
+  Computer: {
+    read_clipboard: { one: 'Read the clipboard', many: (n) => `Read the clipboard ${n} times`, doing: 'Reading the clipboard' },
+    write_clipboard: { one: 'Copied to the clipboard', many: (n) => `Copied to the clipboard ${n} times`, doing: 'Copying to the clipboard' },
+    open: { one: 'Opened it in its app', many: (n) => `Opened ${n} things`, doing: 'Opening it in its app' },
+    reveal: { one: 'Showed it in the Finder', many: (n) => `Showed ${n} items in the Finder`, doing: 'Showing it in the Finder' },
+  },
 };
+
+const toolLabel = (server, tool) => TOOL_LABELS[server]?.[tool] || null;
 
 /**
  * The tool calls of one reply, one entry per tool in first-use order, with a short label
@@ -291,7 +344,7 @@ export function toolCallGroups(calls) {
     if (call.ok !== true) group.failed += 1;
   }
   return groups.map((group) => {
-    const known = group.server === 'Workspace' ? WORKSPACE_TOOLS[group.tool] : null;
+    const known = toolLabel(group.server, group.tool);
     const name = `${group.server ? `${group.server} · ` : ''}${group.tool}`;
     const base = known ? (group.count === 1 ? known.one : known.many(group.count)) : `${name}${group.count > 1 ? ` ×${group.count}` : ''}`;
     const failure = !group.failed ? '' : group.failed === group.count ? ' · failed' : ` · ${group.failed} failed`;
@@ -302,7 +355,7 @@ export function toolCallGroups(calls) {
 
 /** What a reply is doing while a tool runs or waits for approval: { text, friendly }. */
 export function toolActivity(serverId, toolName) {
-  const known = serverId === 'Workspace' ? WORKSPACE_TOOLS[toolName] : null;
+  const known = toolLabel(serverId, toolName);
   if (known) return { text: known.doing, friendly: true };
   const name = typeof toolName === 'string' ? toolName : '';
   return { text: `${serverId ? `${serverId} · ` : ''}${name}`, friendly: false };
@@ -554,9 +607,11 @@ export function buildSystemPrompt(settings, { experts = [], skills = [] } = {}) 
   const skill = findCatalogEntry(SKILLS, skills, validateCustomSkill, own(raw, 'skillId'));
   const parts = [
     'You are ScaleMax, an assistant. Be accurate, distinguish evidence from assumptions, and ask for essential missing context.',
+    // The mode's working agreement (which tools, how to work, how to report) is added by the main
+    // process, which owns the tools: lib/modes.cjs. Only the short reminder belongs here.
     normalized.mode === 'coding'
-      ? 'Coding mode: focus on software behavior, minimal maintainable changes, security, and testable examples. Explain proposed code and validation steps without inventing execution results.'
-      : 'Working mode: focus on the user goal, practical planning, clear writing, analysis, and actionable next steps. Keep recommendations grounded in the supplied material.',
+      ? 'Coding mode: software work in the user\'s project. Prefer minimal, maintainable, secure changes, and never invent results you did not see.'
+      : 'Working mode: everyday work on the user\'s computer. Plan, check your facts, produce something the user can keep, and never invent results you did not see.',
   ];
   if (normalized.systemPrompt.trim()) parts.push(`User system instructions:\n${normalized.systemPrompt}`);
   if (expert) parts.push(`Selected expert: ${expert.name}\n${expert.prompt}`);

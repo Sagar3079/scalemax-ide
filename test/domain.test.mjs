@@ -4,6 +4,7 @@ import {
   buildSystemPrompt, searchItems, normalizeAutomations, nextRunAt,
   normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks,
   folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime, toolCallGroups, toolActivity,
+  MODE_IDS, MODE_TOOLS, modeInfo, modeSummary, normalizeMode,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -19,6 +20,46 @@ test('coding mode switches the mode paragraph', () => {
   const prompt = buildSystemPrompt({ mode: 'coding' });
   assert.match(prompt, /Coding mode/);
   assert.doesNotMatch(prompt, /Working mode/);
+});
+
+// ---- The mode shown in the composer (pills, chip, menu) ----
+
+test('only the two modes exist and anything else is Working', () => {
+  assert.deepEqual([...MODE_IDS], ['working', 'coding']);
+  assert.equal(normalizeMode('coding'), 'coding');
+  assert.equal(normalizeMode('Working'), 'working');
+  assert.equal(normalizeMode(undefined), 'working');
+  assert.equal(normalizeSettings({ mode: 'coding' }).mode, 'coding');
+  assert.equal(normalizeSettings({ mode: 'nonsense' }).mode, 'working');
+});
+
+test('modeSummary names the tool families the mode can use', () => {
+  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard']);
+  assert.deepEqual([...MODE_TOOLS.coding], ['Files', 'Web']);
+  // Coding has no computer tools (lib/modes.cjs), so the clipboard is not offered there.
+  assert.equal(modeSummary('working'), 'Files · Web · Clipboard');
+  assert.equal(modeSummary('coding'), 'Files · Web');
+  assert.equal(modeSummary('nonsense'), modeSummary('working'));
+});
+
+test('modeInfo gives each mode one short line for the pills and the menu', () => {
+  for (const id of MODE_IDS) {
+    const info = modeInfo(id);
+    assert.equal(info.id, id);
+    for (const key of ['label', 'note', 'desc', 'detail']) {
+      assert.equal(typeof info[key], 'string');
+      assert.ok(info[key].trim().length > 0, `${id} has a ${key}`);
+      assert.ok(info[key].length <= 80, `${id} keeps ${key} short`);
+    }
+    assert.deepEqual(info.tools, [...MODE_TOOLS[id]]);
+  }
+  assert.equal(modeInfo('working').label, 'Working');
+  assert.equal(modeInfo('coding').label, 'Coding');
+  assert.match(modeInfo('coding').note, /runs your tests/);
+  // The returned lists are copies: a caller cannot edit the shared labels.
+  const info = modeInfo('working');
+  info.tools.push('Nope');
+  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard']);
 });
 
 test('a selected expert contributes its prompt context', () => {

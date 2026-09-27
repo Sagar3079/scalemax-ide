@@ -11,6 +11,9 @@ const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
+const { createWebTools } = require('./lib/web-tools.cjs');
+const { createComputerTools } = require('./lib/computer-tools.cjs');
+const { normalizeMode, modeFamilies, modeInstructions, modeMaxRounds } = require('./lib/modes.cjs');
 const { collectNames, restoreNames, modelNames } = require('./lib/reply-names.cjs');
 const { createProjectNotes, prepareChatRequest } = require('./lib/project-notes.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
@@ -173,6 +176,8 @@ const pendingApprovals = new Map();
 
 function mcpServerName(serverId) {
   if (serverId === workspaceTools.SERVER_ID) return 'Workspace';
+  if (serverId === webTools.SERVER_ID) return 'Web';
+  if (serverId === computerTools.SERVER_ID) return 'Computer';
   try {
     return mcp.list().find((server) => server.id === serverId)?.name || serverId;
   } catch {
@@ -204,7 +209,9 @@ function requestToolApproval(request, { signal } = {}) {
       requestId: request.requestId,
       serverId: request.serverId,
       serverName: mcpServerName(request.serverId),
-      kind: request.serverId === workspaceTools.SERVER_ID ? 'workspace' : 'mcp',
+      kind: request.serverId === workspaceTools.SERVER_ID ? 'workspace'
+        : request.serverId === webTools.SERVER_ID ? 'web'
+          : request.serverId === computerTools.SERVER_ID ? 'computer' : 'mcp',
       toolName: request.toolName,
       readOnly: request.readOnly,
       arguments: request.arguments,
@@ -219,6 +226,12 @@ function denyAllApprovals() {
 // The workspace tools use the same workspace service as the Workspace tab (getWorkspace below),
 // so they always act on the folder the user has open, and only while one is open.
 const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace() });
+// Web and computer tools belong to the mode the user picked above the message box: Working gets all
+// three families, Coding the project and the web (lib/modes.cjs).
+const webTools = createWebTools();
+const computerTools = createComputerTools({ getWorkspace: () => getWorkspace(), clipboard, shell });
+const BUILTIN_TOOLS = { workspace: workspaceTools, web: webTools, computer: computerTools };
+const builtinsFor = (mode) => modeFamilies(mode).map((family) => BUILTIN_TOOLS[family]).filter(Boolean);
 // The ScaleMax API replaces the word "kiro" in reply text with the model's name, which turned a
 // folder called "kiro-scalemax-ide" into "DeepSeek V4 Flash-scalemax-ide" (lib/reply-names.cjs).
 // Names the model was given in the request (folder, file paths, the user's words) are put back.
@@ -232,7 +245,7 @@ function restoreReplyText(text, sources, { model } = {}) {
 
 const toolLoop = createToolLoop({
   provider,
-  mcp: combineToolSources({ workspaceTools, mcp }),
+  mcp: combineToolSources({ builtins: builtinsFor, mcp }),
   approve: requestToolApproval,
   restoreText: restoreReplyText,
   // Coding work takes many steps (read, edit, run the tests, fix); Stop cancels at any point.
@@ -495,9 +508,16 @@ const providerChannels = {
     if (!provider.get().configured) return provider.send(input);
     await shellPathReady;
     await requireTaskFolder(input);
-    const prepared = await prepareChatRequest(input, { workspaceTools, projectNotes, notesEnabled: projectNotesEnabled() });
+    // Working or Coding: the mode decides the working agreement, which tools are offered and how
+    // many tool rounds a reply may take.
+    const mode = normalizeMode(input?.mode);
+    const prepared = await prepareChatRequest(input, {
+      workspaceTools, projectNotes, notesEnabled: projectNotesEnabled(), modeInstructions: modeInstructions(mode),
+    });
     const result = await toolLoop.send(prepared.input, {
       permission: chatPermission(),
+      mode,
+      maxRounds: modeMaxRounds(mode),
       onProgress: (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);
       }

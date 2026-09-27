@@ -108,7 +108,8 @@ async function runAutomation(app, automation, { manual = false } = {}) {
     const payload = {
       requestId: `automation-${automation.id}-${start}`,
       messages: [{ role: 'user', content: automation.prompt }],
-      // Same system prompt and temperature rules as interactive chat.
+      // Same system prompt, mode and temperature rules as interactive chat.
+      mode: app.settings.mode,
       systemPrompt: typeof app.buildSystemPrompt === 'function'
         ? app.buildSystemPrompt(app.settings)
         : buildSystemPrompt(app.settings),
