@@ -1,9 +1,10 @@
 /**
  * ScaleMax composer controls: the model menu (model, thinking on/off, reasoning effort), the
- * tool permissions menu (Manual / Basic / Bypass all, with a consent step), and the prompt that
- * asks the user to approve a tool call. DOM is built with textContent and CSSOM only (CSP).
+ * tool permissions menu (Manual / Basic / Bypass all, with a consent step), the folder menu (open
+ * folder, recent folders, project notes), and the prompt that asks the user to approve a tool
+ * call. DOM is built with textContent and CSSOM only (CSP).
  */
-import { PERMISSION_MODES, REASONING_EFFORTS, effectivePermission } from './domain.mjs';
+import { PERMISSION_MODES, REASONING_EFFORTS, effectivePermission, folderName } from './domain.mjs';
 
 const $ = (selector) => document.querySelector(selector);
 const PERMISSION_LABELS = { manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
@@ -495,6 +496,7 @@ function approvalBridge() {
 // Built-in workspace tools (lib/workspace-tools.cjs) act on the folder the user opened.
 const WORKSPACE_SUMMARIES = {
   write_file: 'The model wants to create or replace a file in your workspace folder. A replaced file is backed up first.',
+  edit_file: 'The model wants to change part of a file in your workspace folder. The previous version is backed up first.',
   run_command: 'The model wants to run a command in your workspace folder (30-second limit).',
 };
 function approvalSummary(request) {
@@ -589,6 +591,107 @@ function bindApprovals(app) {
   });
 }
 
+// ---- Workspace folder --------------------------------------------------------------
+
+// Recent folders listed besides the open one (main remembers up to eight).
+const RECENT_FOLDERS_SHOWN = 5;
+
+function chatBusy(app) {
+  return Boolean(app.activeRequestId || app.demoBusy);
+}
+
+function folderOption(action, name, desc) {
+  const option = element('button', 'composer-menu-option');
+  option.setAttribute('role', 'menuitem');
+  option.dataset.folderAction = action;
+  option.append(element('span', 'composer-menu-option-name', name));
+  if (desc) option.append(element('span', 'composer-menu-option-desc', desc));
+  return option;
+}
+
+/** The folder chip's menu: the open folder, open another one, project notes, recent folders. */
+export function renderFolderMenu(app) {
+  const menu = $('#folder-menu');
+  if (!menu) return;
+  const root = app.workspace?.root || '';
+  const nodes = [element('p', 'composer-menu-title', 'Workspace folder')];
+  if (root) {
+    const current = element('div', 'folder-menu-current');
+    current.append(element('span', 'composer-menu-option-name', folderName(root)), element('span', 'folder-menu-path', root));
+    nodes.push(current);
+  }
+  nodes.push(folderOption('open', 'Open folder…', 'Pick a project folder for chat and the Workspace view'));
+  if (root) {
+    nodes.push(folderOption('show', 'Show in Workspace'));
+    const notes = folderOption('init', 'Write project notes (/init)', 'ScaleMax reads the project and writes .scalemax/SCALEMAX.md');
+    // It is a chat request, and only one runs at a time.
+    notes.disabled = chatBusy(app);
+    nodes.push(notes);
+  }
+  const recent = (Array.isArray(app.workspace?.recent) ? app.workspace.recent : [])
+    .filter((item) => typeof item?.path === 'string' && item.path && item.path !== root)
+    .slice(0, RECENT_FOLDERS_SHOWN);
+  if (recent.length) {
+    const group = element('div', 'folder-menu-recent');
+    const title = element('p', 'composer-menu-title model-menu-group', 'Recent');
+    title.id = 'folder-menu-recent-title';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-labelledby', title.id);
+    group.append(title);
+    for (const item of recent) {
+      const option = folderOption('recent', typeof item.name === 'string' && item.name ? item.name : folderName(item.path));
+      option.dataset.folderPath = item.path;
+      option.append(element('span', 'folder-menu-path', item.path));
+      group.append(option);
+    }
+    nodes.push(group);
+  }
+  const focused = menu.contains(document.activeElement);
+  menu.replaceChildren(...nodes);
+  // Rebuilt while open (the folder changed underneath): keyboard focus stays in the menu.
+  if (focused) menu.querySelector('button:not(:disabled)')?.focus();
+}
+
+// "/init" goes through the normal send path; main turns it into "read the project and rewrite
+// .scalemax/SCALEMAX.md". A draft or attachment the user was preparing stays in the composer.
+function writeProjectNotes(app) {
+  const input = $('#chat-input');
+  if (!input || chatBusy(app) || !app.workspace?.root) return;
+  if (app.settings.composerMode !== 'chat') {
+    // Project notes come from a chat request, never from an image or video prompt.
+    app.settings.composerMode = 'chat';
+    void app.persist('settings');
+    renderModelButton(app);
+    window.dispatchEvent(new CustomEvent('scalemax:composer-mode'));
+  }
+  const draft = input.value;
+  const attachment = app.attachment;
+  input.value = '/init';
+  // Main only recognises a message that is exactly "/init", so no attachment rides along.
+  app.attachment = null;
+  // handleSend takes the text and the attachment before its first await.
+  void app.handleSend();
+  app.attachment = attachment;
+  input.value = draft;
+  app.updateSendEnabled();
+}
+
+function bindFolderMenu(app) {
+  const menu = $('#folder-menu');
+  bindPopover('#folder-menu', '#folder-chip', 'start', () => renderFolderMenu(app));
+  bindArrowKeys(menu, '.composer-menu-option');
+  menu?.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-folder-action]');
+    if (!option || option.disabled) return;
+    menu.hidePopover?.();
+    const action = option.dataset.folderAction;
+    if (action === 'open') void app.openWorkspace();
+    else if (action === 'show') app.switchView('workspace');
+    else if (action === 'init') writeProjectNotes(app);
+    else if (action === 'recent') void app.openWorkspaceAt(option.dataset.folderPath);
+  });
+}
+
 // ---- Wiring ----------------------------------------------------------------------
 
 export function bindComposerUi(app) {
@@ -602,6 +705,7 @@ export function bindComposerUi(app) {
   bindPopover('#permission-menu', '#permission-button', 'start', () => renderPermission(app));
   bindArrowKeys($('#model-menu-list'), '.model-menu-option');
   bindArrowKeys($('#permission-menu'), '.composer-menu-option');
+  bindFolderMenu(app);
 
   $('#model-tabs')?.addEventListener('click', (event) => {
     const tab = event.target.closest('[data-model-tab]');

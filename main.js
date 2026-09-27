@@ -12,9 +12,16 @@ const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { collectNames, restoreNames, modelNames } = require('./lib/reply-names.cjs');
+const { createProjectNotes, prepareChatRequest } = require('./lib/project-notes.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
 const { createMediaStudio } = require('./lib/media.cjs');
 const { applyBranding, ICON_PATH } = require('./lib/app-branding.cjs');
+const { applyShellPath } = require('./lib/shell-path.cjs');
+
+// Opened from the Finder or the Dock, the app gets macOS's minimal PATH; the user's login shell
+// knows where npm, node, git, Python and friends live (lib/shell-path.cjs). Commands the user or
+// the model runs wait for this (at most 5 seconds, once per start).
+const shellPathReady = applyShellPath().catch(() => process.env.PATH);
 
 // Generated images and videos are served to the renderer from the app's media folder through
 // scalemax-media://<id>/ (registered before ready so <video> can stream and seek).
@@ -215,25 +222,22 @@ const toolLoop = createToolLoop({
   provider,
   mcp: combineToolSources({ workspaceTools, mcp }),
   approve: requestToolApproval,
-  restoreText: restoreReplyText
+  restoreText: restoreReplyText,
+  // Coding work takes many steps (read, edit, run the tests, fix); Stop cancels at any point.
+  maxRounds: 25
 });
 
-/** Adds the open workspace folder (name only, never its full path) to the chat instructions. */
-// The newest user message also carries the folder name, because models follow the conversation
-// over the instructions: after a folder switch they kept describing the previous folder.
-function withWorkspaceContext(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
-  const note = workspaceTools.describe();
-  const base = typeof input.systemPrompt === 'string' ? input.systemPrompt : '';
-  const next = { ...input, systemPrompt: base.trim() ? `${base}\n\n${note}` : note };
-  const marker = workspaceTools.marker();
-  const messages = Array.isArray(input.messages) ? input.messages : null;
-  const last = messages?.[messages.length - 1];
-  if (marker && last && last.role === 'user' && typeof last.content === 'string'
-    && Buffer.byteLength(last.content) < 1024 * 1024 - 1024) {
-    next.messages = [...messages.slice(0, -1), { ...last, content: `${last.content}\n\n${marker}` }];
+// Project notes (.scalemax/SCALEMAX.md, lib/project-notes.cjs): created on the first message in
+// a folder that has none, and read, with any AGENTS.md / CLAUDE.md / Kiro steering files, into
+// every chat there. Preferences can turn the automatic creation off (settings.projectNotes).
+const projectNotes = createProjectNotes({ getWorkspace: () => getWorkspace() });
+
+function projectNotesEnabled() {
+  try {
+    return (stateStore.get('settings') || {}).projectNotes !== false;
+  } catch {
+    return true;
   }
-  return next;
 }
 
 // GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's
@@ -314,6 +318,67 @@ function requireWorkspace() {
   return instance;
 }
 
+// ---------------------------------------------------------------------------
+// Remembered folders (main-only state key `workspaceFolders`): like other coding apps, the
+// folder that was open is opened again at the next start, and recent folders are offered in the
+// folder menu. { current: absolute path | null, recent: [absolute paths, newest first] }
+// ---------------------------------------------------------------------------
+const MAX_RECENT_FOLDERS = 8;
+
+function readFolders() {
+  try {
+    const value = stateStore.readAll().workspaceFolders;
+    const valid = (item) => typeof item === 'string' && item.length <= 4096 && path.isAbsolute(item);
+    return {
+      current: valid(value?.current) ? value.current : null,
+      recent: Array.isArray(value?.recent) ? [...new Set(value.recent.filter(valid))].slice(0, MAX_RECENT_FOLDERS) : [],
+    };
+  } catch {
+    return { current: null, recent: [] };
+  }
+}
+
+function writeFolders(next) {
+  try {
+    stateStore.update((draft) => { draft.workspaceFolders = next; });
+  } catch (error) {
+    console.error('[ScaleMax] The open folder could not be remembered:', error.message);
+  }
+}
+
+function rememberFolder(root) {
+  const { recent } = readFolders();
+  writeFolders({ current: root, recent: [root, ...recent.filter((item) => item !== root)].slice(0, MAX_RECENT_FOLDERS) });
+}
+
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+
+/** Recent folders that still exist, newest first (the open one included). */
+function recentFolders() {
+  return readFolders().recent.filter(isDirectory).map((item) => ({ name: path.basename(item), path: item }));
+}
+
+// Reopens the remembered folder once per app run. A folder that was moved or deleted is
+// forgotten instead of failing every start.
+let folderRestore = null;
+function restoreFolder() {
+  if (!folderRestore) {
+    folderRestore = (async () => {
+      const instance = getWorkspace();
+      const { current, recent } = readFolders();
+      if (instance.current() || !current) return;
+      try {
+        await instance.select(current);
+      } catch {
+        writeFolders({ current: null, recent: recent.filter((item) => item !== current) });
+      }
+    })();
+  }
+  return folderRestore;
+}
+
 /** Builds an Error carrying a stable code for the IPC error envelope. */
 function bridgeError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -346,7 +411,7 @@ ipcMain.handle('app:quit', async () => {
 // reachable through the provider:*/connector:*/mcp:* channels, which return
 // metadata and never a stored secret. The legacy `user` record is unreachable
 // for the same reason. (lib/state.cjs also refuses every non-public key.)
-const RESERVED_STATE_KEYS = new Set(['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user']);
+const RESERVED_STATE_KEYS = new Set(['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'workspaceFolders', 'user']);
 
 ipcMain.handle('store:get', async (_event, key) => {
   if (typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return undefined;
@@ -392,14 +457,20 @@ const providerChannels = {
   'provider:discover': (_event, input) => provider.discover(input),
   // An unconfigured provider fails fast without starting any MCP server.
   // Progress (thinking / running a tool / waiting for approval) goes to the window that asked.
-  'provider:send': (event, input) => (provider.get().configured
-    ? toolLoop.send(withWorkspaceContext(input), {
+  // With a folder open the request carries the project context and may create the project
+  // notes first; the reply then says so (projectNotes.created) so the window can show it.
+  'provider:send': async (event, input) => {
+    if (!provider.get().configured) return provider.send(input);
+    await shellPathReady;
+    const prepared = await prepareChatRequest(input, { workspaceTools, projectNotes, notesEnabled: projectNotesEnabled() });
+    const result = await toolLoop.send(prepared.input, {
       permission: chatPermission(),
       onProgress: (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);
       }
-    })
-    : provider.send(input)),
+    });
+    return prepared.notes?.created ? { ...result, projectNotes: { created: true, path: prepared.notes.path } } : result;
+  },
   'provider:cancel': (_event, id) => toolLoop.cancel(id),
   'provider:set-model': (_event, input) => provider.setModel(input),
   'provider:refresh-models': () => provider.refreshModels(),
@@ -530,9 +601,21 @@ ipcMain.handle('dialog:open-file', wrap(async () => {
 
 ipcMain.handle('workspace:select', wrap(async (_event, root) => {
   const instance = getWorkspace();
+  // A folder picked before the start-up restore finished must win over the remembered one.
+  await restoreFolder();
   const selected = await instance.select(root);
   const listing = await instance.list('');
-  return { root: selected.path, files: normaliseEntries(listing.entries) };
+  rememberFolder(selected.path);
+  return { root: selected.path, files: normaliseEntries(listing.entries), recent: recentFolders() };
+}, WORKSPACE_FALLBACK));
+
+// The open folder (restored from the last run on the first call) and the recent folders.
+ipcMain.handle('workspace:current', wrap(async () => {
+  await restoreFolder();
+  const instance = getWorkspace();
+  const open = instance.current();
+  const files = open ? normaliseEntries((await instance.list('')).entries) : [];
+  return { root: open ? open.path : '', files, recent: recentFolders() };
 }, WORKSPACE_FALLBACK));
 
 // The root in the envelope always stays the project root; a relative path only
@@ -564,7 +647,10 @@ ipcMain.handle('workspace:git-diff', wrap(async (_event, relative) => {
 }, WORKSPACE_FALLBACK));
 
 ipcMain.handle('workspace:run', wrap(
-  (_event, request) => requireWorkspace().run(request),
+  async (_event, request) => {
+    await shellPathReady;
+    return requireWorkspace().run(request);
+  },
   WORKSPACE_FALLBACK
 ));
 
@@ -649,6 +735,8 @@ for (const [channel, run] of Object.entries(mediaChannels)) {
 app.whenReady().then(() => {
   // "ScaleMax" menu labels, About panel and Dock icon (app.name itself stays the package name).
   applyBranding({ app, Menu, shell });
+  // Reopen the folder from the last run (the renderer waits for this through workspace:current).
+  void restoreFolder();
   protocol.handle('scalemax-media', serveMedia);
   // safeStorage is available for encrypting secrets at rest in future revisions.
   if (typeof safeStorage?.isEncryptionAvailable === 'function') {

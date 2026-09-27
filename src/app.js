@@ -2,7 +2,7 @@
 import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
 import {
   nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
-  toTemperature, searchItems, DEFAULT_SETTINGS,
+  toTemperature, searchItems, folderName, normalizeTaskFolder, DEFAULT_SETTINGS,
 } from './domain.mjs';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -11,7 +11,9 @@ import { renderAvatar } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
 import { bindMcpUi } from './mcp-ui.js';
-import { bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles } from './composer-ui.js';
+import {
+  bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles, renderFolderMenu,
+} from './composer-ui.js';
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
   bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
@@ -113,6 +115,13 @@ function normalizeMediaItems(value) {
     .slice(0, 10).map((item) => ({ id: item.id, kind: item.kind, mime: typeof item.mime === 'string' ? item.mime.slice(0, 40) : '' }));
 }
 
+// The folder a chat was started in, as { folder } (or nothing when the stored value is unusable).
+// Selecting the task opens that folder again.
+function taskFolderField(value) {
+  const folder = normalizeTaskFolder(value);
+  return folder ? { folder } : {};
+}
+
 function normalizeToolSummaries(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => isRecord(item) && typeof item.tool === 'string').slice(0, 32).map((item) => ({
@@ -137,7 +146,11 @@ const app = {
   enabledModels: new Set(),
   selectedModel: '',
   attachment: null,
-  workspace: { root: '', files: [], openPath: '', revision: '', dirty: false },
+  // recent: folders main remembers, newest first ({ name, path }; the open one included).
+  workspace: { root: '', files: [], recent: [], openPath: '', revision: '', dirty: false },
+  // Folder switches run one after another (runFolderJob); a newer selection or pick wins.
+  folderSequence: 0,
+  folderQueue: Promise.resolve(),
   activeRequestId: null,
   eventsBound: false,
 
@@ -166,7 +179,7 @@ const app = {
     bindComposerUi(this);
     bindMediaUi(this);
     this.bindProfiles();
-    this.renderFolderChip();
+    await this.restoreWorkspace();
     window.scalemaxScheduler = startScheduler(this);
     this.updateSendEnabled();
     await this.loadVersion();
@@ -256,10 +269,13 @@ const app = {
         const media = normalizeMediaItems(message.media);
         if (media.length) normalized.media = media;
         if (typeof message.mediaRequest === 'string' && message.mediaRequest) normalized.mediaRequest = message.mediaRequest.slice(0, 300);
+        // A note from ScaleMax under a reply (for example that project notes were created).
+        if (typeof message.notice === 'string' && message.notice.trim()) normalized.notice = message.notice.trim().slice(0, 300);
         return normalized;
       }) : [],
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
       updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now,
+      ...taskFolderField(task.folder),
     })) : [];
     const rawSettings = isRecord(settings) ? settings : {};
     this.settings = normalizeSettings(rawSettings);
@@ -369,8 +385,8 @@ const app = {
         : meta.kind === 'custom' ? 'Your provider API key' : 'sm_live_…';
     }
     if (meta.kind === 'custom' || configured) this.selectedModel = model || this.selectedModel;
-    // The local-first shell reuses the sidebar identity slot for provider state.
-    if ($('#user-name')) $('#user-name').textContent = 'Local workspace';
+    // The local-first shell reuses the sidebar identity slot for the open folder and provider state.
+    this.renderSidebarFolder();
     if ($('#user-email')) $('#user-email').textContent = configured ? model : 'Provider not configured';
     // The statusbar mirrors provider state at a glance.
     if ($('#statusbar-provider')) {
@@ -462,17 +478,47 @@ const app = {
     void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
-  // The folder chip in the composer: the workspace the assistant's local tools work in.
+  // The open folder shows on the composer chip, in the chat header and in the sidebar footer.
+  renderFolder() {
+    this.renderFolderChip();
+    this.renderChatCrumb();
+    this.renderSidebarFolder();
+    if ($('#folder-menu')?.matches(':popover-open')) renderFolderMenu(this);
+  },
+
+  // The folder chip in the composer: the workspace the assistant's local tools work in. It opens
+  // the folder menu (src/composer-ui.js).
   renderFolderChip() {
     const chip = $('#folder-chip');
     const label = $('#folder-chip-label');
     if (!chip || !label) return;
     const root = this.workspace?.root || '';
-    const name = root ? root.split(/[\\/]/).filter(Boolean).pop() || root : '';
+    const name = folderName(root);
     label.textContent = name || 'No folder';
     chip.classList.toggle('empty', !root);
-    chip.title = root ? `Workspace: ${root}. Click to open it.` : 'No folder open. Click to open one.';
-    chip.setAttribute('aria-label', root ? `Workspace folder ${name}. Open the Workspace view` : 'No workspace folder. Open a folder');
+    chip.title = root ? `Workspace folder: ${root}` : 'No folder open. Choose one for chat and the Workspace view.';
+    chip.setAttribute('aria-label', root ? `Workspace folder: ${name}. Folder options` : 'No workspace folder. Folder options');
+  },
+
+  // "<folder> / Chat" above the conversation, "Workspace / Chat" without a folder.
+  renderChatCrumb() {
+    const crumb = $('#chat-crumb');
+    if (!crumb) return;
+    const root = this.workspace?.root || '';
+    const separator = element('span', 'chat-crumb-separator', '/');
+    separator.setAttribute('aria-hidden', 'true');
+    crumb.replaceChildren(element('span', root ? 'chat-crumb-folder' : '', folderName(root) || 'Workspace'), ' ', separator, ' Chat');
+    if (root) crumb.title = root;
+    else crumb.removeAttribute('title');
+  },
+
+  renderSidebarFolder() {
+    const node = $('#user-name');
+    if (!node) return;
+    const root = this.workspace?.root || '';
+    node.textContent = folderName(root) || 'Local workspace';
+    if (root) node.title = root;
+    else node.removeAttribute('title');
   },
 
   // Chat-capable, available models for the Assistant's "Model for chat" picker.
@@ -712,11 +758,74 @@ const app = {
     if (!dialog?.openFolder) { this.showToast('Opening folders requires the desktop app'); return; }
     const picked = await dialog.openFolder();
     if (!picked?.ok) { this.showToast(picked?.error?.message || 'Could not open that folder'); return; }
-    if (!picked.data?.path) return;
-    const result = await this.workspaceBridge()?.select(picked.data.path);
+    if (!picked.data?.path || !this.workspaceBridge()?.select) return;
+    // The folder the user picked wins over a task's folder that is still waiting to open.
+    this.folderSequence += 1;
+    const result = await this.runFolderJob(() => this.selectFolderNow(picked.data.path));
     if (!result?.ok) { this.showToast(result?.error?.message || 'Could not open that folder'); return; }
-    this.applyWorkspace(result.data);
     this.showToast('Folder opened');
+  },
+
+  // A remembered folder from the folder menu's Recent list.
+  async openWorkspaceAt(path) {
+    if (!this.workspaceBridge()?.select) { this.showToast('Opening folders requires the desktop app'); return; }
+    if (typeof path !== 'string' || !path) return;
+    this.folderSequence += 1;
+    const result = await this.runFolderJob(() => this.selectFolderNow(path));
+    if (!result?.ok) { this.showToast(result?.error?.message || 'Could not open that folder'); return; }
+    this.showToast(`Opened ${folderName(result.data.root)}`);
+  },
+
+  // Folder switches run one at a time: main keeps only the newest selection, and the folder it
+  // has open must be the one on screen.
+  runFolderJob(job) {
+    const run = this.folderQueue.then(job);
+    // A failed switch must not stop the ones queued behind it; callers still see the failure.
+    this.folderQueue = run.catch(() => {});
+    return run;
+  },
+
+  // Only from inside runFolderJob. main closes the open folder before it checks the new one
+  // (lib/workspace.cjs), so after a refusal the previous folder is opened again; otherwise chat
+  // would run without a folder while the screen still showed one.
+  async selectFolderNow(path) {
+    const bridge = this.workspaceBridge();
+    const previous = this.workspace.root;
+    let result;
+    try {
+      result = await bridge.select(path);
+    } catch (error) {
+      result = { ok: false, error };
+    }
+    if (result?.ok) {
+      this.applyWorkspace(result.data);
+      return result;
+    }
+    if (!previous) return result;
+    let reopened = null;
+    try {
+      reopened = await bridge.select(previous);
+      // The previous folder is gone too: show what main has open now (nothing).
+      if (!reopened?.ok) reopened = await bridge.current?.();
+    } catch (error) {
+      console.warn('[app] Could not reopen the previous folder:', error);
+    }
+    if (reopened?.ok) this.applyWorkspace(reopened.data);
+    return result;
+  },
+
+  // Main reopens the folder from the last run on the first call, so chat and the Workspace
+  // view start where the user left off. The recent folders come along for the folder menu.
+  async restoreWorkspace() {
+    let result = null;
+    try {
+      result = await this.workspaceBridge()?.current?.();
+    } catch (error) {
+      console.warn('[app] Could not read the open folder:', error);
+    }
+    if (result?.ok && Array.isArray(result.data?.recent)) this.workspace.recent = result.data.recent;
+    if (result?.ok && result.data?.root) this.applyWorkspace(result.data);
+    else this.renderFolder();
   },
 
   async refreshWorkspace() {
@@ -737,6 +846,8 @@ const app = {
     const rootChanged = this.workspace.root !== (data?.root || '');
     this.workspace.root = data?.root || '';
     this.workspace.files = Array.isArray(data?.files) ? data.files : [];
+    // select() and current() report the remembered folders; list() does not.
+    if (Array.isArray(data?.recent)) this.workspace.recent = data.recent;
     if (rootChanged) {
       // Open tabs belong to the previous project; close them before the
       // editor can save stale content into the new root.
@@ -751,7 +862,7 @@ const app = {
       if ($('#git-status')) $('#git-status').textContent = 'Open a repository to review its changes.';
     }
     renderCrumb(this.workspace.root);
-    this.renderFolderChip();
+    this.renderFolder();
     if ($('#workspace-status')) {
       const count = this.workspace.files.length;
       $('#workspace-status').textContent = this.workspace.root
@@ -916,9 +1027,11 @@ const app = {
       input.focus();
       this.updateSendEnabled();
     });
-    $('#folder-chip')?.addEventListener('click', () => {
-      if (this.workspace?.root) this.switchView('workspace');
-      else void this.openWorkspace();
+    // Preferences > Projects. Main reads the saved setting before the next chat request.
+    $('#project-notes-toggle')?.addEventListener('click', async () => {
+      this.settings.projectNotes = this.settings.projectNotes === false;
+      this.renderProjectNotesToggle();
+      await this.persist('settings');
     });
     $('#attach-btn')?.addEventListener('click', (event) => {
       event.preventDefault();
@@ -1015,11 +1128,34 @@ const app = {
   },
 
   selectTask(id) {
-    if (!this.tasks.some((task) => task.id === id)) return;
+    const task = this.tasks.find((item) => item.id === id);
+    if (!task) return;
     this.currentTaskId = id;
     this.switchView('chat');
     this.renderTasks();
     this.renderChat();
+    // A chat opens the folder it was started in. The switch waits for one still in flight, so
+    // its check sees the folder that switch left open; the newest selection wins.
+    const sequence = (this.folderSequence += 1);
+    if (task.folder && this.workspaceBridge()?.select) {
+      this.runFolderJob(() => this.switchToTaskFolder(task, sequence))
+        .catch((error) => this.showGlobalError(error?.message || 'The task folder could not be opened'));
+    }
+  },
+
+  // Runs inside runFolderJob (see selectTask).
+  async switchToTaskFolder(task, sequence) {
+    const folder = task?.folder;
+    if (!folder || sequence !== this.folderSequence || folder.path === this.workspace.root) return;
+    if (this.workspace.dirty || this.workspace.tabs?.some((tab) => tab.dirty)) {
+      this.showToast(`This task belongs to "${folder.name}". Save your edits first, then open it from the folder menu.`);
+      return;
+    }
+    // selectFolderNow applies the result even if the user moved on meanwhile: main has that
+    // folder open now. Only the newest selection reports anything.
+    const result = await this.selectFolderNow(folder.path);
+    if (sequence !== this.folderSequence) return;
+    this.showToast(result?.ok ? `Switched to folder ${folder.name}` : `This task's folder "${folder.name}" is not available any more.`);
   },
 
   renderTasks() {
@@ -1030,6 +1166,7 @@ const app = {
       const row = element('button', 'task-item');
       row.dataset.taskId = task.id;
       row.classList.toggle('active', task.id === this.currentTaskId);
+      if (task.folder) row.title = `Folder: ${task.folder.name}`;
       row.append(element('span', 'task-title', task.title), element('span', 'task-time', relativeTime(task.updatedAt)));
       return row;
     }));
@@ -1068,6 +1205,11 @@ const app = {
       bubble.append(element('span', 'msg-text', message.text));
       if (message.mediaRequest) bubble.append(element('span', 'msg-media-request', message.mediaRequest));
       if (message.media?.length) bubble.append(renderMediaItems(this, message.media));
+      if (message.notice) {
+        const notice = element('span', 'msg-notice', message.notice);
+        notice.setAttribute('role', 'note');
+        bubble.append(notice);
+      }
       bubble.append(element('span', 'msg-time', clock(message.time)));
       return bubble;
     }));
@@ -1140,6 +1282,8 @@ const app = {
     if (!task) { this.showToast('That task no longer exists'); return; }
     if (role === 'user' && !task.messages.some((message) => message.role === 'user')) {
       task.title = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+      // The chat belongs to the folder it starts in; selecting the task later opens it again.
+      if (this.workspace.root) task.folder = { name: folderName(this.workspace.root), path: this.workspace.root };
     }
     const message = { role, text, time: Date.now() };
     const tools = normalizeToolSummaries(extra.tools);
@@ -1149,6 +1293,7 @@ const app = {
     const media = normalizeMediaItems(extra.media);
     if (media.length) message.media = media;
     if (typeof extra.mediaRequest === 'string' && extra.mediaRequest) message.mediaRequest = extra.mediaRequest.slice(0, 300);
+    if (typeof extra.notice === 'string' && extra.notice.trim()) message.notice = extra.notice.trim().slice(0, 300);
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) this.renderChat();
@@ -1234,14 +1379,22 @@ const app = {
       }
       // Model time only (tool runs and approvals excluded); plain sends report the whole wait.
       const thinkingMs = Number.isSafeInteger(result.data.thinkingMs) ? result.data.thinkingMs : Date.now() - startedAt;
+      // Main wrote the project notes for this folder during the request: say so under the reply.
+      const notes = result.data.projectNotes?.created === true ? result.data.projectNotes : null;
+      const notesPath = typeof notes?.path === 'string' && notes.path ? notes.path : '.scalemax/SCALEMAX.md';
       this.appendMessage('assistant', result.data.text, taskId, {
         tools: result.data.toolCalls,
         reasoning: result.data.reasoning,
         ...(thinking ? { thinkingMs } : {}),
+        ...(notes ? {
+          notice: `Created ${notesPath}: project notes ScaleMax reads in every chat in this folder. Edit them any time, or type /init to have ScaleMax rewrite them.`,
+        } : {}),
       });
-      // The model changed files or ran a command in the workspace: reload the tree and Git status.
+      // The model changed files or ran a command in the workspace (or main created the notes):
+      // reload the tree and Git status.
       const calls = Array.isArray(result.data.toolCalls) ? result.data.toolCalls : [];
-      if (calls.some((call) => call?.server === 'Workspace' && call.ok && ['write_file', 'run_command'].includes(call.tool))) {
+      if (notes || calls.some((call) => call?.server === 'Workspace' && call.ok
+        && ['write_file', 'edit_file', 'run_command'].includes(call.tool))) {
         void this.refreshWorkspace();
       }
       // A broken MCP server never blocks the reply, but the user should know.
@@ -1341,8 +1494,14 @@ const app = {
     if ($('#temperature')) $('#temperature').value = this.settings.temperature;
     if ($('#temperature-enabled')) $('#temperature-enabled').checked = Boolean(this.settings.temperatureEnabled);
     this.renderTemperatureValue();
+    this.renderProjectNotesToggle();
     renderPermission(this);
     renderModelButton(this);
+  },
+
+  // Preferences > Projects: main creates .scalemax/SCALEMAX.md unless this is off.
+  renderProjectNotesToggle() {
+    $('#project-notes-toggle')?.setAttribute('aria-checked', String(this.settings.projectNotes !== false));
   },
 
   renderExperts() {
@@ -1946,6 +2105,7 @@ const app = {
     this.renderProviderStatus();
     this.renderModelSelect();
     this.renderFileTree();
+    this.renderFolder();
     this.setAttachment(this.attachment);
     this.updateSendEnabled();
   },

@@ -333,9 +333,16 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
   workspace: {
     /**
      * @param {string} path absolute project folder
-     * @returns {Promise<{ok: boolean, data?: {root: string, files: Array<{path: string, name: string, type: string}>}, error?: object}>}
+     * @returns {Promise<{ok: boolean, data?: {root: string, files: Array<{path: string, name: string, type: string}>, recent: Array<{name: string, path: string}>}, error?: object}>}
      */
     select: (path) => ipcRenderer.invoke('workspace:select', path),
+    /**
+     * The open folder (main reopens the folder from the last run on the first call) and the
+     * recent folders that still exist, newest first.
+     * @returns {Promise<{ok: boolean, data?: {root: string, files: Array<{path: string, name: string, type: string}>, recent: Array<{name: string, path: string}>}, error?: object}>}
+     *          root is '' when no folder is open
+     */
+    current: () => ipcRenderer.invoke('workspace:current'),
 
     /**
      * Lists one directory level of the workspace.

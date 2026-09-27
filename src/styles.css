@@ -992,6 +992,11 @@ input[type="range"] {
   width: 200px;
 }
 
+/* A setting described in a sentence or two, next to its switch (Preferences > Projects). */
+.preference-text {
+  flex: 1;
+}
+
 .about-card {
   display: flex;
   align-items: flex-start;
@@ -1645,6 +1650,55 @@ input[type="range"] {
   color: var(--sm-text-weak);
 }
 
+/* The folder chip's menu (src/composer-ui.js): the open folder, actions and recent folders. */
+.folder-menu {
+  width: 320px;
+}
+
+/* The separator is inset like the Recent one below it; the text sits 8px in either way. */
+.folder-menu-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 4px;
+  padding: 6px 0 8px;
+  border-bottom: 1px solid var(--sm-app-border);
+}
+
+.folder-menu-current .composer-menu-option-name {
+  overflow-wrap: anywhere;
+}
+
+/* Full paths wrap instead of widening the menu. */
+.folder-menu-path {
+  font-family: var(--sm-font-code-family);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--sm-text-weak);
+  overflow-wrap: anywhere;
+}
+
+/* --sm-color-border-tertiary does not resolve in dark mode (sm-tokens.css), which drops the
+   .model-menu-group line there; the app border shows in both themes. */
+.folder-menu .model-menu-group {
+  border-top: 1px solid var(--sm-app-border);
+}
+
+/* "<folder> / Chat" above the conversation; the folder name keeps its real case. */
+.chat-crumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-crumb-folder {
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--sm-text-medium);
+}
+
 /* Chat / Image / Video tabs at the top of the model menu. */
 .model-tabs {
   display: flex;
@@ -1755,6 +1809,33 @@ input[type="range"] {
 .msg-media-request {
   font-size: 11px;
   color: var(--sm-text-weak);
+}
+
+/* A note from ScaleMax under a reply, such as the project notes it just created. */
+.msg-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--sm-text-weak);
+}
+
+/* A small "i" badge; the empty alternative text keeps screen readers from reading it. */
+.msg-notice::before {
+  content: 'i' / '';
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .msg-media {

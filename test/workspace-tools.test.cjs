@@ -41,10 +41,10 @@ test('without an open folder there are no tools and the prompt says so', async (
   workspace.dispose();
 });
 
-test('an open folder offers five tools; reads are read-only, writes and commands are not', async (t) => {
+test('an open folder offers six tools; reads are read-only, writes and commands are not', async (t) => {
   const { root, tools } = await openTools(t);
   const names = tools.definitions().map((definition) => definition.function.name);
-  assert.deepEqual(names, ['workspace_list', 'workspace_read', 'workspace_search', 'workspace_write', 'workspace_run']);
+  assert.deepEqual(names, ['workspace_list', 'workspace_read', 'workspace_search', 'workspace_write', 'workspace_edit', 'workspace_run']);
   for (const definition of tools.definitions()) {
     assert.match(definition.function.name, /^[a-zA-Z0-9_-]{1,64}$/);
     assert.equal(definition.function.parameters.type, 'object');
@@ -59,7 +59,8 @@ test('an open folder offers five tools; reads are read-only, writes and commands
   assert.ok(note.includes(`"${path.basename(root)}"`));
   assert.ok(!note.includes(root));
   assert.equal(tools.marker(), `[Workspace folder right now: "${path.basename(root)}"]`);
-  assert.equal(TOOLS.length, 5);
+  assert.equal(TOOLS.length, 6);
+  assert.equal(tools.resolve('workspace_edit').readOnly, false);
 });
 
 test('list_files shows one level and hides secrets and build folders', async (t) => {
@@ -170,7 +171,7 @@ test('combined tools put the workspace first and keep MCP within the request lim
 test('a broken MCP setup still leaves the workspace tools', async (t) => {
   const { tools } = await openTools(t);
   const catalog = await combineToolSources({ workspaceTools: tools, mcp: fakeMcp(0, { fail: true }) }).chatTools({});
-  assert.equal(catalog.tools.length, 5);
+  assert.equal(catalog.tools.length, 6);
   assert.equal(catalog.errors[0].message, 'MCP is broken');
 });
 
@@ -216,7 +217,7 @@ for (const [permission, decision, created, approvals] of [
     // The model saw the listing as the first tool result.
     const toolMessage = provider.calls[1].messages.find((message) => message.role === 'tool');
     assert.match(toolMessage.content, /README\.md/);
-    assert.equal(provider.calls[0].tools.length, 5);
+    assert.equal(provider.calls[0].tools.length, 6);
   });
 }
 
@@ -228,4 +229,22 @@ test('an empty folder is reported as empty, by name', async (t) => {
   await workspace.select(root);
   const { text } = await createWorkspaceTools({ getWorkspace: () => workspace }).call('list_files', {});
   assert.match(text, new RegExp(`^${path.basename(root)} \\(the workspace folder\\) is empty: it has no files or folders\\.`));
+});
+
+test('edit_file replaces exact text once, refuses missing or ambiguous text, and backs up', async (t) => {
+  const { root, tools } = await openTools(t);
+  fs.writeFileSync(path.join(root, 'src', 'util.js'), 'const a = 1;\nconst b = 1;\nexport { a, b };\n');
+  assert.equal((await tools.call('edit_file', { path: 'src/util.js', old_text: 'const b = 1;', new_text: 'const b = 2;' })).text,
+    'Edited src/util.js (at line 2). The previous version was backed up in .cache/editor-backups.');
+  assert.equal(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), 'const a = 1;\nconst b = 2;\nexport { a, b };\n');
+  await assert.rejects(tools.call('edit_file', { path: 'src/util.js', old_text: 'const c', new_text: 'x' }), { code: 'NO_MATCH' });
+  await assert.rejects(tools.call('edit_file', { path: 'src/util.js', old_text: 'const', new_text: 'let' }), { code: 'AMBIGUOUS_MATCH' });
+  assert.match((await tools.call('edit_file', { path: 'src/util.js', old_text: 'const', new_text: 'let', replace_all: true })).text, /2 occurrences, first at line 1/);
+  assert.equal(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), 'let a = 1;\nlet b = 2;\nexport { a, b };\n');
+  await assert.rejects(tools.call('edit_file', { path: 'src/util.js', old_text: 'x', new_text: 'x' }), /the same/);
+  await assert.rejects(tools.call('edit_file', { path: 'missing.js', old_text: 'a', new_text: 'b' }), { code: 'ENOENT' });
+  assert.equal(fs.readdirSync(path.join(root, '.cache', 'editor-backups')).length, 2);
+  // "$&" in the new text is inserted literally, not as a replacement pattern.
+  await tools.call('edit_file', { path: 'src/util.js', old_text: 'export { a, b };', new_text: 'const price = "$&";' });
+  assert.match(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), /const price = "\$&";/);
 });

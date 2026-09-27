@@ -95,7 +95,7 @@
 
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
-            <span class="eyebrow">Workspace <span aria-hidden="true">/</span> Chat</span>
+            <span id="chat-crumb" class="eyebrow chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
             <div class="button-row">
               <button id="export-task-btn" class="button secondary" type="button">Export task</button>
               <button id="delete-task-btn" class="button danger" type="button">Delete task</button>
@@ -133,9 +133,10 @@
                     <span id="permission-label">Basic</span>
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                   </button>
-                  <button id="folder-chip" class="composer-chip folder-chip" type="button" title="Open a folder">
+                  <button id="folder-chip" class="composer-chip folder-chip" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="folder-menu" title="Workspace folder">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
                     <span id="folder-chip-label" class="folder-chip-label">No folder</span>
+                    <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                   </button>
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
@@ -168,6 +169,8 @@
                   <span class="composer-menu-option-desc">Autonomous: every tool call runs without asking. Needs your consent.</span>
                 </button>
               </div>
+              <!-- Rebuilt from the open and recent folders each time it opens (src/composer-ui.js). -->
+              <div id="folder-menu" class="composer-menu folder-menu" popover role="menu" aria-label="Workspace folder"></div>
               <div id="model-menu" class="composer-menu model-menu" popover role="dialog" aria-label="Model and reasoning">
                 <div id="model-tabs" class="segmented model-tabs" role="tablist" aria-label="Model type">
                   <button class="segmented-option" type="button" role="tab" aria-selected="true" data-model-tab="chat">Chat</button>
@@ -479,6 +482,16 @@
             <section class="settings-card" aria-labelledby="appearance-title">
               <h2 id="appearance-title">Appearance</h2>
               <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></div>
+            </section>
+            <section class="settings-card" aria-labelledby="projects-title">
+              <h2 id="projects-title">Projects</h2>
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="project-notes-label" for="project-notes-toggle">Project notes</label>
+                  <p id="project-notes-desc" class="status-text">On the first message in a folder, create .scalemax/SCALEMAX.md with what ScaleMax finds there. ScaleMax reads it, and any AGENTS.md, CLAUDE.md or Kiro steering files, in every chat in that folder.</p>
+                </div>
+                <button id="project-notes-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="project-notes-label" aria-describedby="project-notes-desc"><span class="switch-thumb"></span></button>
+              </div>
             </section>
             <section class="settings-card" aria-labelledby="data-title">
               <h2 id="data-title">Your data stays yours</h2>

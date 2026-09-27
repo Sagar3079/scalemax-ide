@@ -33,7 +33,7 @@ function stubReply(body) {
   }
   if (typeof last.content === 'string' && last.content.includes('which folder')) {
     const system = messages.find((message) => message.role === 'system');
-    const folder = /workspace folder is "([^"]+)"/.exec(system?.content || '');
+    const folder = /project folder "([^"]+)"/.exec(system?.content || '');
     return { role: 'assistant', content: `folder: ${folder ? folder[1] : 'none'}` };
   }
   if (echo && typeof last.content === 'string' && last.content.includes('use echo')) {
@@ -132,7 +132,7 @@ async function run(win) {
       const api = window.scalemaxAPI || {};
       const providerResult = await (api.provider && api.provider.get ? api.provider.get() : Promise.resolve(null));
       const cancelResult = await (api.provider && api.provider.cancel ? api.provider.cancel('smoke') : Promise.resolve(null));
-      const reservedKeys = ['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'user'];
+      const reservedKeys = ['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'workspaceFolders', 'user'];
       const reserved = {};
       for (const key of reservedKeys) reserved[key] = 'bridge-missing';
       if (api.store && api.store.get) {
@@ -146,7 +146,7 @@ async function run(win) {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
         providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels','onProgress','profiles','addProfile','selectProfile','renameProfile','removeProfile'].filter((m) => typeof api.provider?.[m] === 'function'),
-        workspaceMethods: ['select','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
+        workspaceMethods: ['select','current','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
         mediaMethods: ['generate','cancel','info','pickImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
@@ -276,6 +276,9 @@ async function run(win) {
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
         wsToolText: wsToolChat && wsToolChat.ok ? wsToolChat.data.text : (wsToolChat?.error?.message || null),
         wsToolCalls: wsToolChat && wsToolChat.ok ? wsToolChat.data.toolCalls : null,
+        wsNotesFirst: folderReply && folderReply.ok ? folderReply.data.projectNotes || null : null,
+        wsNotesSecond: wsToolChat && wsToolChat.ok ? wsToolChat.data.projectNotes || null : null,
+        wsCurrent: await api.workspace.current(),
         approvalShown,
         approvalTitle,
         approvedCalls: approved && approved.ok ? approved.data.toolCalls : (approved?.error?.message || null),
@@ -293,6 +296,9 @@ async function run(win) {
   } catch (error) {
     errors.push(`e2e failed: ${error.message}`);
   }
+  const wsNotesOnDisk = (() => {
+    try { return fs.readFileSync(path.join(wsToolsDir, '.scalemax', 'SCALEMAX.md'), 'utf8'); } catch { return null; }
+  })();
   fs.rmSync(wsToolsDir, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 
@@ -426,7 +432,7 @@ async function run(win) {
     approvalApi: probe.approvalMethods.length === 3,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',
-    workspaceApi: probe.workspaceMethods.length === 8,
+    workspaceApi: probe.workspaceMethods.length === 9,
     dialogApi: probe.dialogMethods.length === 2,
     connectorApi: probe.connectorMethods.length === 15,
     mcpApi: probe.mcpMethods.length === 7,
@@ -462,6 +468,11 @@ async function run(win) {
     workspaceToolLoop: Boolean(e2e && typeof e2e.wsToolText === 'string' && e2e.wsToolText.startsWith('tool said: ')
       && e2e.wsToolText.includes('smoke-note.txt') && Array.isArray(e2e.wsToolCalls) && e2e.wsToolCalls.length === 1
       && e2e.wsToolCalls[0].server === 'Workspace' && e2e.wsToolCalls[0].tool === 'list_files' && e2e.wsToolCalls[0].ok === true),
+    projectNotesCreated: Boolean(e2e && e2e.wsNotesFirst && e2e.wsNotesFirst.created === true
+      && e2e.wsNotesFirst.path === '.scalemax/SCALEMAX.md' && e2e.wsNotesSecond === null
+      && typeof wsNotesOnDisk === 'string' && wsNotesOnDisk.startsWith(`# ${path.basename(wsToolsDir)}\n`)),
+    workspaceRemembered: Boolean(e2e && e2e.wsCurrent && e2e.wsCurrent.ok && e2e.wsCurrent.data.root === wsToolsDir
+      && e2e.wsCurrent.data.recent.some((item) => item.path === wsToolsDir)),
     manualApprovalDeny: Boolean(e2e && Array.isArray(e2e.deniedCalls) && e2e.deniedCalls.length === 1
       && e2e.deniedCalls[0].ok === false && /denied/.test(e2e.deniedCalls[0].preview) && e2e.approvalClosed),
     oauthSupported: Boolean(e2e && e2e.oauthSupported),

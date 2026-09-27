@@ -16,7 +16,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
-- **Works in your folder** — open a folder with the folder button and the model can list, read and search its files, write files and run commands there (reads run on their own in Basic; writes and commands ask first unless you chose Bypass all). Secret files such as `.env` and keys stay off limits
+- **Works in your project folder, like Claude Code or Codex** — pick a folder from the folder menu (recent folders included; the last one opens again at start). The model can list, read, search, edit and write its files and run commands there (reads run on their own in Basic; changes and commands ask first unless you chose Bypass all). Each chat remembers its folder. Secret files such as `.env` and keys stay off limits
+- **Project notes** — on the first message in a folder ScaleMax writes `.scalemax/SCALEMAX.md` (overview, stack, commands, structure) and reads it, plus any `AGENTS.md`, `CLAUDE.md` or Kiro steering files, into every chat there. Type `/init` to have ScaleMax rewrite the notes after reading the project; Preferences → Projects turns the automatic notes off
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
 - **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
 - **Image & video** — pick an image or video model in the model menu; its options (size, quality, aspect ratio, resolution, duration, edit, image-to-video) appear above the message box, results show in the chat with Download
@@ -127,6 +128,8 @@ scalemax-ide/
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
 │   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools
 │   ├── workspace-tools.cjs # built-in chat tools for the open folder
+│   ├── project-notes.cjs # .scalemax/SCALEMAX.md and the per-chat project context
+│   ├── shell-path.cjs    # login-shell PATH for apps opened from the Finder
 │   ├── state.cjs         # atomic, validated JSON state store
 │   └── workspace.cjs     # project folder access: list, read, write, Git, commands
 ├── src/

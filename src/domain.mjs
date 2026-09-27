@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   bypassConsent: false,
   thinking: true,
   reasoningEffort: 'medium',
+  // Main writes .scalemax/SCALEMAX.md on the first message in a folder (Preferences > Projects).
+  projectNotes: true,
   // What the composer sends: chat, or an image / video generation with the chosen model.
   composerMode: 'chat',
   imageModel: '',
@@ -137,6 +139,7 @@ export function normalizeSettings(value) {
   result.bypassConsent = own(value, 'bypassConsent') === true && result.permission === 'bypass';
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
+  if (typeof own(value, 'projectNotes') === 'boolean') result.projectNotes = value.projectNotes;
   if (['chat', 'image', 'video'].includes(own(value, 'composerMode'))) result.composerMode = value.composerMode;
   for (const key of ['imageModel', 'videoModel']) {
     if (typeof own(value, key) === 'string' && MODEL_ID.test(value[key])) result[key] = value[key];
@@ -153,6 +156,26 @@ export function normalizeSettings(value) {
     if (catalog.some((item) => item.id === own(value, key))) result[key] = value[key];
   }
   return result;
+}
+
+/** The name shown for a folder: the last part of its path ('' when there is none). */
+export function folderName(root) {
+  if (typeof root !== 'string' || !root) return '';
+  return root.split(/[\\/]/).filter(Boolean).pop() || root;
+}
+
+const MAX_FOLDER_NAME = 256;
+const MAX_FOLDER_PATH = 4096;
+
+/** The folder a task was started in, { name, path }, or null when the stored value is unusable. */
+export function normalizeTaskFolder(value) {
+  if (!isRecord(value)) return null;
+  const name = own(value, 'name');
+  const path = own(value, 'path');
+  if (typeof name !== 'string' || !name.trim() || name.length > MAX_FOLDER_NAME) return null;
+  // Absolute paths only: main opens the folder by this path when the task is selected again.
+  if (typeof path !== 'string' || path.length > MAX_FOLDER_PATH || !/^(?:\/|[A-Za-z]:[\\/])/.test(path)) return null;
+  return { name, path };
 }
 
 export function normalizeTasks(value, now = Date.now()) {
@@ -185,12 +208,14 @@ export function normalizeTasks(value, now = Date.now()) {
     }
     const createdAt = timestamp(own(task, 'createdAt'), fallbackTime);
     const latestMessage = messages.reduce((latest, message) => Math.max(latest, message.time), createdAt);
+    const folder = normalizeTaskFolder(own(task, 'folder'));
     result.push({
       id: task.id,
       title: boundedText(task.title, MAX_TITLE),
       messages,
       createdAt,
       updatedAt: Math.max(createdAt, latestMessage, timestamp(own(task, 'updatedAt'), fallbackTime)),
+      ...(folder ? { folder } : {}),
     });
     ids.add(task.id);
     if (result.length === 500) break;
