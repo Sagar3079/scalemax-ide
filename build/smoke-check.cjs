@@ -21,7 +21,21 @@ function stubReply(body) {
   const last = messages[messages.length - 1] || {};
   const tools = Array.isArray(body?.tools) ? body.tools : [];
   const echo = tools.find((tool) => /_echo$/.test(tool?.function?.name || ''));
+  const list = tools.find((tool) => tool?.function?.name === 'workspace_list');
   if (last.role === 'tool') return { role: 'assistant', content: `tool said: ${last.content}` };
+  // Built-in workspace tools: list the open folder, or say which folder the instructions name.
+  if (list && typeof last.content === 'string' && last.content.includes('use workspace list')) {
+    return {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'call_smoke_ws', type: 'function', function: { name: 'workspace_list', arguments: '{}' } }],
+    };
+  }
+  if (typeof last.content === 'string' && last.content.includes('which folder')) {
+    const system = messages.find((message) => message.role === 'system');
+    const folder = /workspace folder is "([^"]+)"/.exec(system?.content || '');
+    return { role: 'assistant', content: `folder: ${folder ? folder[1] : 'none'}` };
+  }
   if (echo && typeof last.content === 'string' && last.content.includes('use echo')) {
     return {
       role: 'assistant',
@@ -163,6 +177,8 @@ async function run(win) {
   }
 
   let e2e = null;
+  const wsToolsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-ws-tools-'));
+  fs.writeFileSync(path.join(wsToolsDir, 'smoke-note.txt'), 'note');
   try {
     e2e = await win.webContents.executeJavaScript(`(async () => {
       const api = window.scalemaxAPI;
@@ -185,7 +201,9 @@ async function run(win) {
       input.value = 'ping';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('#send-btn').click();
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      // Wait for the reply bubble (up to 5 s) instead of a fixed delay.
+      const answered = () => [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].some((node) => node.textContent === 'pong');
+      for (let i = 0; i < 50 && !answered(); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
       const replies = [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].map((node) => node.textContent);
 
       // MCP: a real stdio server (the test fixture run by this Electron binary as Node).
@@ -215,6 +233,12 @@ async function run(win) {
       const denied = await denyPending;
       await api.store.set('settings', settingsBefore || {});
       if (mcpSaved.ok) await api.mcp.remove({ id: mcpSaved.data.id });
+      // Built-in workspace tools: none without a folder; with one, the model is told its name and
+      // can list it (read-only, so Basic runs it without asking).
+      const noFolder = await api.provider.send({ requestId: 'smoke-ws-none', messages: [{ role: 'user', content: 'which folder am I in?' }] });
+      const wsToolsSelected = await api.workspace.select(${JSON.stringify(wsToolsDir)});
+      const folderReply = await api.provider.send({ requestId: 'smoke-ws-folder', messages: [{ role: 'user', content: 'which folder am I in?' }] });
+      const wsToolChat = await api.provider.send({ requestId: 'smoke-ws-list', messages: [{ role: 'user', content: 'Please use workspace list.' }] });
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -247,6 +271,11 @@ async function run(win) {
           && mcpListed.data.some((server) => (server.envKeys || []).includes('ELECTRON_RUN_AS_NODE'))),
         toolChatText: toolChat && toolChat.ok ? toolChat.data.text : (toolChat?.error?.message || null),
         toolChatCalls: toolChat && toolChat.ok ? toolChat.data.toolCalls : null,
+        wsNoFolderText: noFolder && noFolder.ok ? noFolder.data.text : (noFolder?.error?.message || null),
+        wsSelected: Boolean(wsToolsSelected && wsToolsSelected.ok),
+        wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
+        wsToolText: wsToolChat && wsToolChat.ok ? wsToolChat.data.text : (wsToolChat?.error?.message || null),
+        wsToolCalls: wsToolChat && wsToolChat.ok ? wsToolChat.data.toolCalls : null,
         approvalShown,
         approvalTitle,
         approvedCalls: approved && approved.ok ? approved.data.toolCalls : (approved?.error?.message || null),
@@ -264,6 +293,7 @@ async function run(win) {
   } catch (error) {
     errors.push(`e2e failed: ${error.message}`);
   }
+  fs.rmSync(wsToolsDir, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 
   // Automation creation must capture the weekday/month inputs and schedule a next run.
@@ -427,6 +457,11 @@ async function run(win) {
     manualApprovalAllow: Boolean(e2e && e2e.approvalShown && /Smoke tools · echo/.test(e2e.approvalTitle)
       && Array.isArray(e2e.approvedCalls) && e2e.approvedCalls.length === 1 && e2e.approvedCalls[0].ok === true
       && e2e.approvedText === 'tool said: smoke-echo'),
+    workspaceFolderPrompt: Boolean(e2e && e2e.wsNoFolderText === 'folder: none' && e2e.wsSelected
+      && e2e.wsFolderText === `folder: ${path.basename(wsToolsDir)}`),
+    workspaceToolLoop: Boolean(e2e && typeof e2e.wsToolText === 'string' && e2e.wsToolText.startsWith('tool said: ')
+      && e2e.wsToolText.includes('smoke-note.txt') && Array.isArray(e2e.wsToolCalls) && e2e.wsToolCalls.length === 1
+      && e2e.wsToolCalls[0].server === 'Workspace' && e2e.wsToolCalls[0].tool === 'list_files' && e2e.wsToolCalls[0].ok === true),
     manualApprovalDeny: Boolean(e2e && Array.isArray(e2e.deniedCalls) && e2e.deniedCalls.length === 1
       && e2e.deniedCalls[0].ok === false && /denied/.test(e2e.deniedCalls[0].preview) && e2e.approvalClosed),
     oauthSupported: Boolean(e2e && e2e.oauthSupported),

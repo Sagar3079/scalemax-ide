@@ -10,6 +10,7 @@ const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
+const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
 const { createMediaStudio } = require('./lib/media.cjs');
 const { applyBranding, ICON_PATH } = require('./lib/app-branding.cjs');
@@ -139,8 +140,10 @@ const mcp = createMcpManager({
   clientInfo: { name: 'ScaleMax', version: app.getVersion() }
 });
 
-// Chat requests offer tools from enabled MCP servers to the model and run the
-// tool calls it makes (lib/tool-loop.cjs); without tools it is a plain send.
+// Chat requests offer the built-in workspace tools (lib/workspace-tools.cjs: list, read, search,
+// write files and run commands in the folder the user opened) and the tools of enabled MCP
+// servers to the model, and run the tool calls it makes (lib/tool-loop.cjs); without any tools
+// it is a plain send.
 // Tool calls that need the user's OK (Manual, and non-read-only tools in Basic) are sent to the
 // window as `tool:approval-request`; the renderer answers through `tool:approval-respond`.
 // A cancelled chat, a reload or a closed window denies whatever is still pending.
@@ -149,6 +152,7 @@ const APPROVAL_DECISIONS = new Set(['once', 'request', 'deny']);
 const pendingApprovals = new Map();
 
 function mcpServerName(serverId) {
+  if (serverId === workspaceTools.SERVER_ID) return 'Workspace';
   try {
     return mcp.list().find((server) => server.id === serverId)?.name || serverId;
   } catch {
@@ -180,6 +184,7 @@ function requestToolApproval(request, { signal } = {}) {
       requestId: request.requestId,
       serverId: request.serverId,
       serverName: mcpServerName(request.serverId),
+      kind: request.serverId === workspaceTools.SERVER_ID ? 'workspace' : 'mcp',
       toolName: request.toolName,
       readOnly: request.readOnly,
       arguments: request.arguments,
@@ -191,7 +196,18 @@ function denyAllApprovals() {
   for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false);
 }
 
-const toolLoop = createToolLoop({ provider, mcp, approve: requestToolApproval });
+// The workspace tools use the same workspace service as the Workspace tab (getWorkspace below),
+// so they always act on the folder the user has open, and only while one is open.
+const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace() });
+const toolLoop = createToolLoop({ provider, mcp: combineToolSources({ workspaceTools, mcp }), approve: requestToolApproval });
+
+/** Adds the open workspace folder (name only, never its full path) to the chat instructions. */
+function withWorkspaceContext(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const note = workspaceTools.describe();
+  const base = typeof input.systemPrompt === 'string' ? input.systemPrompt : '';
+  return { ...input, systemPrompt: base.trim() ? `${base}\n\n${note}` : note };
+}
 
 // GitHub through the GitHub CLI (lib/cli-auth.cjs): reuses an existing `gh` login or runs gh's
 // device-flow login in a throwaway config; the token lands in the connector store and on
@@ -350,7 +366,7 @@ const providerChannels = {
   // An unconfigured provider fails fast without starting any MCP server.
   // Progress (thinking / running a tool / waiting for approval) goes to the window that asked.
   'provider:send': (event, input) => (provider.get().configured
-    ? toolLoop.send(input, {
+    ? toolLoop.send(withWorkspaceContext(input), {
       permission: chatPermission(),
       onProgress: (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);

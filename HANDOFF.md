@@ -21,13 +21,13 @@ git clone https://github.com/Sagar3079/scalemax-ide.git && cd scalemax-ide
 npm install                # devDeps only (electron, electron-builder)
 
 npm start                  # runtime check, then the branded dev runtime (build/dev-app.cjs; Dock/menu bar say ScaleMax)
-npm test                   # node --test test/*.test.cjs test/*.test.mjs → 249 unit tests
+npm test                   # node --test test/*.test.cjs test/*.test.mjs → 263 unit tests
 npm run icons              # re-render icon.png + icon.icns from assets/icons/*.svg
 npm run build              # electron-builder --mac → dist/ScaleMax-1.0.0-arm64.dmg + .zip
 
 # Hermetic end-to-end smoke check (boots the real app, isolated userData):
-SCALEMAX_SMOKE=1 npm start                     # 48 checks
-# With live provider verification (discover → save → chat → clear): 53 checks
+SCALEMAX_SMOKE=1 npm start                     # 50 checks
+# With live provider verification (discover → save → chat → clear): 55 checks
 SCALEMAX_SMOKE=1 SCALEMAX_LIVE_KEY='sm_live_…' SCALEMAX_LIVE_MODEL='deepseek-v4-flash' npm start
 # Prints "SMOKE_RESULT {ok, checks, …}" and exits 0/1.
 
@@ -85,7 +85,8 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `build/smoke-check.cjs` | ~470 | 48-check harness (+5 live). Spawns the MCP fixture with this Electron binary (`ELECTRON_RUN_AS_NODE`). |
 | `src/domain.mjs` | ~450 | Pure logic: settings/tasks/automations normalization, `nextRunAt` (once/hourly/daily/weekly/monthly/interval, DST-safe), `buildSystemPrompt` (built-in + custom), `searchItems` (incl. custom). |
 | `src/mcp-ui.js` | ~600 | MCP presets gallery + **Add by URL** (save → connect → browser sign-in when the server asks), server cards + custom add/edit dialog (Assistant card 03); Sign in / Sign in again / Cancel sign-in for https servers; saving a server that answers "requires sign-in" goes straight to the browser consent page. |
-| `lib/tool-loop.cjs` | ~390 | `createToolLoop({provider, mcp, approve})`: offers MCP tools, runs tool calls (≤ 8 rounds, ≤ 8 calls/round), Manual/Basic/Bypass approvals, progress events, thinking time, cancellable. | |
+| `lib/workspace-tools.cjs` | ~380 | Built-in chat tools on the open workspace folder (server id `Workspace`): `workspace_list` / `workspace_read` (paged, line ranges) / `workspace_search` (names + text, bounded crawl) are read-only; `workspace_write` (create or replace with backup) and `workspace_run` (30 s command) are not. `describe()` gives the system-prompt line (folder name only, never the full path); `combineToolSources` puts them before MCP tools under the 128-tool limit. |
+| `lib/tool-loop.cjs` | ~390 | `createToolLoop({provider, mcp, approve})`: offers the workspace + MCP tools, runs tool calls (≤ 8 rounds, ≤ 8 calls/round), Manual/Basic/Bypass approvals, progress events, thinking time, cancellable. | |
 | `src/scheduler.js` | ~240 | Automation engine (30 s poll, catch-up once, no double runs, history). |
 | `src/custom-ui.js` | ~220 | Create/edit/delete custom experts (colour + prop picker with live avatar preview) and skills. |
 | `preload.js` | ~380 | The bridge (see counts above). |
@@ -117,7 +118,7 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 
 **Provider / auth.** No sign-in screen — the provider key is the auth. **Several providers** can be saved (Assistant → Saved providers: Add provider / name / Remove); each keeps its own key and model list, the model menu lists the models of all of them, and picking one switches to that provider. ScaleMax preset discovers the endpoint that accepts the key (currently `https://api.scalemax.pro/v1`, 17 models; `/token/v1` is the fallback candidate). Test → pick chat model → Save (every model the key can use is available at once; there is no per-model enabling). Key encrypted with `safeStorage`.
 
-**Chat.** Real requests via `provider:send`, non-streaming. The welcome hero shows only on an empty task. Attachments (the active editor tab, including unsaved edits, or a picked file) are injected once. When the model used MCP tools, the reply shows a "Tools used" chip row (`server · tool`, failed calls marked).
+**Chat.** Real requests via `provider:send`, non-streaming. The welcome hero shows only on an empty task. Attachments (the active editor tab, including unsaved edits, or a picked file) are injected once. When the model used tools, the reply shows a "Tools used" chip row (`server · tool`, e.g. `Workspace · read_file`; failed calls marked). **The model works in the open folder**: while a folder is open (folder chip), main adds its name to the instructions and offers the workspace tools (list, read, search, write files, run commands; `lib/workspace-tools.cjs`). Basic runs the reads on its own and asks before a write or command ("Allow Workspace · write_file?"), Manual asks for everything, Bypass asks for nothing. The Workspace tree reloads after the model writes or runs something. Without a folder there are no file tools and the model is told to ask for one. Live check (2026-09-27, DeepSeek V4 Flash): "whats in my current folder just tell my folder name" → the folder name and its files; list + read gave the real page title without a prompt; creating notes.txt asked first and wrote it after Allow; in Bypass `ls css` ran without a prompt; `.env` was never read.
 
 **System prompt + temperature.** System prompt = base contract + mode line + user system prompt + expert prompt + installed skill (`{{input}}` resolved) + permission line. Moving the temperature slider enables sending it; the composer shows "Active: custom prompt · temp 0.2". Verified live: payload carries both, and the reply obeyed an "answer in UPPERCASE" system prompt.
 
@@ -171,15 +172,15 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
 - **Tool approvals**: main owns the pending prompts (`tool:approval-request` → `tool:approval-respond`), only the window a prompt was sent to can answer it, and anything unanswered is denied. Bypass needs `bypassConsent: true` in the persisted settings, set only by the consent dialog; `normalizeSettings` drops it whenever the mode is not bypass.
 - **MCP**: a stdio server runs its command with the user's permissions — the add dialog warns and the renderer asks for confirmation when the command changes (UX consent; the main process does not prompt, consistent with the documented auto-approve trade-off below). Tool descriptions and results come from third-party servers and go to the model — treat them as untrusted (prompt-injection surface). Stdio servers run in their own process group and are killed on quit.
 - Workspace guard: canonical paths only (`/tmp` is a symlink on macOS — use `/private/tmp`), secret-path denylist, protected roots, 1 MiB caps.
-- Known accepted trade-off: provider and workspace approvals are auto-granted (`approve: async () => true`); the user starts those actions themselves. MCP tool calls from the model are gated per call by the permission mode.
+- Known accepted trade-off: provider and workspace approvals are auto-granted (`approve: async () => true`); the user starts those actions themselves. Tool calls from the model (workspace and MCP) are gated per call by the permission mode. The workspace tools reuse the workspace service guards (relative paths, no links, secret-file denylist, 1 MiB, 30 s commands with a minimal environment); file contents the model reads are sent to the configured provider.
 
 ---
 
 ## 7. Verification (how to prove things work)
 
-**Unit** — `npm test` → **249 tests**: connectors 45, provider 34, mcp 32, domain 31, oauth 26, tool-loop 19, cli-auth 8, branding 8, media 6, mcp-presets 2, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
+**Unit** — `npm test` → **263 tests**: connectors 45, provider 34, mcp 32, domain 31, oauth 26, tool-loop 19, workspace-tools 14, cli-auth 8, branding 8, media 6, mcp-presets 2, avatars 12, mcp-oauth 8, scheduler 6, workspace-ui 6, oauth-catalog 4, mcp-directory 2. The script lists files explicitly because `node --test` alone would also execute `test/fixtures/fake-mcp-server.cjs` (a stdio server) and hang.
 
-**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **48 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (15 provider, 6 media, 3 approvals, 8 workspace, 2 dialog, 15 connector, 7 mcp), composer controls (icon attach, permission chip defaulting to Basic, model button, menus, dialogs), Manual-mode approval end to end (prompt appears in the window → Allow runs the tool; Deny blocks it), reserved keys incl. `providerProfiles`/`connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
+**Smoke** — `SCALEMAX_SMOKE=1 npm start` → **50 checks** (+5 with `SCALEMAX_LIVE_KEY`): bridge counts (15 provider, 6 media, 3 approvals, 8 workspace, 2 dialog, 15 connector, 7 mcp), composer controls (icon attach, permission chip defaulting to Basic, model button, menus, dialogs), Manual-mode approval end to end (prompt appears in the window → Allow runs the tool; Deny blocks it), reserved keys incl. `providerProfiles`/`connectorOAuthClients`/`mcpServers`, provider round-trip against a loopback stub, **MCP stdio server + full tool loop** (stub model emits a tool call → echo → final reply), **workspace tools** (no folder → instructions say so; open folder → its name in the instructions and `workspace_list` runs in Basic), OAuth config write-only secret / HTTPS-only refusal / forget, connectors, automation, workspace read/write/terminal + editor tab, 6 views, 0 console errors; live: discover (either official base) → save → chat → clear.
 
 **UI** — Playwright 1.60 is installed outside the repo at `~/Desktop/node_modules/playwright` (not a project dep). Launch pattern: `_electron.launch({ args: ['.'], cwd: repo, executablePath: <output of node build/dev-app.cjs --path> (or '<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'), env: { ...process.env, SCALEMAX_USER_DATA: '/private/tmp/…' } })`, then wait for `document.body.dataset.appReady === 'true'`. Payload capture: `const { default: app } = await import('./app.js')` in `win.evaluate`, wrap `app.getProviderBridge()`.
 
@@ -304,6 +305,8 @@ Then **one-click connector sign-in** (users no longer have to register an OAuth 
 Then (2026-09-27): **image & video generation** (`lib/media.cjs`, `src/media-ui.js`, `scalemax-media:` protocol; model menu Chat / Image / Video tabs; per-model options with list prices; inline results with Download / Edit / Animate; one image and one video generated live, see §4), **several saved providers** (`providerProfiles`, Assistant → Saved providers, model menu grouped by provider), the **folder chip** next to the permission chip, **MCP presets** (29 servers, all connected live) and **Add by URL** with automatic sign-in, and the removal of per-model enabling (every model of the key is available immediately). 241 unit, 48 smoke, 53 live smoke.
 
 Then: **ScaleMax name and agent logo** (§5): new app icon, sidebar/About mark, ScaleMax menus and About panel, branded dev runtime so the Dock and menu bar say ScaleMax in `npm start` too; slim scrollbars (the classic grey ones looked like stray dividers). Verified in the real dev app and the rebuilt dmg (bundle name, icon, menus, running-app name and icon via LaunchServices); a real screenshot of the Dock/menu bar was not possible from the test harness (no Screen Recording permission). 249 unit, 48 smoke, 53 live smoke.
+
+Then: **chat can use the workspace folder** (it answered "I don't have access to your file system" before, because the only tools were MCP tools): built-in workspace tools, folder name in the instructions, workspace wording in the approval dialog, tree refresh after changes, `workspace.create()` for new files. 263 unit, 50 smoke, 55 live smoke, live click-through above.
 
 ### Suggested next session
 

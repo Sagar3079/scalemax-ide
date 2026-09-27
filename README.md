@@ -16,6 +16,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
+- **Works in your folder** — open a folder with the folder button and the model can list, read and search its files, write files and run commands there (reads run on their own in Basic; writes and commands ask first unless you chose Bypass all). Secret files such as `.env` and keys stay off limits
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
 - **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
 - **Image & video** — pick an image or video model in the model menu; its options (size, quality, aspect ratio, resolution, duration, edit, image-to-video) appear above the message box, results show in the chat with Download
@@ -124,7 +125,8 @@ scalemax-ide/
 │   ├── media.cjs         # image/video generation, polling, downloads (main process)
 │   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
-│   ├── tool-loop.cjs     # chat tool-calling loop over MCP tools
+│   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools
+│   ├── workspace-tools.cjs # built-in chat tools for the open folder
 │   ├── state.cjs         # atomic, validated JSON state store
 │   └── workspace.cjs     # project folder access: list, read, write, Git, commands
 ├── src/

@@ -1239,6 +1239,11 @@ const app = {
         reasoning: result.data.reasoning,
         ...(thinking ? { thinkingMs } : {}),
       });
+      // The model changed files or ran a command in the workspace: reload the tree and Git status.
+      const calls = Array.isArray(result.data.toolCalls) ? result.data.toolCalls : [];
+      if (calls.some((call) => call?.server === 'Workspace' && call.ok && ['write_file', 'run_command'].includes(call.tool))) {
+        void this.refreshWorkspace();
+      }
       // A broken MCP server never blocks the reply, but the user should know.
       const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
       if (toolError?.message) {

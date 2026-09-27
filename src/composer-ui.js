@@ -492,6 +492,19 @@ function approvalBridge() {
   return window.scalemaxAPI?.approvals || null;
 }
 
+// Built-in workspace tools (lib/workspace-tools.cjs) act on the folder the user opened.
+const WORKSPACE_SUMMARIES = {
+  write_file: 'The model wants to create or replace a file in your workspace folder. A replaced file is backed up first.',
+  run_command: 'The model wants to run a command in your workspace folder (30-second limit).',
+};
+function approvalSummary(request) {
+  if (request.kind === 'workspace') {
+    return WORKSPACE_SUMMARIES[request.toolName] || 'The model wants to read files in your workspace folder.';
+  }
+  return request.readOnly
+    ? `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data.`
+    : `The model wants to run "${request.toolName}" on ${request.serverName}. This tool can change data there.`;
+}
 function showNextApproval() {
   const dialog = $('#tool-approval-dialog');
   if (!dialog) return;
@@ -505,9 +518,7 @@ function showNextApproval() {
   const automation = typeof request.requestId === 'string' && request.requestId.startsWith('automation-');
   $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : 'Tool call';
   $('#approval-title').textContent = `Allow ${request.serverName} · ${request.toolName}?`;
-  $('#approval-summary').textContent = request.readOnly
-    ? `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data.`
-    : `The model wants to run "${request.toolName}" on ${request.serverName}. This tool can change data there.`;
+  $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
   const queue = $('#approval-queue');
   if (queue) {
@@ -544,6 +555,7 @@ function bindApprovals(app) {
       approvalId: request.approvalId,
       requestId: String(request.requestId || ''),
       serverName: String(request.serverName || request.serverId || 'MCP server'),
+      kind: request.kind === 'workspace' ? 'workspace' : 'mcp',
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
