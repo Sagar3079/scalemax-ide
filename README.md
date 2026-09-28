@@ -15,7 +15,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 ## Features
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
-- **Real chat** — messages go to your configured provider (request/response) and the reply lands in the transcript; every task and message is persisted
+- **Real chat, streamed** — replies appear as they are written; every file the assistant reads or edits and every command it runs shows as a step (with the command's output while it runs), folded above the answer when it is done. Stop keeps what was written so far
+- **Several tasks at once** — start a task, switch to another one (in another folder too) and ask there while the first keeps working; the sidebar shows which tasks are working and which finished while you were away
 - **Two modes that really differ** — **Working** researches on the web, works with your files and hands results back (it can put something on your clipboard or open a file you asked for); **Coding** explores your project, makes focused changes and runs your tests before it reports. The pills above the message box and the mode chip both switch it
 - **Every task lives in a folder, like Kiro** — a conversation starts once you choose a folder (any folder, the Desktop included), and after the first message the task stays in that folder. The sidebar lists your projects with their tasks and a **+** to start another task in the same folder; New task lets you pick a different one
 - **Clean replies** — answers are formatted (headings, lists, tables, code blocks with a Copy button) instead of showing raw Markdown symbols
@@ -129,7 +130,8 @@ scalemax-ide/
 │   ├── media.cjs         # image/video generation, polling, downloads (main process)
 │   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
-│   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools
+│   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools (streamed, with steps)
+│   ├── progress.cjs      # forwards a reply's progress to the window in 40 ms batches
 │   ├── workspace-tools.cjs # built-in chat tools for the open folder
 │   ├── modes.cjs         # what Working and Coding mean: tools, working agreement, rounds
 │   ├── web-tools.cjs     # web search and reading a page (guarded fetches)
@@ -146,6 +148,7 @@ scalemax-ide/
 │   ├── mcp-ui.js         # MCP server management
 │   ├── composer-ui.js    # composer model/reasoning menu, permission modes, tool approval prompts
 │   ├── markdown.js       # replies as formatted text (DOM only, never HTML) + markdown.css
+│   ├── reply-ui.js       # replies in progress (one per task), steps + reply.css
 │   ├── media-ui.js       # image/video generation options, results in chat, download
 │   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)

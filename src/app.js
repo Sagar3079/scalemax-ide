@@ -3,8 +3,11 @@ import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
 import {
   nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
   toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
-  toolCallGroups, toolActivity, DEFAULT_SETTINGS,
+  toolCallGroups, normalizeSteps, historyMessages, INTERRUPTIONS, DEFAULT_SETTINGS,
 } from './domain.mjs';
+import {
+  createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps,
+} from './reply-ui.js';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -53,7 +56,6 @@ const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 const NEEDS_FOLDER_HINT = 'Choose a project folder to start…';
 const CHAT_PLACEHOLDER = 'Describe an idea, ask a question, or plan your next step…';
 const UNSAVED_FILES = 'Save or close your unsaved files first.';
-const REPLY_RUNNING = 'Wait for the reply to finish, or stop it first.';
 // Error codes main reports for a folder that was moved or deleted (lib/workspace.cjs).
 const FOLDER_GONE = ['ENOENT', 'NOT_DIRECTORY'];
 // Recent folders offered by the chat's folder picker.
@@ -130,23 +132,6 @@ function elapsedText(ms) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function pendingText(pending) {
-  if (pending.phase === 'media') {
-    const what = pending.kind === 'video' ? 'video' : 'image';
-    if (pending.mediaPhase === 'queued') return `Video queued at the provider…`;
-    if (pending.mediaPhase === 'downloading') return `Downloading the ${what}…`;
-    const progress = Number.isFinite(pending.progress) && pending.progress > 0 ? ` ${pending.progress}%` : '';
-    return `Generating ${what}${progress}…`;
-  }
-  // Workspace tools read as a sentence ("Reading a file…"); other tools show server · tool.
-  const activity = pending.activity || { text: pending.tool, friendly: false };
-  if (pending.phase === 'approval') {
-    return activity.friendly ? `Waiting for your approval: ${activity.text.toLowerCase()}` : `Waiting for your approval · ${activity.text}`;
-  }
-  if (pending.phase === 'tool') return activity.friendly ? `${activity.text}…` : `Running ${activity.text}…`;
-  return pending.thinking ? 'Thinking…' : 'Writing…';
-}
-
 /** "Thought for 4s" for replies from a thinking model, otherwise ''. */
 function thoughtLabel(message) {
   if (message.role !== 'assistant' || !Number.isSafeInteger(message.thinkingMs)) return '';
@@ -197,15 +182,23 @@ const app = {
   folderQueue: Promise.resolve(),
   // Task folders that were gone when ScaleMax tried to open them (the chat card says so).
   missingFolders: new Set(),
-  // A task selected while a reply ran; its folder opens when the reply ends (setChatBusy).
-  folderWaitsForReply: false,
   // The task folder a queued switch is about to open: no "not open" notice meanwhile.
   switchingTo: '',
   // The folder picker and the folder notice wait for the start-up folder (settleStartFolder).
   startFolderSettled: false,
   // Sidebar projects the user folded away, by folder path ('' is "Earlier chats"); this session only.
   collapsedFolders: new Set(),
-  activeRequestId: null,
+  // Replies in progress, by task id (src/reply-ui.js): each task can work while others do.
+  replies: new Map(),
+  // Tasks whose reply finished while another task was on screen (a dot in the sidebar).
+  unreadTasks: new Set(),
+  replyTimer: 0,
+  // Which task the transcript shows (renderChat keeps the scroll position within one task).
+  renderedTaskId: null,
+  // The reply of the task on screen, if one is running.
+  get activeRequestId() {
+    return this.replies.get(this.currentTaskId)?.requestId || null;
+  },
   eventsBound: false,
 
   toastTimer: null,
@@ -313,6 +306,10 @@ const app = {
         };
         const tools = normalizeToolSummaries(message.tools);
         if (tools.length) normalized.tools = tools;
+        // What the reply did on the way (files read, commands run and their output).
+        const steps = message.role === 'assistant' ? normalizeSteps(message.steps) : [];
+        if (steps.length) normalized.steps = steps;
+        if (message.role === 'assistant' && INTERRUPTIONS.includes(message.interrupted)) normalized.interrupted = message.interrupted;
         // "Thought for Ns" and any thinking text stay with the answer across restarts.
         if (message.role === 'assistant' && Number.isSafeInteger(message.thinkingMs) && message.thinkingMs >= 0) {
           normalized.thinkingMs = message.thinkingMs;
@@ -629,13 +626,10 @@ const app = {
     if (!show) return;
     const { name, path } = task.folder;
     const missing = this.missingFolders.has(path);
-    const waiting = !missing && this.replyRunning();
     notice.classList.toggle('is-missing', missing);
     notice.title = path;
-    text.textContent = missing ? `This task's folder "${name}" is no longer available.`
-      : waiting ? `This task works in "${name}". It opens when the running reply finishes.`
-        : `This task works in "${name}".`;
-    action.hidden = waiting;
+    text.textContent = missing ? `This task's folder "${name}" is no longer available.` : `This task works in "${name}".`;
+    action.hidden = false;
     action.textContent = missing ? 'New task' : 'Open it';
     action.dataset.noticeAction = missing ? 'new-task' : 'open';
   },
@@ -974,15 +968,10 @@ const app = {
     return Boolean(this.workspace.dirty || this.workspace.tabs?.some((tab) => tab.dirty));
   },
 
-  // A chat reply is in progress. Its tools act in the open folder, so the folder stays until it ends
-  // (image and video generation do not use the folder).
-  replyRunning() {
-    return Boolean(this.activeRequestId && !this.activeMediaRequest);
-  },
-
-  // Says why and returns true when the open folder must not change now.
+  // Says why and returns true when the open folder must not change now. A running reply does not
+  // hold the folder: main gives every reply a session of its own in its task's folder.
   refuseFolderChange() {
-    const reason = this.replyRunning() ? REPLY_RUNNING : this.hasUnsavedEdits() ? UNSAVED_FILES : '';
+    const reason = this.hasUnsavedEdits() ? UNSAVED_FILES : '';
     if (reason) this.showToast(reason);
     return Boolean(reason);
   },
@@ -1020,7 +1009,7 @@ const app = {
   },
 
   // Opens the task's folder (the chat card's "Open it", handleSend, the start-up folder).
-  // Resolves to what happened: 'ready' | 'unsaved' | 'waiting' | 'missing' | 'failed' | 'superseded'.
+  // Resolves to what happened: 'ready' | 'unsaved' | 'missing' | 'failed' | 'superseded'.
   openTaskFolder(task = this.currentTask()) {
     if (!task?.folder || !this.workspaceBridge()?.select) return Promise.resolve('ready');
     return this.queueTaskFolder(task);
@@ -1424,6 +1413,7 @@ const app = {
     const task = this.tasks.find((item) => item.id === id);
     if (!task) return;
     this.currentTaskId = id;
+    this.unreadTasks.delete(id);
     // The last task used is first, so it is current again after a restart (see loadState).
     if (this.tasks[0] !== task) {
       this.tasks = [task, ...this.tasks.filter((item) => item !== task)];
@@ -1443,7 +1433,8 @@ const app = {
     if (this.workspaceBridge()?.select) {
       this.queueTaskFolder(task).catch((error) => this.showGlobalError(error?.message || 'The task folder could not be opened'));
     }
-    this.renderTasks();
+    // Stop and Send follow the reply of this task (renderReplyState also redraws the sidebar).
+    this.renderReplyState();
     this.renderChat();
     this.renderFolder();
   },
@@ -1456,10 +1447,7 @@ const app = {
     let outcome = 'ready';
     if (folder && folder.path !== this.workspace.root) {
       const current = task.id === this.currentTaskId;
-      if (this.replyRunning()) {
-        outcome = 'waiting';
-        this.folderWaitsForReply = true;
-      } else if (this.hasUnsavedEdits()) {
+      if (this.hasUnsavedEdits()) {
         outcome = 'unsaved';
         if (current) this.showToast(UNSAVED_FILES);
       } else {
@@ -1542,7 +1530,19 @@ const app = {
     const title = task.messages.length ? task.title : 'New task';
     row.classList.toggle('is-draft', !task.messages.length);
     row.title = title;
-    row.append(element('span', 'task-title', title), element('span', 'task-time', taskTime(task.updatedAt)));
+    row.append(element('span', 'task-title', title));
+    // A task that is working shows a spinner; one that finished while away, a dot.
+    const running = this.replies.has(task.id);
+    const unread = !running && this.unreadTasks.has(task.id);
+    if (running || unread) {
+      const status = element('span', `task-status ${running ? 'is-running' : 'is-unread'}`);
+      status.setAttribute('role', 'img');
+      status.setAttribute('aria-label', running ? 'Working' : 'New reply');
+      status.title = running ? 'Working' : 'New reply';
+      row.append(status);
+    } else {
+      row.append(element('span', 'task-time', taskTime(task.updatedAt)));
+    }
     return row;
   },
 
@@ -1558,15 +1558,25 @@ const app = {
     if (rows) rows.hidden = collapse;
   },
 
-  renderChat() {
+  // `toBottom` scrolls to the end (the user just sent a message). Drawing the same task again
+  // (a reply finished, a step arrived) keeps the reader's place when they had scrolled up; a
+  // task that was just opened starts at its end.
+  renderChat({ toBottom = false } = {}) {
     const container = $('#chat-messages');
     if (!container) return;
     const task = this.tasks.find((item) => item.id === this.currentTaskId);
     const messages = task?.messages || [];
+    const sameTask = this.renderedTaskId === this.currentTaskId;
+    const fromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const keepAt = !toBottom && sameTask && fromBottom > 48 ? container.scrollTop : null;
+    this.renderedTaskId = this.currentTaskId;
     container.replaceChildren(...messages.map((message) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
-      if (message.tools?.length) {
+      if (message.steps?.length) {
+        // What the reply did on the way, folded: "4 steps · Read 3 files · Ran a command".
+        bubble.append(renderMessageSteps(message.steps));
+      } else if (message.tools?.length) {
         // One chip per tool with a count ("Read 4 files"), not one per call.
         const tools = element('div', 'msg-tools');
         tools.setAttribute('aria-label', 'Tools used for this reply');
@@ -1589,10 +1599,13 @@ const app = {
       }
       if (message.role === 'assistant') {
         // Replies are Markdown: formatted text instead of raw ** and backticks (src/markdown.js
-        // builds elements, never HTML, so a reply cannot inject markup).
-        const body = element('div', 'msg-text md');
-        body.append(renderMarkdown(message.text));
-        bubble.append(body);
+        // builds elements, never HTML, so a reply cannot inject markup). A reply stopped before
+        // it wrote anything has only its steps and its notice.
+        if (message.text) {
+          const body = element('div', 'msg-text md');
+          body.append(renderMarkdown(message.text));
+          bubble.append(body);
+        }
       } else {
         bubble.append(element('span', 'msg-text', message.text));
       }
@@ -1615,62 +1628,77 @@ const app = {
       }
       return bubble;
     }));
-    const pending = this.pendingReply?.taskId === this.currentTaskId ? this.pendingReply : null;
-    if (pending) container.append(this.renderPendingReply(pending));
-    container.scrollTop = container.scrollHeight;
+    const reply = this.currentReply();
+    if (reply) container.append(renderLiveReply(reply));
+    container.scrollTop = keepAt === null ? container.scrollHeight : keepAt;
     // The welcome hero and starter controls are a first-run surface: once the
     // task has messages the view becomes a plain transcript.
-    $('.sm-home-page')?.classList.toggle('has-transcript', messages.length > 0 || Boolean(pending));
+    $('.sm-home-page')?.classList.toggle('has-transcript', messages.length > 0 || Boolean(reply));
   },
 
-  // The bubble shown while a reply is in progress: thinking, running a tool, or waiting for approval.
-  renderPendingReply(pending) {
-    const bubble = element('div', 'chat-bubble assistant pending-reply');
-    bubble.setAttribute('role', 'status');
-    const row = element('span', 'pending-reply-row');
-    const dots = element('span', 'thinking-dots');
-    dots.setAttribute('aria-hidden', 'true');
-    dots.append(element('span', 'thinking-dot'), element('span', 'thinking-dot'), element('span', 'thinking-dot'));
-    row.append(dots, element('span', 'pending-reply-text', pendingText(pending)),
-      element('span', 'pending-reply-time', elapsedText(Date.now() - pending.startedAt)));
-    bubble.append(row);
-    return bubble;
-  },
+  // ---- Replies in progress (src/reply-ui.js): one per task, several tasks at once ----------
 
-  updatePendingReply() {
-    const pending = this.pendingReply;
-    const node = $('#chat-messages .pending-reply');
-    if (!pending || !node) return;
-    node.querySelector('.pending-reply-text').textContent = pendingText(pending);
-    node.querySelector('.pending-reply-time').textContent = elapsedText(Date.now() - pending.startedAt);
+  /** The running reply of the task on screen, or null. */
+  currentReply() {
+    return this.replies.get(this.currentTaskId) || null;
   },
-
-  startPendingReply(taskId, requestId, extra = {}) {
+  /** The running reply with this request id, in any task. */
+  replyFor(requestId) {
+    if (typeof requestId !== 'string') return null;
+    for (const reply of this.replies.values()) if (reply.requestId === requestId) return reply;
+    return null;
+  },
+  /** Starts the live reply of `taskId` ({ kind: 'media', mediaKind } for image and video). */
+  beginReply(taskId, requestId, extra = {}) {
     const model = (this.providerCatalog || []).find((item) => item.id === this.provider?.model);
     // "Thinking" only for models that reason with thinking on; others are "Writing".
     const thinking = model?.reasoning === true && this.settings.thinking !== false;
-    this.pendingReply = { taskId, requestId, phase: 'thinking', thinking, tool: '', startedAt: Date.now(), ...extra };
-    window.clearInterval(this.pendingTimer);
-    this.pendingTimer = window.setInterval(() => this.updatePendingReply(), 1000);
-    this.renderChat();
+    const reply = createReply({ taskId, requestId, thinking, ...extra });
+    this.replies.set(taskId, reply);
+    this.unreadTasks.delete(taskId);
+    if (!this.replyTimer) this.replyTimer = window.setInterval(() => tickReply(this.currentReply()), 1000);
+    this.renderReplyState();
+    if (taskId === this.currentTaskId) this.renderChat();
+    return reply;
   },
-
-  stopPendingReply() {
-    window.clearInterval(this.pendingTimer);
-    const had = Boolean(this.pendingReply);
-    this.pendingReply = null;
-    if (had) this.renderChat();
+  /**
+   * Ends the live reply of `taskId` and returns it (null when another request took its place).
+   * `quiet` leaves the transcript as it is, for a caller that adds the finished message itself.
+   */
+  endReply(taskId, requestId, { quiet = false } = {}) {
+    const reply = this.replies.get(taskId);
+    if (!reply || reply.requestId !== requestId) return null;
+    this.replies.delete(taskId);
+    if (reply.view?.frame) window.cancelAnimationFrame(reply.view.frame);
+    reply.view = null;
+    if (!this.replies.size) {
+      window.clearInterval(this.replyTimer);
+      this.replyTimer = 0;
+    }
+    // Finished while another task was on screen: the sidebar shows a dot until it is opened.
+    if (taskId !== this.currentTaskId) this.unreadTasks.add(taskId);
+    this.renderReplyState();
+    if (!quiet && taskId === this.currentTaskId) this.renderChat();
+    return reply;
   },
-
+  // Stop, Send and the sidebar spinners follow the replies that are running.
+  renderReplyState() {
+    const cancel = $('#cancel-btn');
+    if (cancel) {
+      cancel.hidden = !this.currentReply();
+      cancel.disabled = Boolean(this.currentReply()?.stopping);
+    }
+    this.updateSendEnabled();
+    this.renderTasks();
+  },
   bindReplyProgress() {
-    this.getProviderBridge()?.onProgress?.((progress) => {
-      const pending = this.pendingReply;
-      if (!pending || !progress || progress.requestId !== pending.requestId) return;
-      if (!['thinking', 'tool', 'approval'].includes(progress.phase)) return;
-      pending.phase = progress.phase;
-      pending.tool = progress.toolName ? `${progress.serverId ? `${progress.serverId} · ` : ''}${progress.toolName}` : '';
-      pending.activity = progress.toolName ? toolActivity(progress.serverId, progress.toolName) : null;
-      this.updatePendingReply();
+    this.getProviderBridge()?.onProgress?.((event) => {
+      const reply = this.replyFor(event?.requestId);
+      if (!reply || reply.kind !== 'chat') return;
+      const change = applyProgress(reply, event);
+      if (!change || reply.taskId !== this.currentTaskId) return;
+      // The bubble was replaced (the chat was drawn again): patch the new one next time.
+      if (!patchReply(reply, change, $('#chat-messages'))) this.renderChat();
     });
   },
 
@@ -1692,6 +1720,10 @@ const app = {
     const message = { role, text, time: Date.now() };
     const tools = normalizeToolSummaries(extra.tools);
     if (tools.length) message.tools = tools;
+    const steps = normalizeSteps(extra.steps);
+    if (steps.length) message.steps = steps;
+    // A reply that was stopped or failed part way (the next request tells the model so).
+    if (role === 'assistant' && INTERRUPTIONS.includes(extra.interrupted)) message.interrupted = extra.interrupted;
     if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
     if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
     const media = normalizeMediaItems(extra.media);
@@ -1701,7 +1733,8 @@ const app = {
     task.messages.push(message);
     this.updateTask(task, message.time);
     if (this.currentTaskId === taskId) {
-      this.renderChat();
+      // The user's own message always comes into view.
+      this.renderChat({ toBottom: role === 'user' });
       // The first message locks the folder chip.
       this.renderFolder();
     }
@@ -1731,8 +1764,9 @@ const app = {
         return;
       }
     }
-    // main refuses the request when this is not the folder it has open (FOLDER_MISMATCH).
-    const folder = this.workspace.root;
+    // The reply works in this folder, through a session of its own in main, even if another
+    // task's folder is opened while it runs. main refuses folders never opened (FOLDER_NOT_OPENED).
+    const folder = task.folder?.path || this.workspace.root;
     // Image / video mode: the text is the prompt for the selected generation model.
     if (mediaMode(this)) {
       if (input.value.trim() === text) input.value = '';
@@ -1761,106 +1795,140 @@ const app = {
       return;
     }
 
-    // Build the conversation from the persisted task so the reply always matches
-    // the message that was sent, even if the user switches tasks meanwhile.
-    const messages = task.messages.map((message) => ({ role: message.role, content: message.text }));
-    if (attachment) {
-      const last = messages[messages.length - 1];
-      const block = `Attached file: ${attachment.path}\n\n\`\`\`\n${attachment.content}\n\`\`\``;
-      if (last && last.role === 'user') last.content = `${last.content}\n\n${block}`;
-      else messages.push({ role: 'user', content: block });
-      // The attachment is now part of the sent message; it must not ride
-      // along with every later message.
-      if (this.attachment === attachment) this.clearAttachment();
-    }
-    // A connected GitHub connector feeds live repo data into the request.
-    const repoMatch = GITHUB_REPO_PATTERN.exec(text);
-    if (repoMatch) {
-      const context = await this.fetchGithubContext(repoMatch[1], repoMatch[2].replace(/\.git$/, ''));
-      if (context) {
-        const last = messages[messages.length - 1];
-        if (last && last.role === 'user') last.content = `${last.content}\n\nLive GitHub data:\n${context}`;
-        else messages.push({ role: 'user', content: `Live GitHub data:\n${context}` });
-      }
-    }
+    // The reply shows at once; the task can be left while it works (the sidebar shows a spinner).
     const requestId = `chat-${taskId}-${Date.now()}`;
-    // The mode (Working or Coding) decides which tools main offers and how the assistant works.
-    const payload = { requestId, folder, mode: this.settings.mode, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
-    const temperature = requestTemperature(this.settings);
-    if (temperature !== undefined) payload.temperature = temperature;
-    // Thinking on/off and effort from the model menu; the provider only sends them to models
-    // that report reasoning support.
-    payload.reasoning = requestReasoning(this.settings);
-
-    this.setChatBusy(true, requestId);
-    this.startPendingReply(taskId, requestId);
-    const thinking = Boolean(this.pendingReply?.thinking);
+    const live = this.beginReply(taskId, requestId);
+    const thinking = live.thinking;
     const startedAt = Date.now();
+    // Errors of a task in the background name the task.
+    const say = (message) => this.showToast(taskId === this.currentTaskId ? message : `${task.title}: ${message}`);
+    let result = null;
     try {
-      const result = await bridge.send(payload);
-      this.stopPendingReply();
-      if (!result?.ok) {
-        const message = result?.error?.message || 'Provider request failed';
-        if (result?.error?.code === 'CANCELLED') this.showToast('Response cancelled');
-        else this.showToast(message);
-        return;
+      // Build the conversation from the persisted task so the reply always matches the message
+      // that was sent, even if the user switches tasks meanwhile. A reply that was stopped part
+      // way reaches the model as what it wrote plus a note from ScaleMax (historyMessages).
+      const messages = historyMessages(task.messages);
+      if (attachment) {
+        const last = messages[messages.length - 1];
+        const block = `Attached file: ${attachment.path}\n\n\`\`\`\n${attachment.content}\n\`\`\``;
+        if (last && last.role === 'user') last.content = `${last.content}\n\n${block}`;
+        else messages.push({ role: 'user', content: block });
+        // The attachment is now part of the sent message; it must not ride
+        // along with every later message.
+        if (this.attachment === attachment) this.clearAttachment();
       }
-      // Model time only (tool runs and approvals excluded); plain sends report the whole wait.
-      const thinkingMs = Number.isSafeInteger(result.data.thinkingMs) ? result.data.thinkingMs : Date.now() - startedAt;
-      // Main wrote the project notes for this folder during the request: say so under the reply.
-      const notes = result.data.projectNotes?.created === true ? result.data.projectNotes : null;
-      const notesPath = typeof notes?.path === 'string' && notes.path ? notes.path : '.scalemax/SCALEMAX.md';
-      this.appendMessage('assistant', result.data.text, taskId, {
-        tools: result.data.toolCalls,
-        reasoning: result.data.reasoning,
-        ...(thinking ? { thinkingMs } : {}),
-        ...(notes ? {
-          notice: `Created ${notesPath}: project notes ScaleMax reads in every chat in this folder. Edit them any time, or type /init to have ScaleMax rewrite them.`,
-        } : {}),
-      });
-      // The model changed files or ran a command in the workspace (or main created the notes):
-      // reload the tree and Git status.
-      const calls = Array.isArray(result.data.toolCalls) ? result.data.toolCalls : [];
-      if (notes || calls.some((call) => call?.server === 'Workspace' && call.ok
-        && ['write_file', 'edit_file', 'run_command'].includes(call.tool))) {
-        void this.refreshWorkspace();
+      // A connected GitHub connector feeds live repo data into the request.
+      const repoMatch = GITHUB_REPO_PATTERN.exec(text);
+      if (repoMatch) {
+        const context = await this.fetchGithubContext(repoMatch[1], repoMatch[2].replace(/\.git$/, ''));
+        if (context) {
+          const last = messages[messages.length - 1];
+          if (last && last.role === 'user') last.content = `${last.content}\n\nLive GitHub data:\n${context}`;
+          else messages.push({ role: 'user', content: `Live GitHub data:\n${context}` });
+        }
       }
-      // A broken MCP server never blocks the reply, but the user should know.
-      const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
-      if (toolError?.message) {
-        this.showToast(`MCP${toolError.serverId ? ` ${toolError.serverId}` : ''}: ${toolError.message}`);
+      // The mode (Working or Coding) decides which tools main offers and how the assistant works.
+      const payload = { requestId, folder, mode: this.settings.mode, messages, systemPrompt: this.buildSystemPrompt(this.settings) };
+      const temperature = requestTemperature(this.settings);
+      if (temperature !== undefined) payload.temperature = temperature;
+      // Thinking on/off and effort from the model menu; the provider only sends them to models
+      // that report reasoning support.
+      payload.reasoning = requestReasoning(this.settings);
+      // Stop pressed before the request went out (while GitHub data loaded): nothing is sent.
+      if (live.stopping) {
+        result = { ok: false, error: { code: 'CANCELLED', message: 'Provider request was cancelled.' } };
+      } else {
+        live.sent = true;
+        result = await bridge.send(payload);
       }
     } catch (error) {
-      this.showToast(error?.message || 'Provider request failed');
-    } finally {
-      this.stopPendingReply();
-      this.setChatBusy(false);
+      result = { ok: false, error: { message: error?.message || 'Provider request failed' } };
     }
-  },
-
-  setChatBusy(busy, requestId = null) {
-    this.activeRequestId = busy ? requestId : null;
-    const cancel = $('#cancel-btn');
-    if (cancel) { cancel.hidden = !busy; cancel.disabled = false; }
-    this.updateSendEnabled();
-    // A task selected while the reply ran opens its folder now.
-    if (!busy && this.folderWaitsForReply) {
-      this.folderWaitsForReply = false;
-      void this.openTaskFolder();
-    }
-  },
-
-  cancelResponse() {
-    if (cancelGeneration(this)) {
-      const cancel = $('#cancel-btn');
-      if (cancel) cancel.disabled = true;
+    const reply = this.endReply(taskId, requestId, { quiet: true }) || live;
+    // The task was deleted while it worked (its reply was stopped then): nothing to show.
+    if (!this.tasks.some((item) => item.id === taskId)) return;
+    if (!result?.ok) {
+      // Stopped or failed part way: what was written and done so far stays in the task.
+      const cancelled = result?.error?.code === 'CANCELLED';
+      const reason = result?.error?.message || 'Provider request failed';
+      const partial = partialReply(reply);
+      if (partial) {
+        const notice = cancelled
+          ? (partial.text ? 'Stopped before the reply was finished.' : 'Stopped before an answer was written.')
+          : `The reply ended early: ${reason}`;
+        this.appendMessage('assistant', partial.text, taskId, {
+          steps: partial.steps, reasoning: partial.reasoning, interrupted: cancelled ? 'stopped' : 'failed', notice,
+        });
+        // The notice under the reply says why; a task in the background also gets a toast.
+        if (!cancelled && taskId !== this.currentTaskId) say(reason);
+      } else {
+        if (taskId === this.currentTaskId) this.renderChat();
+        say(cancelled ? 'Response cancelled' : reason);
+      }
+      if (folder === this.workspace.root && partial?.steps.some((step) => step.server === 'Workspace'
+        && ['write_file', 'edit_file', 'run_command'].includes(step.tool))) {
+        void this.refreshWorkspace();
+      }
       return;
     }
-    const bridge = this.getProviderBridge();
-    if (!this.activeRequestId || !bridge?.cancel) return;
-    void bridge.cancel(this.activeRequestId);
+    // Model time only (tool runs and approvals excluded); plain sends report the whole wait.
+    const thinkingMs = Number.isSafeInteger(result.data.thinkingMs) ? result.data.thinkingMs : Date.now() - startedAt;
+    // Main wrote the project notes for this folder during the request: say so under the reply.
+    const notes = result.data.projectNotes?.created === true ? result.data.projectNotes : null;
+    const notesPath = typeof notes?.path === 'string' && notes.path ? notes.path : '.scalemax/SCALEMAX.md';
+    this.appendMessage('assistant', result.data.text, taskId, {
+      tools: result.data.toolCalls,
+      steps: result.data.steps,
+      reasoning: result.data.reasoning,
+      ...(thinking ? { thinkingMs } : {}),
+      ...(notes ? {
+        notice: `Created ${notesPath}: project notes ScaleMax reads in every chat in this folder. Edit them any time, or type /init to have ScaleMax rewrite them.`,
+      } : {}),
+    });
+    // The model changed files or ran a command in the folder that is open (or main created the
+    // notes): reload the tree and Git status.
+    const calls = Array.isArray(result.data.toolCalls) ? result.data.toolCalls : [];
+    if (folder === this.workspace.root && (notes || calls.some((call) => call?.server === 'Workspace' && call.ok
+      && ['write_file', 'edit_file', 'run_command'].includes(call.tool)))) {
+      void this.refreshWorkspace();
+    }
+    // A broken MCP server never blocks the reply, but the user should know.
+    const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
+    if (toolError?.message) say(`MCP${toolError.serverId ? ` ${toolError.serverId}` : ''}: ${toolError.message}`);
+  },
+
+  // Stop: ends the reply of the task on screen; replies of other tasks keep working.
+  async cancelResponse() {
+    const reply = this.currentReply();
+    if (!reply || reply.stopping) return;
+    reply.stopping = true;
     const cancel = $('#cancel-btn');
     if (cancel) cancel.disabled = true;
+    // Not sent yet (handleSend is still gathering the request): it will not be sent at all.
+    if (reply.kind === 'chat' && !reply.sent) return;
+    let result = null;
+    try {
+      result = reply.kind === 'media' ? await cancelGeneration(this) : await this.getProviderBridge()?.cancel?.(reply.requestId);
+    } catch {
+      result = null;
+    }
+    // Nothing was stopped (the reply was finishing anyway): Stop works again while it still runs.
+    const stopped = result === true || (result?.ok === true && result.data !== false);
+    if (!stopped && this.replies.get(reply.taskId) === reply) {
+      reply.stopping = false;
+      this.renderReplyState();
+    }
+  },
+
+  /** A deleted task's reply is stopped and forgotten (the task is gone, nothing is kept). */
+  discardReply(taskId) {
+    const reply = this.replies.get(taskId);
+    if (!reply) return;
+    reply.stopping = true;
+    if (reply.kind === 'media') void window.scalemaxAPI?.media?.cancel?.(reply.requestId);
+    else if (reply.sent) void this.getProviderBridge()?.cancel?.(reply.requestId);
+    this.endReply(taskId, reply.requestId, { quiet: true });
+    this.unreadTasks.delete(taskId);
   },
 
   // Pulls live repo data through a connected GitHub connector. Returns a

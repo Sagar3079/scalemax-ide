@@ -353,6 +353,78 @@ export function toolCallGroups(calls) {
   });
 }
 
+// What a reply did on the way to its answer (lib/tool-loop.cjs `steps`): what the model said
+// between tool calls ({ type: 'note', text }) and each call ({ type: 'tool', title, ok, ... }).
+const MAX_STEPS = 200;
+const MAX_STEP_TITLE = 160;
+const MAX_STEP_NOTE = 8192;
+const MAX_STEP_OUTPUT = 4096;
+const MAX_STEP_PREVIEW = 200;
+/** Steps as they are kept with a reply; anything malformed is dropped. */
+export function normalizeSteps(value) {
+  if (!Array.isArray(value)) return [];
+  const steps = [];
+  for (const step of value) {
+    if (steps.length >= MAX_STEPS) break;
+    if (!isRecord(step)) continue;
+    if (step.type === 'note' && typeof step.text === 'string' && step.text.trim()) {
+      steps.push({ type: 'note', text: step.text.trim().slice(0, MAX_STEP_NOTE) });
+    } else if (step.type === 'tool' && typeof step.title === 'string' && step.title.trim()) {
+      const entry = { type: 'tool', title: step.title.replace(/\s+/g, ' ').trim().slice(0, MAX_STEP_TITLE), ok: step.ok === true };
+      if (typeof step.server === 'string' && step.server) entry.server = step.server.slice(0, 64);
+      if (typeof step.tool === 'string' && step.tool) entry.tool = step.tool.slice(0, 128);
+      if (typeof step.preview === 'string' && step.preview) entry.preview = step.preview.slice(0, MAX_STEP_PREVIEW);
+      // The end of a command's output: errors and summaries are printed last.
+      if (typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
+      if (step.stopped === true) entry.stopped = true;
+      steps.push(entry);
+    }
+  }
+  return steps;
+}
+// A reply that ended before it was finished: 'stopped' by the user, or 'failed' on an error.
+export const INTERRUPTIONS = Object.freeze(['stopped', 'failed']);
+const MAX_NOTE_STEPS = 20;
+/**
+ * The conversation as the model gets it, one { role, content } per message. A reply that was
+ * stopped or failed part way keeps the text it had written, and a note from ScaleMax follows it
+ * as a turn of its own: what happened and what the reply had already done (files it changed,
+ * commands it ran). The model never gets the app's words as its own, and the user's newest
+ * message stays last (/init and the folder marker look there).
+ */
+export function historyMessages(messages) {
+  const turns = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!isRecord(message) || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string') continue;
+    if (message.role !== 'assistant' || !INTERRUPTIONS.includes(message.interrupted)) {
+      turns.push({ role: message.role, content: message.text });
+      continue;
+    }
+    if (message.text.trim()) turns.push({ role: 'assistant', content: message.text });
+    const done = normalizeSteps(message.steps).filter((step) => step.type === 'tool')
+      .map((step) => `${step.title}${step.stopped ? ' (stopped)' : step.ok ? '' : ' (failed)'}`);
+    const steps = done.length
+      ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
+    const what = message.interrupted === 'stopped'
+      ? 'the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.'
+      : 'your previous reply broke off because of a connection or provider error, not because of you or the user.';
+    turns.push({ role: 'user', content: `[Note from ScaleMax, the app: ${what}${steps}]` });
+  }
+  return turns;
+}
+
+/** "4 steps · Read 3 files · Ran a command" for the folded steps above an answer. */
+export function stepSummary(steps) {
+  const list = normalizeSteps(steps);
+  const calls = list.filter((step) => step.type === 'tool');
+  const count = calls.length;
+  const head = count ? `${count} step${count === 1 ? '' : 's'}` : 'Notes';
+  const groups = toolCallGroups(calls.filter((step) => step.tool).map((step) => ({ server: step.server || '', tool: step.tool, ok: step.ok })));
+  const labels = groups.slice(0, 3).map((group) => group.label);
+  if (groups.length > 3) labels.push('…');
+  return [head, ...labels].join(' · ');
+}
+
 /** What a reply is doing while a tool runs or waits for approval: { text, friendly }. */
 export function toolActivity(serverId, toolName) {
   const known = toolLabel(serverId, toolName);

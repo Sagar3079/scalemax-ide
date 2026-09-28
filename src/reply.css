@@ -1,0 +1,202 @@
+/*
+ * Replies as they are written (src/reply-ui.js): the text streams in, every tool call is a step
+ * with a spinner, and a command's output shows while it runs. Finished replies keep their steps
+ * folded above the answer.
+ */
+.live-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.live-items:empty {
+  display: none;
+}
+.live-status {
+  margin-top: 2px;
+}
+
+/* One step: an icon for its state, then its title ("Read src/app.js", "Ran npm test"). */
+.reply-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--sm-text-medium);
+}
+.reply-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.reply-step-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+}
+.reply-step-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+.reply-step-icon svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.reply-step[data-state="running"] .reply-step-icon {
+  border: 2px solid var(--sm-app-border);
+  border-top-color: var(--sm-brand-primary);
+  animation: reply-step-spin 0.8s linear infinite;
+}
+.reply-step[data-state="approval"] .reply-step-icon {
+  border: 2px solid var(--sm-color-text-warning-default);
+  animation: reply-step-wait 1.4s ease-in-out infinite;
+}
+.reply-step[data-state="ok"] .reply-step-icon {
+  color: var(--sm-brand-primary);
+}
+.reply-step[data-state="error"] .reply-step-icon,
+.reply-step[data-state="error"] .reply-step-title {
+  color: var(--sm-color-text-error-default);
+}
+.reply-step[data-state="stopped"] .reply-step-icon {
+  color: var(--sm-text-weak);
+}
+.reply-step[data-state="stopped"] .reply-step-icon svg {
+  fill: currentColor;
+  stroke: none;
+}
+@keyframes reply-step-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes reply-step-wait {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reply-step[data-state="running"] .reply-step-icon,
+  .reply-step[data-state="approval"] .reply-step-icon {
+    animation: none;
+  }
+}
+
+/* A command's output: the end stays in view while it runs. */
+.reply-step-output {
+  margin: 0 0 0 22px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--sm-app-border);
+  border-radius: 6px;
+  background: var(--sm-app-muted);
+  color: var(--sm-text-strong);
+  font-family: var(--sm-font-code-family);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reply-step-output:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
+}
+.reply-step-error {
+  margin-left: 22px;
+  font-size: 11.5px;
+  color: var(--sm-color-text-error-default);
+  overflow-wrap: anywhere;
+}
+details.reply-step > summary {
+  list-style: none;
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 4px;
+}
+details.reply-step > summary::-webkit-details-marker {
+  display: none;
+}
+details.reply-step > summary:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 2px;
+}
+details.reply-step > summary .reply-step-title {
+  text-decoration: underline dotted var(--sm-text-weak);
+  text-underline-offset: 3px;
+}
+
+/* What the model said between tool calls. */
+.reply-note {
+  font-size: 12.5px;
+  color: var(--sm-text-medium);
+}
+.reply-note.md {
+  color: var(--sm-text-medium);
+}
+
+/* A finished reply's steps, folded above the answer. */
+.msg-steps {
+  margin-bottom: 6px;
+}
+.msg-steps-summary {
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sm-text-medium);
+  border-radius: 4px;
+}
+.msg-steps-summary:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 2px;
+}
+.msg-steps-failed {
+  color: var(--sm-color-text-error-default);
+}
+.msg-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 2px 0 2px 12px;
+  border-inline-start: 2px solid var(--sm-color-border-secondary);
+}
+
+/* The sidebar: a task that is working shows a spinner, one that finished unseen a dot. */
+.task-status {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.task-status.is-running {
+  border: 1.5px solid var(--sm-app-border);
+  border-top-color: var(--sm-brand-primary);
+  animation: reply-step-spin 0.8s linear infinite;
+}
+.task-status.is-unread {
+  width: 7px;
+  height: 7px;
+  background: var(--sm-brand-primary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-status.is-running {
+    animation: none;
+    border-color: var(--sm-brand-primary);
+  }
+}

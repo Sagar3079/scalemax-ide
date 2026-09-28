@@ -165,6 +165,8 @@ function bindTaskActions(app) {
     const task = app.tasks.find((item) => item.id === app.currentTaskId);
     if (!task) { app.showToast('No task selected'); return; }
     if (!window.confirm('Delete this task?')) return;
+    // A reply still working in the task stops with it.
+    app.discardReply?.(task.id);
     app.tasks = app.tasks.filter((item) => item.id !== task.id);
     if (!app.tasks.length) app.tasks.push(app.makeTask('New Task'));
     void app.persist('tasks');

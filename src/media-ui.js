@@ -8,6 +8,7 @@
  * with Download and Edit. DOM is built with textContent and CSSOM only (CSP).
  */
 import { currentMediaModel, mediaModels, renderModelButton } from './composer-ui.js';
+import { tickReply } from './reply-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 const MEDIA_ID = /^m-[a-f0-9]{16}$/;
@@ -311,35 +312,37 @@ export async function generateFromComposer(app, text, taskId) {
   if (kind === 'video' && media.mode === 'edit') input.options = {};
   const summary = requestSummary(kind, model, media.mode, kind === 'video' && media.mode === 'edit' ? {} : options);
   app.appendMessage('user', text, taskId, { mediaRequest: summary });
-  app.setChatBusy(true, input.requestId);
-  app.activeMediaRequest = input.requestId;
-  app.startPendingReply(taskId, input.requestId, { phase: 'media', kind });
+  // A reply of this task like any other: the task can be left while the video renders.
+  app.beginReply(taskId, input.requestId, { kind: 'media', mediaKind: kind });
+  let result;
   try {
-    const result = await bridge.generate(input);
-    app.stopPendingReply();
-    if (!result?.ok) {
-      const message = result?.error?.message || 'Generation failed';
-      if (result?.error?.code === 'CANCELLED') app.showToast('Generation cancelled');
-      app.appendMessage('assistant', result?.error?.code === 'CANCELLED' ? 'Generation cancelled.' : `Could not generate the ${kind}: ${message}`, taskId);
-      return true;
-    }
-    const items = result.data.items || [];
-    const count = items.length;
-    app.appendMessage('assistant', `${kind === 'image' ? `${count} image${count === 1 ? '' : 's'}` : 'Video'} · ${model.displayName}`, taskId, { media: items });
+    result = await bridge.generate(input);
   } catch (error) {
-    app.appendMessage('assistant', `Could not generate the ${kind}: ${error?.message || 'unknown error'}`, taskId);
-  } finally {
-    app.activeMediaRequest = null;
-    app.stopPendingReply();
-    app.setChatBusy(false);
+    result = { ok: false, error: { message: error?.message || 'unknown error' } };
   }
+  app.endReply(taskId, input.requestId, { quiet: true });
+  // The task was deleted meanwhile (its generation was stopped then).
+  if (!app.tasks.some((item) => item.id === taskId)) return true;
+  if (!result?.ok) {
+    const message = result?.error?.message || 'Generation failed';
+    if (result?.error?.code === 'CANCELLED' && taskId === app.currentTaskId) app.showToast('Generation cancelled');
+    app.appendMessage('assistant', result?.error?.code === 'CANCELLED' ? 'Generation cancelled.' : `Could not generate the ${kind}: ${message}`, taskId);
+    return true;
+  }
+  const items = result.data.items || [];
+  const count = items.length;
+  app.appendMessage('assistant', `${kind === 'image' ? `${count} image${count === 1 ? '' : 's'}` : 'Video'} · ${model.displayName}`, taskId, { media: items });
   return true;
 }
 
-export function cancelGeneration(app) {
-  if (!app.activeMediaRequest) return false;
-  void mediaBridge()?.cancel(app.activeMediaRequest);
-  return true;
+/**
+ * Stops the generation of the task on screen. Resolves to main's answer ({ ok, data: stopped }),
+ * or false when that task is not generating.
+ */
+export async function cancelGeneration(app) {
+  const reply = app.currentReply?.();
+  if (reply?.kind !== 'media') return false;
+  return mediaBridge()?.cancel(reply.requestId) ?? false;
 }
 
 // ---- Chat display ---------------------------------------------------------------------
@@ -432,11 +435,11 @@ export function renderMediaItems(app, items) {
 
 export function bindMediaUi(app) {
   mediaBridge()?.onProgress?.((progress) => {
-    const pending = app.pendingReply;
-    if (!pending || !progress || progress.requestId !== pending.requestId) return;
-    pending.mediaPhase = progress.phase;
-    pending.progress = Number.isFinite(progress.progress) ? progress.progress : pending.progress;
-    app.updatePendingReply();
+    const reply = app.replyFor?.(progress?.requestId);
+    if (!reply || reply.kind !== 'media') return;
+    reply.mediaPhase = progress.phase;
+    reply.progress = Number.isFinite(progress.progress) ? progress.progress : reply.progress;
+    if (reply.taskId === app.currentTaskId) tickReply(reply);
   });
   window.addEventListener('scalemax:composer-mode', () => renderMediaBar(app));
   renderMediaBar(app);

@@ -10,6 +10,7 @@ const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
+const { createProgressForwarder } = require('./lib/progress.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
@@ -215,6 +216,8 @@ function requestToolApproval(request, { signal } = {}) {
       toolName: request.toolName,
       readOnly: request.readOnly,
       arguments: request.arguments,
+      // Several tasks can work at once, each in its own folder: the prompt says which.
+      folderName: chatRequests.get(request.requestId)?.folderName || '',
     });
   });
 }
@@ -223,8 +226,8 @@ function denyAllApprovals() {
   for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false);
 }
 
-// The workspace tools use the same workspace service as the Workspace tab (getWorkspace below),
-// so they always act on the folder the user has open, and only while one is open.
+// Workspace tools on the Workspace tab's service (getWorkspace below): the folder open in the
+// window. Chat replies get tools of their own, bound to their task's folder (openChatSession).
 const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace() });
 // Web and computer tools belong to the mode the user picked above the message box: Working gets all
 // three families, Coding the project and the web (lib/modes.cjs).
@@ -235,46 +238,96 @@ const builtinsFor = (mode) => modeFamilies(mode).map((family) => BUILTIN_TOOLS[f
 // The ScaleMax API replaces the word "kiro" in reply text with the model's name, which turned a
 // folder called "kiro-scalemax-ide" into "DeepSeek V4 Flash-scalemax-ide" (lib/reply-names.cjs).
 // Names the model was given in the request (folder, file paths, the user's words) are put back.
-function restoreReplyText(text, sources, { model } = {}) {
+function replyNameRepair(names, model) {
   const config = provider.get();
   const entry = Array.isArray(config.models) ? config.models.find((item) => item.id === config.model) : null;
-  const folder = workspaceTools.folder();
-  const names = collectNames(sources, folder ? [folder.name] : []);
-  return restoreNames(text, { names, replacements: modelNames({ modelId: config.model, displayName: entry?.displayName, responseModel: model }) });
+  const replacements = modelNames({ modelId: config.model, displayName: entry?.displayName, responseModel: model });
+  return (text) => restoreNames(text, { names, replacements });
+}
+function restoreReplyText(text, sources, { model, folderName } = {}) {
+  const folder = folderName || workspaceTools.folder()?.name;
+  return replyNameRepair(collectNames(sources, folder ? [folder] : []), model)(text);
+}
+// The same repair for text while it streams in (lib/progress.cjs), from what the request says.
+function streamingRepair(input, folderName) {
+  const sources = [input?.systemPrompt, ...(Array.isArray(input?.messages) ? input.messages.map((message) => message?.content) : [])];
+  const names = collectNames(sources, folderName ? [folderName] : []);
+  return names.length ? replyNameRepair(names) : null;
 }
 
 const toolLoop = createToolLoop({
   provider,
-  mcp: combineToolSources({ builtins: builtinsFor, mcp }),
+  mcp: combineToolSources({ builtins: builtinsFor, mcp, serverName: mcpServerName }),
   approve: requestToolApproval,
   restoreText: restoreReplyText,
   // Coding work takes many steps (read, edit, run the tests, fix); Stop cancels at any point.
   maxRounds: 25
 });
 
-// Project notes (.scalemax/SCALEMAX.md, lib/project-notes.cjs): created on the first message in
-// a folder that has none, and read, with any AGENTS.md / CLAUDE.md / Kiro steering files, into
-// every chat there. Preferences can turn the automatic creation off (settings.projectNotes).
-const projectNotes = createProjectNotes({ getWorkspace: () => getWorkspace() });
-
 /**
- * A chat task works in the folder of its first message, and the window sends that folder with
- * every message (input.folder). A request whose folder is not the open one is refused, so a
- * reply never reads or changes files in another project.
+ * Every chat request works in its task's folder through a workspace session of its own, so
+ * several tasks can run at once in different folders, and opening another folder in the window
+ * never pulls the files out from under a running reply.
+ * The folder must be one the user opened in ScaleMax (the open one or a recent one); a request
+ * for any other folder is refused (FOLDER_NOT_OPENED). A request without a folder (automations)
+ * works in the folder that is open, if any.
+ * Returns the session's tools, its project notes (.scalemax/SCALEMAX.md: created on the first
+ * message in a folder that has none, and read, with AGENTS.md / CLAUDE.md / Kiro steering, into
+ * every chat there) and dispose(), which ends the session and any command it still runs.
  */
-async function requireTaskFolder(input) {
+// Folder sessions of replies in progress; quitting ends them and the commands they run.
+const chatSessions = new Set();
+// Chat requests in progress, by request id: whether Stop came before the tool loop started, and
+// the folder the request works in (named in its approval prompts).
+const chatRequests = new Map();
+async function openChatSession(input) {
   const expected = input && typeof input === 'object' && !Array.isArray(input) ? input.folder : undefined;
-  if (expected === undefined || expected === null) return;
-  if (typeof expected !== 'string' || !path.isAbsolute(expected) || expected.length > 4096) {
-    throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
-  }
   await restoreFolder();
-  const open = workspaceTools.folder();
-  if (open && open.path === expected) return;
-  const name = path.basename(expected) || expected;
-  throw bridgeError('FOLDER_MISMATCH', open
-    ? `This task works in "${name}", but "${open.name}" is open. Select the task again to switch back.`
-    : `This task works in "${name}", which is not open.`);
+  let root = null;
+  if (expected !== undefined && expected !== null) {
+    if (typeof expected !== 'string' || !path.isAbsolute(expected) || expected.length > 4096) {
+      throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
+    }
+    const open = workspaceTools.folder();
+    if (open?.path !== expected && !readFolders().recent.includes(expected)) {
+      const name = path.basename(expected) || expected;
+      throw bridgeError('FOLDER_NOT_OPENED', `This task works in "${name}", which has not been opened in ScaleMax. Open it with the folder button first.`);
+    }
+    root = expected;
+  } else {
+    root = workspaceTools.folder()?.path || null;
+  }
+  const session = createWorkspace({ approve: async () => true, getPermission: () => 'ask' });
+  if (root) {
+    try {
+      await session.select(root);
+    } catch (error) {
+      // A task's folder that is gone fails the request; a request without a folder (an
+      // automation) runs without one when the open folder has gone away meanwhile.
+      if (root === expected) {
+        session.dispose();
+        throw error;
+      }
+    }
+  }
+  chatSessions.add(session);
+  const getSession = () => session;
+  const tools = createWorkspaceTools({ getWorkspace: getSession });
+  const families = { workspace: tools, web: webTools, computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }) };
+  return {
+    folder: session.current(),
+    tools,
+    notes: createProjectNotes({ getWorkspace: getSession }),
+    source: combineToolSources({
+      builtins: (mode) => modeFamilies(mode).map((family) => families[family]).filter(Boolean),
+      mcp,
+      serverName: mcpServerName,
+    }),
+    dispose: () => {
+      chatSessions.delete(session);
+      session.dispose();
+    },
+  };
 }
 
 function projectNotesEnabled() {
@@ -504,27 +557,65 @@ const providerChannels = {
   // Progress (thinking / running a tool / waiting for approval) goes to the window that asked.
   // With a folder open the request carries the project context and may create the project
   // notes first; the reply then says so (projectNotes.created) so the window can show it.
+  // The reply streams to the window as it is written (lib/progress.cjs gathers the pieces), with
+  // every tool call as a step and a command's output as it runs.
   'provider:send': async (event, input) => {
     if (!provider.get().configured) return provider.send(input);
-    await shellPathReady;
-    await requireTaskFolder(input);
-    // Working or Coding: the mode decides the working agreement, which tools are offered and how
-    // many tool rounds a reply may take.
-    const mode = normalizeMode(input?.mode);
-    const prepared = await prepareChatRequest(input, {
-      workspaceTools, projectNotes, notesEnabled: projectNotesEnabled(), modeInstructions: modeInstructions(mode),
-    });
-    const result = await toolLoop.send(prepared.input, {
-      permission: chatPermission(),
-      mode,
-      maxRounds: modeMaxRounds(mode),
-      onProgress: (progress) => {
-        if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);
+    // Known from the first moment, so Stop works while the folder session and the project
+    // context are still being prepared (the tool loop only knows requests it already runs).
+    const requestId = typeof input?.requestId === 'string' ? input.requestId : '';
+    const tracked = { stopped: false, folderName: '' };
+    const owned = Boolean(requestId) && !chatRequests.has(requestId);
+    if (owned) chatRequests.set(requestId, tracked);
+    const checkStopped = () => {
+      if (tracked.stopped) throw bridgeError('CANCELLED', 'Provider request was cancelled.');
+    };
+    let chat = null;
+    try {
+      await shellPathReady;
+      checkStopped();
+      chat = await openChatSession(input);
+      checkStopped();
+      tracked.folderName = chat.folder?.name || '';
+      // Working or Coding: the mode decides the working agreement, which tools are offered and
+      // how many tool rounds a reply may take.
+      const mode = normalizeMode(input?.mode);
+      const prepared = await prepareChatRequest(input, {
+        workspaceTools: chat.tools, projectNotes: chat.notes, notesEnabled: projectNotesEnabled(), modeInstructions: modeInstructions(mode),
+      });
+      const folderName = tracked.folderName;
+      const forward = createProgressForwarder({
+        send: (progress) => {
+          if (!event.sender.isDestroyed()) event.sender.send('provider:progress', progress);
+        },
+        restore: streamingRepair(prepared.input, folderName),
+      });
+      let result;
+      try {
+        // Checked in the same turn as the loop starts, so no Stop falls in between.
+        checkStopped();
+        result = await toolLoop.send(prepared.input, {
+          permission: chatPermission(),
+          mode,
+          maxRounds: modeMaxRounds(mode),
+          source: chat.source,
+          folderName,
+          onProgress: forward.push,
+        });
+      } finally {
+        forward.close();
       }
-    });
-    return prepared.notes?.created ? { ...result, projectNotes: { created: true, path: prepared.notes.path } } : result;
+      return prepared.notes?.created ? { ...result, projectNotes: { created: true, path: prepared.notes.path } } : result;
+    } finally {
+      chat?.dispose();
+      if (owned && chatRequests.get(requestId) === tracked) chatRequests.delete(requestId);
+    }
   },
-  'provider:cancel': (_event, id) => toolLoop.cancel(id),
+  'provider:cancel': (_event, id) => {
+    const tracked = typeof id === 'string' ? chatRequests.get(id) : undefined;
+    if (tracked) tracked.stopped = true;
+    return toolLoop.cancel(id) || Boolean(tracked);
+  },
   'provider:set-model': (_event, input) => provider.setModel(input),
   'provider:refresh-models': () => provider.refreshModels(),
   // Several saved providers; the active one is what chat and generation use.
@@ -828,6 +919,10 @@ app.on('before-quit', () => {
   cliConnect.closeAll();
   mediaStudio.closeAll();
   void mcp.closeAll();
+  // Commands run in their own process group and would outlive the app: end them.
+  for (const session of [...chatSessions]) session.dispose();
+  chatSessions.clear();
+  workspace?.dispose();
 });
 
 app.on('window-all-closed', () => {

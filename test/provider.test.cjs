@@ -694,3 +694,211 @@ test('mediaFetch sends the key only to the provider origin and refuses plain htt
   assert.throws(() => provider.mediaFetch('http://cdn.example.com/image.png'), /non-HTTPS/);
   assert.equal(provider.redact('error for sm_live_first_key_1234567890'), 'error for [redacted]');
 });
+// ---- Streaming (Server-Sent Events) -------------------------------------------------------
+function sseResponse(events, { chunkSize = 0, close = true, headers = {} } = {}) {
+  const text = events.map((event) => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`).join('');
+  const bytes = Buffer.from(text, 'utf8');
+  const size = chunkSize || bytes.length || 1;
+  const body = new ReadableStream({
+    start(controller) {
+      for (let index = 0; index < bytes.length; index += size) controller.enqueue(new Uint8Array(bytes.subarray(index, index + size)));
+      if (close) controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', ...headers } });
+}
+const chunk = (delta, extra = {}) => ({ object: 'chat.completion.chunk', model: 'test-model-2026', choices: [{ index: 0, delta, ...extra }] });
+test('complete streams text, reasoning and tool calls when a listener is given', async () => {
+  const { provider, calls } = await configuredProvider(() => sseResponse([
+    chunk({ role: 'assistant', reasoning_content: 'Let me ' }),
+    chunk({ reasoning_content: 'look.' }),
+    chunk({ content: 'Checking ' }),
+    chunk({ content: 'the files — ünïcode ok.' }),
+    chunk({ tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'mcp_fake_echo', arguments: '' } }] }),
+    chunk({ tool_calls: [{ index: 0, function: { arguments: '{"text":' } }] }),
+    chunk({ tool_calls: [{ index: 0, function: { arguments: '"hi"}' } }] }),
+    chunk({ tool_calls: [{ index: 1, id: 'call_b', type: 'function', function: { name: 'mcp_fake_add', arguments: '{}' } }] }),
+    chunk({}, { finish_reason: 'tool_calls' }),
+    { object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 } },
+    '[DONE]',
+  ], { chunkSize: 7 }));
+  const deltas = [];
+  const result = await provider.complete({ requestId: 's-1', messages: [{ role: 'user', content: 'Hi' }], tools: [TOOL_ECHO, TOOL_ADD] },
+    { onDelta: (delta) => deltas.push(delta) });
+  assert.deepEqual(result, {
+    content: 'Checking the files — ünïcode ok.',
+    toolCalls: [
+      { id: 'call_a', name: 'mcp_fake_echo', arguments: '{"text":"hi"}' },
+      { id: 'call_b', name: 'mcp_fake_add', arguments: '{}' },
+    ],
+    model: 'test-model-2026',
+    reasoning: 'Let me look.',
+    usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+    finishReason: 'tool_calls',
+  });
+  assert.deepEqual(deltas, [
+    { type: 'reasoning', text: 'Let me ' },
+    { type: 'reasoning', text: 'look.' },
+    { type: 'text', text: 'Checking ' },
+    { type: 'text', text: 'the files — ünïcode ok.' },
+    { type: 'tool', index: 0, name: 'mcp_fake_echo' },
+    { type: 'tool', index: 1, name: 'mcp_fake_add' },
+  ]);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.stream, true);
+  assert.deepEqual(body.stream_options, { include_usage: true });
+  assert.match(calls[0].options.headers.Accept, /text\/event-stream/);
+});
+test('a streamed reply split into single bytes and CRLF lines reads the same', async () => {
+  const events = [chunk({ content: 'Grüße ' }), chunk({ content: 'aus Köln' }, { finish_reason: 'stop' }), '[DONE]'];
+  const text = events.map((event) => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\r\n\r\n`).join('');
+  const bytes = Buffer.from(`: keep-alive\r\n\r\nevent: message\r\n${text}`, 'utf8');
+  const { provider } = await configuredProvider(() => new Response(new ReadableStream({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      controller.close();
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+  const pieces = [];
+  const result = await provider.complete({ requestId: 's-2', messages: [{ role: 'user', content: 'Hi' }] },
+    { onDelta: (delta) => pieces.push(delta.text) });
+  assert.equal(result.content, 'Grüße aus Köln');
+  assert.equal(result.finishReason, 'stop');
+  assert.deepEqual(pieces, ['Grüße ', 'aus Köln']);
+});
+test('a server that ignores stream answers with JSON, told to the listener in one piece', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({
+    model: 'test-model', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'All at once.' } }],
+  }));
+  const deltas = [];
+  const result = await provider.complete({ requestId: 's-3', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => deltas.push(delta) });
+  assert.equal(result.content, 'All at once.');
+  assert.deepEqual(deltas, [{ type: 'text', text: 'All at once.' }]);
+});
+test('a stream refused with HTTP 400 about streaming is asked once more without streaming', async () => {
+  const { provider, calls } = await configuredProvider((url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.stream) {
+      return jsonResponse({ error: { message: 'Unrecognized request argument supplied: stream_options', code: 'invalid_request' } }, { status: 400 });
+    }
+    return jsonResponse({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Fine without.' } }] });
+  });
+  const deltas = [];
+  const result = await provider.complete({ requestId: 's-4', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => deltas.push(delta) });
+  assert.equal(result.content, 'Fine without.');
+  assert.deepEqual(deltas, [{ type: 'text', text: 'Fine without.' }]);
+  assert.equal(calls.length, 2);
+  assert.equal(JSON.parse(calls[1].options.body).stream, false);
+  assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'stream_options'), false);
+});
+test('other refusals are not retried and carry the provider message, status and code', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({
+    error: { message: 'This model does not accept images.\nUse another model.', code: 'image_input_unsupported' },
+  }, { status: 400 }));
+  await assert.rejects(
+    () => provider.complete({ requestId: 's-5', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    (error) => error.status === 400 && error.providerCode === 'image_input_unsupported'
+      && error.message === 'The provider refused the request (HTTP 400): This model does not accept images. Use another model.',
+  );
+  assert.equal(calls.length, 1);
+});
+test('provider error details never contain the API key and HTML pages are not shown', async () => {
+  const key = 'sk-secret-streaming-key-123456';
+  let reply = () => jsonResponse({ error: { message: `Bad key ${key} for model` } }, { status: 500 });
+  const { provider } = makeProvider({ respond: () => reply() });
+  await provider.save({ baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: key });
+  await assert.rejects(() => provider.complete({ requestId: 's-6', messages: [{ role: 'user', content: 'Hi' }] }),
+    (error) => error.status === 500 && !error.message.includes(key) && error.message.includes('[redacted]'));
+  reply = () => new Response('<html><body>502 Bad Gateway</body></html>', { status: 502, headers: { 'content-type': 'text/html' } });
+  await assert.rejects(() => provider.complete({ requestId: 's-7', messages: [{ role: 'user', content: 'Hi' }] }),
+    (error) => error.message === 'Provider request failed with an unsuccessful HTTP status (502).');
+});
+test('an error event inside the stream stops the reply with the provider message', async () => {
+  const { provider } = await configuredProvider(() => sseResponse([
+    chunk({ content: 'Part' }),
+    { error: { message: 'upstream overloaded' } },
+  ]));
+  await assert.rejects(() => provider.complete({ requestId: 's-8', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    /The provider stopped the reply: upstream overloaded/);
+});
+test('cancelling a streamed reply stops it at once', async () => {
+  const { provider } = await configuredProvider(() => sseResponse([chunk({ content: 'Still ' })], { close: false }));
+  let heard = null;
+  const first = new Promise((resolve) => { heard = resolve; });
+  const pending = provider.complete({ requestId: 's-9', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard(delta) });
+  assert.deepEqual(await first, { type: 'text', text: 'Still ' });
+  assert.equal(provider.cancel('s-9'), true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
+});
+test('a stream that ends without [DONE] keeps what arrived, and listener errors never break it', async () => {
+  const { provider } = await configuredProvider(() => sseResponse([chunk({ content: 'Done anyway.' }, { finish_reason: 'stop' })]));
+  const result = await provider.complete({ requestId: 's-10', messages: [{ role: 'user', content: 'Hi' }] }, {
+    onDelta: () => { throw new Error('listener broke'); },
+  });
+  assert.equal(result.content, 'Done anyway.');
+});
+test('up to eight requests may be in flight at once', async () => {
+  const { provider } = await configuredProvider(() => sseResponse([], { close: false }));
+  const pending = Array.from({ length: 8 }, (_, index) => provider.complete({ requestId: `p-${index}`, messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await assert.rejects(() => provider.complete({ requestId: 'p-9', messages: [{ role: 'user', content: 'Hi' }] }), /At most 8 provider requests/);
+  assert.equal(provider.cancelAll(), 8);
+  const settled = await Promise.allSettled(pending);
+  assert.ok(settled.every((item) => item.status === 'rejected' && item.reason.code === 'CANCELLED'));
+});
+test('stream error events are shown without the API key', async () => {
+  const key = 'sk-secret-stream-error-key-123456';
+  let reply = () => sseResponse([chunk({ content: 'Part' }), { error: { message: `upstream rejected key ${key}\u202e` } }]);
+  const { provider } = makeProvider({ respond: () => reply() });
+  await provider.save({ baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: key });
+  await assert.rejects(() => provider.complete({ requestId: 'e-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    (error) => !error.message.includes(key) && error.message === 'The provider stopped the reply: upstream rejected key [redacted]');
+  // A 200 JSON body with an error (a server that ignored `stream`) never shows the key either.
+  reply = () => jsonResponse({ error: { message: `invalid key ${key}` } });
+  await assert.rejects(() => provider.complete({ requestId: 'e-2', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    (error) => !error.message.includes(key));
+});
+test('tool calls without index are kept apart, streamed or whole', async () => {
+  // Pieces without index: a known id continues its call, a second name starts the next one.
+  const { provider } = await configuredProvider(() => sseResponse([
+    chunk({ tool_calls: [{ id: 'call_a', function: { name: 'mcp_fake_echo', arguments: '{"te' } }] }),
+    chunk({ tool_calls: [{ id: 'call_a', function: { arguments: 'xt":"hi"}' } }] }),
+    chunk({ tool_calls: [{ function: { name: 'mcp_fake_add', arguments: '{"a":' } }] }),
+    chunk({ tool_calls: [{ function: { arguments: '1}' } }] }, { finish_reason: 'tool_calls' }),
+    '[DONE]',
+  ]));
+  const streamed = await provider.complete({ requestId: 't-1', messages: [{ role: 'user', content: 'Hi' }], tools: [TOOL_ECHO, TOOL_ADD] }, { onDelta: () => {} });
+  assert.deepEqual(streamed.toolCalls.map((call) => [call.id.startsWith('call_') ? 'id' : '', call.name, call.arguments]), [
+    ['id', 'mcp_fake_echo', '{"text":"hi"}'],
+    ['id', 'mcp_fake_add', '{"a":1}'],
+  ]);
+  assert.equal(streamed.toolCalls[0].id, 'call_a');
+  // The whole-reply fallback is checked exactly like a non-streamed reply.
+  const whole = await configuredProvider(() => jsonResponse({
+    choices: [{ message: { content: null, tool_calls: [
+      { function: { name: 'mcp_fake_echo', arguments: '{"x":1}' } },
+      { function: { name: 'mcp_fake_add', arguments: '{"y":2}' } },
+    ] } }],
+  }));
+  const result = await whole.provider.complete({ requestId: 't-2', messages: [{ role: 'user', content: 'Hi' }], tools: [TOOL_ECHO, TOOL_ADD] }, { onDelta: () => {} });
+  assert.deepEqual(result.toolCalls.map((call) => [call.name, call.arguments]), [['mcp_fake_echo', '{"x":1}'], ['mcp_fake_add', '{"y":2}']]);
+});
+test('a stream cut off without [DONE] or a finish reason fails instead of passing as the answer', async () => {
+  const { provider } = await configuredProvider(() => sseResponse([chunk({ content: 'Half an ans' })]));
+  await assert.rejects(() => provider.complete({ requestId: 'x-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    /cut off before it finished/);
+});
+test('the stream body is cancelled when reading stops early', async () => {
+  let cancelled = 0;
+  const body = () => new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk({ content: 'x' }))}\n\ndata: {not json}\n\n`));
+    },
+    cancel() { cancelled += 1; },
+  });
+  const { provider } = await configuredProvider(() => new Response(body(), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+  await assert.rejects(() => provider.complete({ requestId: 'c-9', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    /unreadable stream event/);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(cancelled, 1);
+});

@@ -576,10 +576,11 @@ function approvalBridge() {
 }
 
 // Built-in workspace tools (lib/workspace-tools.cjs) act on the folder the user opened.
+// `where` names the task's folder: with several tasks at once it may not be the one on screen.
 const WORKSPACE_SUMMARIES = {
-  write_file: 'The model wants to create or replace a file in your workspace folder. A replaced file is backed up first.',
-  edit_file: 'The model wants to change part of a file in your workspace folder. The previous version is backed up first.',
-  run_command: 'The model wants to run a command in your workspace folder (30-second limit).',
+  write_file: (where) => `The model wants to create or replace a file in ${where}. A replaced file is backed up first.`,
+  edit_file: (where) => `The model wants to change part of a file in ${where}. The previous version is backed up first.`,
+  run_command: (where) => `The model wants to run a command in ${where}. It stops at its time limit (2 minutes unless the model asks for up to 10) or when you press Stop.`,
 };
 // Working-mode tools that reach past the folder (lib/computer-tools.cjs).
 const COMPUTER_SUMMARIES = {
@@ -589,7 +590,9 @@ const COMPUTER_SUMMARIES = {
 };
 function approvalSummary(request) {
   if (request.kind === 'workspace') {
-    return WORKSPACE_SUMMARIES[request.toolName] || 'The model wants to read files in your workspace folder.';
+    const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
+    const summary = WORKSPACE_SUMMARIES[request.toolName];
+    return summary ? summary(where) : `The model wants to read files in ${where}.`;
   }
   if (request.kind === 'computer') {
     return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
@@ -610,7 +613,11 @@ function showNextApproval() {
     return;
   }
   const automation = typeof request.requestId === 'string' && request.requestId.startsWith('automation-');
-  $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : 'Tool call';
+  // Several tasks can work at once: a prompt from a task in the background names it.
+  const reply = approvals.app?.replyFor?.(request.requestId);
+  const task = reply && reply.taskId !== approvals.app.currentTaskId
+    ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
+  $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
   $('#approval-title').textContent = `Allow ${request.serverName} · ${request.toolName}?`;
   $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
@@ -643,6 +650,7 @@ function bindApprovals(app) {
   const bridge = approvalBridge();
   const dialog = $('#tool-approval-dialog');
   if (!bridge?.onRequest || !dialog) return;
+  approvals.app = app;
   bridge.onRequest((request) => {
     if (!request || typeof request.approvalId !== 'string') return;
     approvals.queue.push({
@@ -653,6 +661,7 @@ function bindApprovals(app) {
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
+      folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
     });
     if (!approvals.showing) {
       showNextApproval();

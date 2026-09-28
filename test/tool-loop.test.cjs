@@ -109,6 +109,7 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
     usage: { prompt_tokens: 14, completion_tokens: 5, total_tokens: 19 },
     toolCalls: [{ server: 'fake', tool: 'echo', ok: true, preview: 'echo:hi' }],
     toolErrors: [{ serverId: 'broken', message: 'Command not found: missing-server' }],
+    steps: [{ type: 'tool', title: 'fake · echo', server: 'fake', tool: 'echo', ok: true, preview: 'echo:hi' }],
   });
   assert.deepEqual(mcp.calls.chatTools, [{}]);
   assert.deepEqual(mcp.calls.callTool, [{ id: 'fake', name: 'echo', arguments: { text: 'hi' } }]);
@@ -494,18 +495,146 @@ test('progress events follow the reply: thinking, approval, tool, thinking', asy
   const events = [];
   const result = await createToolLoop({ provider, mcp: fakeMcp(), approve: async () => 'once' })
     .send({ ...INPUT, requestId: 'r-progress' }, { permission: 'manual', onProgress: (event) => events.push(event) });
+  const step = { callId: 'step-1', title: 'fake · add', serverId: 'fake', toolName: 'add' };
   assert.deepEqual(events, [
-    { requestId: 'r-progress', phase: 'thinking' },
-    { requestId: 'r-progress', phase: 'approval', serverId: 'fake', toolName: 'add' },
-    { requestId: 'r-progress', phase: 'tool', serverId: 'fake', toolName: 'add' },
-    { requestId: 'r-progress', phase: 'thinking' },
+    { requestId: 'r-progress', phase: 'thinking', round: 0 },
+    { requestId: 'r-progress', phase: 'approval', ...step },
+    { requestId: 'r-progress', phase: 'tool', ...step },
+    { requestId: 'r-progress', phase: 'tool-done', callId: 'step-1', ok: true },
+    { requestId: 'r-progress', phase: 'thinking', round: 1 },
   ]);
   assert.ok(Number.isSafeInteger(result.thinkingMs));
 
-  // A throwing observer never breaks the reply; plain sends report thinking too.
+  // A throwing observer never breaks the reply; with a listener a plain reply is streamed
+  // through complete() without tools.
   const plain = [];
-  const reply = await createToolLoop({ provider: fakeProvider(), mcp: fakeMcp({ tools: [] }) })
+  const plainProvider = fakeProvider([textReply('streamed plain reply')]);
+  const reply = await createToolLoop({ provider: plainProvider, mcp: fakeMcp({ tools: [] }) })
     .send({ ...INPUT, requestId: 'r-plain' }, { onProgress: (event) => { plain.push(event); throw new Error('observer'); } });
-  assert.equal(reply.text, 'plain reply');
-  assert.deepEqual(plain, [{ requestId: 'r-plain', phase: 'thinking' }]);
+  assert.equal(reply.text, 'streamed plain reply');
+  assert.deepEqual(plainProvider.calls.complete[0].tools, []);
+  assert.equal(plainProvider.calls.send.length, 0);
+  assert.deepEqual(plain, [{ requestId: 'r-plain', phase: 'thinking', round: 0 }]);
+});
+
+// A provider whose complete() streams `pieces` to the listener before answering.
+function streamingProvider(replies) {
+  const provider = fakeProvider(replies);
+  const complete = provider.complete;
+  provider.listened = [];
+  provider.complete = async (request, options) => {
+    provider.listened.push(typeof options?.onDelta === 'function');
+    const reply = await complete(request);
+    for (const delta of reply.stream || []) options?.onDelta?.(delta);
+    const { stream, ...rest } = reply;
+    return rest;
+  };
+  return provider;
+}
+
+test('with a listener the reply streams: text and reasoning deltas, tool calls in the making', async () => {
+  const provider = streamingProvider([
+    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"hi"}')], {
+      content: 'Let me check.',
+      stream: [{ type: 'reasoning', text: 'Hmm.' }, { type: 'text', text: 'Let me ' }, { type: 'text', text: 'check.' },
+        { type: 'tool', index: 0, name: 'mcp_fake_echo' }, { type: 'tool', index: 1, name: 'not_a_tool' }],
+    }),
+    textReply('All good.', { stream: [{ type: 'text', text: 'All good.' }] }),
+  ]);
+  const events = [];
+  const result = await createToolLoop({ provider, mcp: fakeMcp() })
+    .send({ ...INPUT, requestId: 'r-stream' }, { ...BYPASS, onProgress: (event) => events.push(event) });
+  assert.deepEqual(provider.listened, [true, true]);
+  assert.deepEqual(events.map(({ requestId, ...event }) => event), [
+    { phase: 'thinking', round: 0 },
+    { phase: 'delta', kind: 'reasoning', text: 'Hmm.' },
+    { phase: 'delta', kind: 'text', text: 'Let me ' },
+    { phase: 'delta', kind: 'text', text: 'check.' },
+    { phase: 'preparing', serverId: 'fake', toolName: 'echo' },
+    { phase: 'tool', callId: 'step-1', title: 'fake · echo', serverId: 'fake', toolName: 'echo' },
+    { phase: 'tool-done', callId: 'step-1', ok: true },
+    { phase: 'thinking', round: 1 },
+    { phase: 'delta', kind: 'text', text: 'All good.' },
+  ]);
+  // What the model said before its tool call is kept as a note, in order with the calls.
+  assert.deepEqual(result.steps, [
+    { type: 'note', text: 'Let me check.' },
+    { type: 'tool', title: 'fake · echo', server: 'fake', tool: 'echo', ok: true, preview: 'ok:echo' },
+  ]);
+  assert.equal(result.text, 'All good.');
+  // Without a listener nothing is streamed.
+  const quiet = streamingProvider([textReply('Quiet.')]);
+  await createToolLoop({ provider: quiet, mcp: fakeMcp() }).send({ ...INPUT }, BYPASS);
+  assert.deepEqual(quiet.listened, [false]);
+});
+
+test('a per-reply tool source gets the call context, titles its steps and streams command output', async () => {
+  const provider = fakeProvider([toolReply([toolCall('c1', 'ws_run', '{"command":"npm test"}')]), textReply('Tests pass.')]);
+  const unused = fakeMcp();
+  const seen = [];
+  const source = {
+    async chatTools() {
+      return {
+        tools: [{ type: 'function', function: { name: 'ws_run', parameters: { type: 'object', properties: {} } } }],
+        resolve: (name) => (name === 'ws_run' ? { serverId: 'Workspace', toolName: 'run_command', readOnly: false } : null),
+        errors: [],
+      };
+    },
+    async callTool(input, context) {
+      seen.push({ input, hasSignal: context?.signal instanceof AbortSignal });
+      context.onOutput('line 1\n');
+      context.onOutput('x'.repeat(5000));
+      context.onOutput('\nall passed\n');
+      return { text: 'Exit code: 0' };
+    },
+    describeCall: (target, args) => `Ran ${args.command}`,
+  };
+  const events = [];
+  const restored = [];
+  const loop = createToolLoop({
+    provider, mcp: unused,
+    restoreText: (text, sources, context) => { restored.push(context.folderName); return text.replace('npm', 'NPM'); },
+  });
+  const result = await loop.send({ ...INPUT, requestId: 'r-source' }, {
+    ...BYPASS, source, folderName: 'kiro-app', onProgress: (event) => events.push(event),
+  });
+  assert.equal(unused.calls.chatTools.length, 0);
+  assert.deepEqual(seen, [{ input: { id: 'Workspace', name: 'run_command', arguments: { command: 'npm test' } }, hasSignal: true }]);
+  const outputs = events.filter((event) => event.phase === 'tool-output');
+  assert.deepEqual(outputs.map((event) => [event.callId, event.text.length]), [['step-1', 7], ['step-1', 5000], ['step-1', 12]]);
+  assert.equal(events.find((event) => event.phase === 'tool').title, 'Ran npm test');
+  // The step keeps the end of the output (4 KB) and its title is repaired like the answer.
+  const [step] = result.steps;
+  assert.equal(step.title, 'Ran NPM test');
+  assert.ok(step.output.endsWith('\nall passed\n'));
+  assert.ok(Buffer.byteLength(step.output) <= 4096);
+  assert.ok(restored.every((name) => name === 'kiro-app'));
+});
+
+test('cancelling a reply aborts the signal a running tool was given', async () => {
+  const provider = fakeProvider([toolReply([toolCall('c1', 'slow', '{}')])]);
+  let signal = null;
+  let started;
+  const running = new Promise((resolve) => { started = resolve; });
+  const source = {
+    async chatTools() {
+      return {
+        tools: [{ type: 'function', function: { name: 'slow', parameters: { type: 'object', properties: {} } } }],
+        resolve: () => ({ serverId: 'Workspace', toolName: 'run_command', readOnly: false }),
+        errors: [],
+      };
+    },
+    callTool(input, context) {
+      signal = context.signal;
+      started();
+      return new Promise(() => {});
+    },
+  };
+  const loop = createToolLoop({ provider, mcp: fakeMcp() });
+  const pending = loop.send({ ...INPUT, requestId: 'r-cancel-tool' }, { ...BYPASS, source });
+  await running;
+  assert.equal(signal.aborted, false);
+  assert.equal(loop.cancel('r-cancel-tool'), true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
+  assert.equal(signal.aborted, true);
 });

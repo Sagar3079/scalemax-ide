@@ -248,3 +248,78 @@ test('edit_file replaces exact text once, refuses missing or ambiguous text, and
   await tools.call('edit_file', { path: 'src/util.js', old_text: 'export { a, b };', new_text: 'const price = "$&";' });
   assert.match(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), /const price = "\$&";/);
 });
+
+test('run_command streams its output, honours timeout_seconds and stops with the reply', { skip: process.platform === 'win32' }, async (t) => {
+  const { tools } = await openTools(t);
+  const heard = [];
+  const result = await tools.call('run_command', { command: 'printf "one\\n"; sleep 0.2; printf "two\\n"' }, { onOutput: (text) => heard.push(text) });
+  assert.match(result.text, /^Exit code: 0\nstdout:\none\ntwo\n$/);
+  assert.deepEqual(heard.join(''), 'one\ntwo\n');
+  assert.ok(heard.length >= 2, 'output arrives while the command runs');
+  // A short limit stops a long command and keeps what it printed.
+  const slow = await tools.call('run_command', { command: 'printf started; sleep 5', timeout_seconds: 1 });
+  assert.equal(slow.isError, true);
+  assert.match(slow.text, /exceeded 1 seconds/);
+  assert.match(slow.text, /started/);
+  await assert.rejects(tools.call('run_command', { command: 'true', timeout_seconds: 601 }), /timeout_seconds/);
+  await assert.rejects(tools.call('run_command', { command: 'true', timeout_seconds: 1.5 }), /timeout_seconds/);
+  // An aborted signal (the reply was stopped) ends the command at once.
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = tools.call('run_command', { command: 'sleep 20' }, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 200);
+  const stopped = await pending.then((value) => value, (error) => error);
+  assert.ok(Date.now() - started < 5000, 'the command did not run to its end');
+  assert.match(String(stopped?.message || stopped?.text), /cancelled/i);
+});
+
+test('steps get readable titles, and only built-in tools receive the call context', async (t) => {
+  const { tools } = await openTools(t);
+  assert.equal(tools.describeCall('read_file', { path: 'src/app.js' }), 'Read src/app.js');
+  assert.equal(tools.describeCall('read_file', { path: 'a.js', start_line: 5, end_line: 9 }), 'Read a.js (lines 5-9)');
+  assert.equal(tools.describeCall('run_command', { command: 'npm   test' }), 'Ran npm test');
+  assert.equal(tools.describeCall('search', { query: 'TODO', path: 'src' }), 'Searched for "TODO" in src');
+  assert.equal(tools.describeCall('edit_file', {}), 'Edited a file');
+  const calls = [];
+  const mcp = {
+    chatTools: async () => ({ tools: [], resolve: () => null, errors: [] }),
+    callTool: async (...args) => { calls.push(args); return { text: 'mcp' }; },
+  };
+  const combined = combineToolSources({ builtins: [tools], mcp, serverName: (id) => (id === 'gh' ? 'GitHub' : id) });
+  const context = { onOutput: () => {}, signal: new AbortController().signal };
+  await combined.callTool({ id: 'gh', name: 'list_issues', arguments: {} }, context);
+  assert.deepEqual(calls, [[{ id: 'gh', name: 'list_issues', arguments: {} }]]);
+  const listed = await combined.callTool({ id: SERVER_ID, name: 'list_files', arguments: {} }, context);
+  assert.match(listed.text, /README\.md/);
+  assert.equal(combined.describeCall({ serverId: SERVER_ID, toolName: 'write_file' }, { path: 'x.md' }), 'Wrote x.md');
+  assert.equal(combined.describeCall({ serverId: 'gh', toolName: 'list_issues' }, {}), 'GitHub · list_issues');
+});
+
+test('a session ended in the middle of a save removes its staging file', async (t) => {
+  const root = project(t);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let caught = false;
+  // Holds the save at its staging file, the moment a stopped reply can end the session.
+  const promises = {
+    ...fs.promises,
+    lstat: async (target, ...rest) => {
+      if (!caught && /\.scalemax-[0-9a-f-]+\.tmp$/.test(String(target))) {
+        caught = true;
+        await held;
+      }
+      return fs.promises.lstat(target, ...rest);
+    },
+  };
+  const workspace = createWorkspace({ approve: async () => true, io: { ...fs, promises } });
+  await workspace.select(root);
+  const file = await workspace.read('README.md');
+  const saving = workspace.write({ path: 'README.md', content: 'replaced', revision: file.revision });
+  for (let i = 0; i < 400 && !caught; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(caught, true, 'the save reached its staging file');
+  workspace.dispose();
+  release();
+  await assert.rejects(saving, { code: 'SESSION_CHANGED' });
+  assert.deepEqual(fs.readdirSync(root).filter((name) => name.endsWith('.tmp')), []);
+  assert.equal(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), '# Demo\nHello World\n');
+});
