@@ -1,0 +1,348 @@
+/*
+ * What a reply changed (src/changes-ui.js): the card under the reply and the review dialog with
+ * the diff. Added and removed lines use the green and red of the palette at low strength, so
+ * they read the same in light and dark themes.
+ */
+.changes-card {
+  margin-top: 6px;
+  border: 1px solid var(--sm-app-border);
+  border-radius: 8px;
+  background: var(--sm-app-surface);
+  overflow: hidden;
+  font-size: 12.5px;
+  white-space: normal;
+}
+.changes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--sm-app-border);
+  background: var(--sm-app-muted);
+}
+.changes-summary {
+  font-weight: 600;
+  color: var(--sm-text-strong);
+}
+.changes-actions {
+  display: flex;
+  gap: 4px;
+}
+.changes-list {
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+}
+.changes-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 6px 0 12px;
+}
+.changes-row + .changes-row {
+  border-top: 1px solid color-mix(in srgb, var(--sm-app-border) 60%, transparent);
+}
+.changes-kind {
+  flex-shrink: 0;
+  min-width: 44px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--sm-text-weak);
+}
+.changes-kind.is-created {
+  color: var(--sm-palette-green-8);
+}
+.changes-file {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--sm-text-strong);
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.changes-file:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.changes-file:disabled {
+  cursor: default;
+  color: var(--sm-text-medium);
+}
+.changes-row[data-status="undone"] .changes-file {
+  text-decoration: line-through;
+  color: var(--sm-text-weak);
+}
+.changes-counts {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--sm-font-code-family);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.changes-added {
+  color: var(--sm-palette-green-8);
+}
+.changes-removed {
+  color: var(--sm-palette-red-8);
+}
+.changes-zero {
+  color: var(--sm-text-weak);
+}
+.changes-action {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.changes-action:hover:not(:disabled) {
+  border-color: var(--sm-app-border);
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.changes-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.changes-state {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--sm-text-weak);
+}
+.changes-state.is-kept {
+  color: var(--sm-palette-green-8);
+}
+.changes-state.is-mixed {
+  color: var(--sm-color-text-warning-default);
+  cursor: help;
+}
+.changes-note {
+  margin: 0;
+  padding: 6px 12px 8px;
+  font-size: 11.5px;
+  color: var(--sm-text-weak);
+}
+.changes-file:focus-visible,
+.changes-action:focus-visible,
+.changes-dialog-file:focus-visible,
+.changes-diff:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
+}
+
+/* The review dialog: the reply's files on the left, the selected file's diff on the right. */
+#changes-dialog {
+  width: min(1040px, 94vw);
+  height: min(760px, 84vh);
+  margin: 7vh auto auto;
+  padding: 0;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-bg-modal);
+  color: var(--sm-text-strong);
+  box-shadow: var(--sm-shadow-popup-large);
+}
+#changes-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+#changes-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+.changes-subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.changes-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.changes-close:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.changes-close:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: 1px;
+}
+.changes-dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border-top: 1px solid var(--sm-app-border);
+  border-bottom: 1px solid var(--sm-app-border);
+}
+.changes-files {
+  flex: 0 0 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+  border-right: 1px solid var(--sm-app-border);
+}
+.changes-dialog-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.changes-dialog-file:hover:not(:disabled) {
+  background: var(--sm-app-surface-hover);
+}
+.changes-dialog-file.is-selected {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+  font-weight: 500;
+}
+.changes-dialog-file:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.changes-dialog-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+}
+.changes-dialog-file[data-status="undone"] .changes-dialog-name {
+  text-decoration: line-through;
+}
+.changes-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.changes-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--sm-app-border);
+}
+.changes-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.changes-view-head .changes-state {
+  margin-left: auto;
+}
+.changes-diff {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 12px;
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.changes-empty {
+  margin: 16px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--sm-text-weak);
+}
+.changes-diff .changes-note {
+  padding: 8px 14px 0;
+}
+.diff-hunk {
+  margin-top: 6px;
+  padding: 3px 14px;
+  background: var(--sm-app-muted);
+  color: var(--sm-text-weak);
+  font-size: 11px;
+}
+.diff-hunk:first-child {
+  margin-top: 0;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 46px 46px 18px minmax(0, 1fr);
+  padding-right: 14px;
+}
+.diff-num {
+  padding-right: 8px;
+  color: var(--sm-text-weak);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.diff-sign {
+  color: var(--sm-text-weak);
+  text-align: center;
+  user-select: none;
+}
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+.diff-line.is-add {
+  background: color-mix(in srgb, var(--sm-palette-green-8) 13%, transparent);
+}
+.diff-line.is-add .diff-sign {
+  color: var(--sm-palette-green-8);
+}
+.diff-line.is-del {
+  background: color-mix(in srgb, var(--sm-palette-red-8) 12%, transparent);
+}
+.diff-line.is-del .diff-sign {
+  color: var(--sm-palette-red-8);
+}
+.diff-meta {
+  font-style: italic;
+  color: var(--sm-text-weak);
+}
+.changes-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.changes-dialog-actions .changes-spacer {
+  flex: 1;
+}

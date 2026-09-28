@@ -138,3 +138,60 @@ test('an interrupted reply reaches the model as its own text plus a note from Sc
     { role: 'assistant', content: 'Plain answer.' },
   ]);
 });
+
+test('a reply\'s changes are kept bounded, summarised, and undone files reach the model as a note', async () => {
+  const { normalizeChanges, changesSummary, historyMessages } = await import('../src/domain.mjs');
+  const changes = normalizeChanges({
+    id: 'chat-task-1-2', folderName: 'kiro-app',
+    files: [
+      { path: 'src/a.js', kind: 'modified', added: 3, removed: 1, status: 'undone' },
+      { path: 'notes.md', kind: 'created', added: 2, removed: 0, status: 'kept' },
+      { path: 'src/b.js', kind: 'weird', added: -4, removed: 1.5, status: 'odd' },
+      { path: 'src/a.js', kind: 'modified', added: 9, removed: 9 },
+      { path: '' },
+      'junk',
+    ],
+  });
+  assert.deepEqual(changes, {
+    id: 'chat-task-1-2', folderName: 'kiro-app',
+    files: [
+      { path: 'src/a.js', kind: 'modified', added: 3, removed: 1, status: 'undone' },
+      { path: 'notes.md', kind: 'created', added: 2, removed: 0, status: 'kept' },
+      { path: 'src/b.js', kind: 'modified', added: 0, removed: 0, status: 'changed' },
+    ],
+  });
+  assert.equal(changesSummary(changes), '3 files changed · +5 \u22121 · 1 undone · 1 kept');
+  assert.equal(normalizeChanges({ id: 'x', files: [] }), null);
+  assert.equal(normalizeChanges({ id: 'bad\nid', files: [{ path: 'a' }] }), null);
+  assert.equal(changesSummary(null), '');
+  const turns = historyMessages([
+    { role: 'user', text: 'Fix it.' },
+    { role: 'assistant', text: 'Fixed a.js and wrote notes.', changes },
+    { role: 'user', text: 'Thanks. Now b.js?' },
+  ]);
+  assert.deepEqual(turns, [
+    { role: 'user', content: 'Fix it.' },
+    { role: 'assistant', content: 'Fixed a.js and wrote notes.' },
+    { role: 'user', content: '[Note from ScaleMax, the app: after that reply the user undid its changes to src/a.js, so this file is back as it was before it.]' },
+    { role: 'user', content: 'Thanks. Now b.js?' },
+  ]);
+  // Stopped and partly undone: one note says both.
+  const both = historyMessages([
+    { role: 'assistant', text: '', interrupted: 'stopped', steps: [{ type: 'tool', title: 'Edited src/a.js', ok: true }], changes },
+  ]);
+  assert.deepEqual(both, [{ role: 'user', content: '[Note from ScaleMax, the app: the user pressed Stop while you were writing your previous reply, so it ends where they stopped it. It had already done this: Edited src/a.js. Also, after that reply the user undid its changes to src/a.js, so this file is back as it was before it.]' }]);
+});
+
+test('a live reply keeps the latest changes, and a stopped one carries them', () => {
+  const reply = createReply({ taskId: 't1', requestId: R });
+  assert.equal(applyProgress(reply, { phase: 'changes', changes: { id: R, files: [] } }), null);
+  const change = applyProgress(reply, { phase: 'changes', changes: { id: R, folderName: 'app', files: [{ path: 'a.js', kind: 'modified', added: 1, removed: 1 }] } });
+  assert.deepEqual(change, { kind: 'changes' });
+  const partial = partialReply(reply);
+  assert.deepEqual(partial.changes, { id: R, folderName: 'app', files: [{ path: 'a.js', kind: 'modified', added: 1, removed: 1, status: 'changed' }] });
+  assert.equal(partial.text, '');
+  // Every file changed back: the changes are gone, and with nothing else there is no partial reply.
+  assert.deepEqual(applyProgress(reply, { phase: 'changes', changes: null }), { kind: 'changes' });
+  assert.equal(reply.changes, null);
+  assert.equal(partialReply(reply), null);
+});

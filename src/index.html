@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="workspace.css" />
   <link rel="stylesheet" href="markdown.css" />
   <link rel="stylesheet" href="reply.css" />
+  <link rel="stylesheet" href="changes.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -745,6 +746,30 @@
         <button id="approval-all" class="button secondary" type="button">Allow all in this reply</button>
         <button id="approval-once" class="button primary" type="button">Allow</button>
       </div>
+    </div>
+  </dialog>
+
+  <!-- What a reply changed: its files on the left, the selected file's diff on the right (src/changes-ui.js). -->
+  <dialog id="changes-dialog" aria-labelledby="changes-title" aria-describedby="changes-subtitle">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Review</span><h2 id="changes-title">Changes of this reply</h2><p id="changes-subtitle" class="changes-subtitle"></p></div>
+      <button id="changes-close" class="changes-close" type="button" aria-label="Close the review">×</button>
+    </div>
+    <div class="changes-dialog-body">
+      <nav id="changes-files" class="changes-files" aria-label="Files this reply changed"></nav>
+      <section class="changes-view" aria-labelledby="changes-path">
+        <div class="changes-view-head">
+          <span id="changes-path" class="changes-path"></span>
+          <span id="changes-state" class="changes-state" role="status" aria-live="polite"></span>
+        </div>
+        <div id="changes-diff" class="changes-diff" tabindex="0" role="region" aria-label="Changed lines"></div>
+      </section>
+    </div>
+    <div class="changes-dialog-actions">
+      <button id="changes-open" class="button secondary" type="button">Open in editor</button>
+      <span class="changes-spacer"></span>
+      <button id="changes-undo" class="button secondary" type="button">Undo this file</button>
+      <button id="changes-keep" class="button primary" type="button">Keep</button>
     </div>
   </dialog>
 

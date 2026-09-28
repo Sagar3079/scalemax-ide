@@ -396,21 +396,84 @@ export function historyMessages(messages) {
   const turns = [];
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isRecord(message) || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string') continue;
-    if (message.role !== 'assistant' || !INTERRUPTIONS.includes(message.interrupted)) {
+    const interrupted = message.role === 'assistant' && INTERRUPTIONS.includes(message.interrupted);
+    // Files of this reply the user undid afterwards: the model must not assume its edits exist.
+    const undone = message.role === 'assistant'
+      ? (normalizeChanges(message.changes)?.files || []).filter((file) => file.status === 'undone').map((file) => file.path) : [];
+    if (!interrupted && !undone.length) {
       turns.push({ role: message.role, content: message.text });
       continue;
     }
-    if (message.text.trim()) turns.push({ role: 'assistant', content: message.text });
-    const done = normalizeSteps(message.steps).filter((step) => step.type === 'tool')
-      .map((step) => `${step.title}${step.stopped ? ' (stopped)' : step.ok ? '' : ' (failed)'}`);
-    const steps = done.length
-      ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
-    const what = message.interrupted === 'stopped'
-      ? 'the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.'
-      : 'your previous reply broke off because of a connection or provider error, not because of you or the user.';
-    turns.push({ role: 'user', content: `[Note from ScaleMax, the app: ${what}${steps}]` });
+    if (message.text.trim() || !interrupted) turns.push({ role: 'assistant', content: message.text });
+    const notes = [];
+    if (interrupted) {
+      const done = normalizeSteps(message.steps).filter((step) => step.type === 'tool')
+        .map((step) => `${step.title}${step.stopped ? ' (stopped)' : step.ok ? '' : ' (failed)'}`);
+      const steps = done.length
+        ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
+      notes.push(message.interrupted === 'stopped'
+        ? `the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.${steps}`
+        : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
+    }
+    if (undone.length) {
+      const names = undone.slice(0, MAX_NOTE_STEPS).join(', ') + (undone.length > MAX_NOTE_STEPS ? ', …' : '');
+      notes.push(`after that reply the user undid its changes to ${names}, so ${undone.length === 1 ? 'this file is' : 'these files are'} back as ${undone.length === 1 ? 'it was' : 'they were'} before it.`);
+    }
+    turns.push({ role: 'user', content: `[Note from ScaleMax, the app: ${notes.join(' Also, ')}]` });
   }
   return turns;
+}
+
+// What a reply changed in its folder (lib/checkpoints.cjs), as kept with the reply: the reply's
+// request id, then one entry per file with its status (changed, kept or undone).
+export const CHANGE_STATUSES = Object.freeze(['changed', 'kept', 'undone']);
+const MAX_CHANGED_FILES = 500;
+/** The changes of a reply as they are kept, or null when there are none (or they are unusable). */
+export function normalizeChanges(value) {
+  if (!isRecord(value) || typeof value.id !== 'string' || !value.id || value.id.length > 128
+    || /[\x00-\x1f\x7f]/.test(value.id) || !Array.isArray(value.files)) return null;
+  const files = [];
+  const seen = new Set();
+  for (const file of value.files) {
+    if (files.length >= MAX_CHANGED_FILES) break;
+    if (!isRecord(file) || typeof file.path !== 'string' || !file.path || file.path.length > 1024 || seen.has(file.path)) continue;
+    seen.add(file.path);
+    const count = (number) => (Number.isSafeInteger(number) && number >= 0 ? number : 0);
+    const entry = {
+      path: file.path,
+      kind: file.kind === 'created' ? 'created' : 'modified',
+      added: count(file.added),
+      removed: count(file.removed),
+      status: CHANGE_STATUSES.includes(file.status) ? file.status : 'changed',
+    };
+    if (file.untracked === true) entry.untracked = true;
+    // Also changed by someone else while the reply ran (not undone here).
+    if (file.mixed === true) entry.mixed = true;
+    // Counted as replaced whole (too different to compare line by line).
+    if (file.approximate === true) entry.approximate = true;
+    files.push(entry);
+  }
+  if (!files.length) return null;
+  const folder = typeof value.folderName === 'string' ? value.folderName.slice(0, 255) : '';
+  // Files past the list's limit, counted only.
+  const omitted = Number.isSafeInteger(value.omitted) && value.omitted > 0 ? value.omitted : 0;
+  return { id: value.id, ...(folder ? { folderName: folder } : {}), files, ...(omitted ? { omitted } : {}) };
+}
+/** "2 files changed · +12 −4" (with "· 1 undone · 1 kept" once the user decided). */
+export function changesSummary(value) {
+  const changes = normalizeChanges(value);
+  if (!changes) return '';
+  const { files } = changes;
+  const added = files.reduce((total, file) => total + file.added, 0);
+  const removed = files.reduce((total, file) => total + file.removed, 0);
+  const parts = [`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`];
+  const counts = [added ? `+${added}` : '', removed ? `\u2212${removed}` : ''].filter(Boolean).join(' ');
+  if (counts) parts.push(counts);
+  for (const status of ['undone', 'kept']) {
+    const number = files.filter((file) => file.status === status).length;
+    if (number) parts.push(`${number} ${status}`);
+  }
+  return parts.join(' · ');
 }
 
 /** "4 steps · Read 3 files · Ran a command" for the folded steps above an answer. */

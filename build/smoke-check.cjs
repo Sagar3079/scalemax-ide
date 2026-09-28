@@ -24,6 +24,19 @@ function stubReply(body) {
   const echo = tools.find((tool) => /_echo$/.test(tool?.function?.name || ''));
   const list = tools.find((tool) => tool?.function?.name === 'workspace_list');
   const run = tools.find((tool) => tool?.function?.name === 'workspace_run');
+  const write = tools.find((tool) => tool?.function?.name === 'workspace_write');
+  const edit = tools.find((tool) => tool?.function?.name === 'workspace_edit');
+  // Creates one file and edits another in one round (the reply's changes, for review and undo).
+  if (write && edit && typeof last.content === 'string' && last.content.includes('make changes')) {
+    return {
+      role: 'assistant',
+      content: 'Changing two files.',
+      tool_calls: [
+        { id: 'call_smoke_write', type: 'function', function: { name: 'workspace_write', arguments: JSON.stringify({ path: 'made/new.md', content: 'fresh file\n' }) } },
+        { id: 'call_smoke_edit', type: 'function', function: { name: 'workspace_edit', arguments: JSON.stringify({ path: 'b-note.txt', old_text: 'line two', new_text: 'line 2' }) } },
+      ],
+    };
+  }
   if (typeof last.content === 'string' && last.content.includes('name your tools')) {
     return { role: 'assistant', content: `tools: ${tools.map((tool) => tool.function.name).join(',')}` };
   }
@@ -250,6 +263,7 @@ async function run(win) {
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
         mediaMethods: ['generate','cancel','info','pickImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
         approvalMethods: ['onRequest','onClosed','respond'].filter((m) => typeof api.approvals?.[m] === 'function'),
+        checkpointMethods: ['get','diff','undo','keep','remove'].filter((m) => typeof api.checkpoints?.[m] === 'function'),
         composerControls: ['#attach-btn svg', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
           .every((selector) => Boolean(document.querySelector(selector))),
         attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
@@ -282,6 +296,7 @@ async function run(win) {
   // Two more folders for replies that run at the same time.
   const parDirA = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-a-'));
   const parDirB = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-b-'));
+  fs.writeFileSync(path.join(parDirB, 'b-note.txt'), 'line one\nline two\n');
   try {
     e2e = await win.webContents.executeJavaScript(`(async () => {
       const api = window.scalemaxAPI;
@@ -437,12 +452,57 @@ async function run(win) {
       const lastBubble = bubbles[bubbles.length - 1];
       const uiStepsSummary = lastBubble && lastBubble.querySelector('.msg-steps-summary') ? lastBubble.querySelector('.msg-steps-summary').textContent : '';
       const uiStepOutput = lastBubble && lastBubble.querySelector('.msg-steps .reply-step-output') ? lastBubble.querySelector('.msg-steps .reply-step-output').textContent : '';
+      // Changes: the reply creates a file and edits another; the card under it offers review,
+      // undo and keep, and undo never overwrites later work.
+      await send('Please make changes.');
+      await until(() => Boolean(document.querySelector('#tool-approval-dialog')?.open), 4000);
+      document.querySelector('#approval-all')?.click();
+      await until(() => lastText(uiTaskB).startsWith('tool said:'), 6000);
+      const changesCard = () => {
+        const cards = document.querySelectorAll('#chat-messages .changes-card');
+        return cards.length ? cards[cards.length - 1] : null;
+      };
+      const changesRow = (file) => (changesCard() ? changesCard().querySelector('.changes-row[data-path="' + file + '"]') : null);
+      const rowButton = (file, label) => [...(changesRow(file) ? changesRow(file).querySelectorAll('.changes-action') : [])].find((node) => node.textContent === label);
+      const cardSummary = changesCard() ? changesCard().querySelector('.changes-summary').textContent : '';
+      const cardRows = changesCard() ? [...changesCard().querySelectorAll('.changes-row')].map((row) => row.dataset.path + ':' + row.querySelector('.changes-kind').textContent) : [];
+      if (changesRow('b-note.txt')) changesRow('b-note.txt').querySelector('.changes-file').click();
+      await until(() => Boolean(document.querySelector('#changes-dialog')?.open) && document.querySelectorAll('#changes-diff .diff-line').length > 0
+        && !document.querySelector('#changes-undo').disabled, 4000);
+      const reviewLines = [...document.querySelectorAll('#changes-diff .diff-line')]
+        .map((row) => row.querySelector('.diff-sign').textContent + row.querySelector('.diff-text').textContent.replace(/^(Added|Removed): /, ''));
+      document.querySelector('#changes-undo').click();
+      await until(() => Boolean(changesRow('b-note.txt') && changesRow('b-note.txt').dataset.status === 'undone'), 4000);
+      const reviewStateAfterUndo = await until(() => (document.querySelector('#changes-state')?.textContent || '') === 'Undone.', 3000);
+      const afterUndo = await api.workspace.read('b-note.txt');
+      document.querySelector('#changes-close').click();
+      // The new file is changed by hand: its undo is refused and the hand edit stays.
+      const fresh = await api.workspace.read('made/new.md');
+      await api.workspace.write({ path: 'made/new.md', content: 'edited by hand\\n', revision: fresh.data.revision });
+      if (rowButton('made/new.md', 'Undo')) rowButton('made/new.md', 'Undo').click();
+      await until(() => /changed since this reply/.test(document.querySelector('#toast')?.textContent || ''), 4000);
+      const refusedToast = document.querySelector('#toast')?.textContent || '';
+      const newAfterRefusal = await api.workspace.read('made/new.md');
+      if (rowButton('made/new.md', 'Keep')) rowButton('made/new.md', 'Keep').click();
+      await until(() => Boolean(changesRow('made/new.md') && changesRow('made/new.md').dataset.status === 'kept'), 4000);
+      const storedChanges = (() => {
+        const task = app.tasks.find((item) => item.id === uiTaskB);
+        const message = task ? task.messages.filter((item) => item.changes).pop() : null;
+        return message ? message.changes.files.map((file) => file.path + ':' + file.status).join(',') : '';
+      })();
       // Stop keeps what was written so far.
       await send('hold stream please');
       await until(() => {
         const node = document.querySelector('#chat-messages .live-reply .live-text');
         return node && node.textContent.length > 6;
       }, 3000);
+      // While a reply works in this folder, undo waits (it could change files the reply uses).
+      const changesId = (() => {
+        const task = app.tasks.find((item) => item.id === uiTaskB);
+        const message = task ? task.messages.filter((item) => item.changes).pop() : null;
+        return message ? message.changes.id : 'none';
+      })();
+      const busyUndo = await api.checkpoints.undo({ id: changesId, paths: ['b-note.txt'] });
       document.querySelector('#cancel-btn')?.click();
       await until(() => !app.replies.has(uiTaskB), 4000);
       const stoppedTask = app.tasks.find((item) => item.id === uiTaskB);
@@ -535,6 +595,15 @@ async function run(win) {
         uiTaskAFolder: uiTaskAFolder ? uiTaskAFolder.path : null,
         uiLiveOutput,
         uiApprovalSummary,
+        cardSummary,
+        cardRows,
+        reviewLines,
+        reviewStateAfterUndo,
+        afterUndo: afterUndo && afterUndo.ok ? afterUndo.data.content : (afterUndo && afterUndo.error ? afterUndo.error.message : null),
+        refusedToast,
+        newAfterRefusal: newAfterRefusal && newAfterRefusal.ok ? newAfterRefusal.data.content : null,
+        storedChanges,
+        busyUndoCode: busyUndo && !busyUndo.ok ? busyUndo.error.code : (busyUndo && busyUndo.ok ? 'undone' : null),
         uiRunText,
         uiStepsSummary,
         uiStepOutput,
@@ -689,12 +758,19 @@ async function run(win) {
         const countId = 'live-count-' + Date.now();
         const phases = [];
         const offCount = api.provider.onProgress((event) => { if (event && event.requestId === countId) phases.push(event.phase); });
+        const approvalsSeen = [];
+        const offApprovals = api.approvals.onRequest((request) => approvalsSeen.push(request.toolName));
+        const permissionNow = (await api.store.get('settings') || {}).permission || '(none)';
+        // Coding mode has no computer tools, and the prompt asks for no tools: the check must
+        // never touch the clipboard or the web of the machine it runs on.
         const counted = await api.provider.send({
           requestId: countId,
-          messages: [{ role: 'user', content: 'Count from 1 to 80 in words (one, two, ...), separated by commas, then write the code '
+          mode: 'coding',
+          messages: [{ role: 'user', content: 'Without using any tools, write the answer directly in your reply: count from 1 to 80 in words (one, two, ...), separated by commas, then write the code '
             + countId + '. Nothing else.' }],
         });
         offCount();
+        offApprovals();
         await api.provider.clear();
         const meta = await api.provider.get();
         return {
@@ -705,6 +781,10 @@ async function run(win) {
           enabledCount: saved.data.enabledModels ? saved.data.enabledModels.length : 0,
           reply: sent && sent.ok ? sent.data.text : null,
           countText: counted && counted.ok ? counted.data.text.slice(-160) : (counted && counted.error ? counted.error.message : null),
+          countTools: counted && counted.ok ? (counted.data.toolCalls || []).map((call) => call.server + '.' + call.tool + ':' + call.ok + ':' + String(call.preview).slice(0, 80)) : null,
+          countHasEighty: Boolean(counted && counted.ok && /eighty/i.test(counted.data.text)),
+          approvalsSeen,
+          permissionNow,
           countDeltas: phases.filter((phase) => phase === 'delta' || phase === 'text-set').length,
           sendError: sent && !sent.ok ? sent.error.message : null,
           cleared: meta && meta.ok ? meta.data.configured : null,
@@ -721,6 +801,7 @@ async function run(win) {
     providerMethods: probe.providerMethods.length === 15,
     mediaApi: probe.mediaMethods.length === 6,
     approvalApi: probe.approvalMethods.length === 3,
+    checkpointApi: probe.checkpointMethods.length === 5,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',
     workspaceApi: probe.workspaceMethods.length === 9,
@@ -785,7 +866,18 @@ async function run(win) {
       && e2e.stoppedText.length < SLOW_TEXT.length && SLOW_TEXT.startsWith(e2e.stoppedText) && /Stopped/.test(e2e.stoppedNotice)
       && e2e.stoppedInterrupted === 'stopped'),
     // The next request carries the stopped reply's text and a note from ScaleMax after it.
-    stoppedHistoryNote: Boolean(e2e && e2e.historyText === 'history: user,assistant,user,assistant,user,assistant,user(note),user'),
+    // The next request carries notes after the reply whose file was undone and the stopped one.
+    stoppedHistoryNote: Boolean(e2e && e2e.historyText === 'history: user,assistant,user,assistant,user,assistant,user(note),user,assistant,user(note),user'),
+    // A reply's changes: a card lists them, the review shows the diff, undo puts a file back,
+    // an undo after a hand edit is refused, and keep ends the choice; all kept with the task.
+    changesCard: Boolean(e2e && e2e.cardSummary === '2 files changed · +2 \u22121'
+      && Array.isArray(e2e.cardRows) && e2e.cardRows.join(',') === 'made/new.md:New,b-note.txt:Edited'),
+    changesReview: Boolean(e2e && Array.isArray(e2e.reviewLines) && e2e.reviewLines.includes('line one')
+      && e2e.reviewLines.includes('\u2212line two') && e2e.reviewLines.includes('+line 2')),
+    changesUndo: Boolean(e2e && e2e.afterUndo === 'line one\nline two\n' && e2e.reviewStateAfterUndo === true),
+    changesUndoRefused: Boolean(e2e && /changed since this reply/.test(e2e.refusedToast || '') && e2e.newAfterRefusal === 'edited by hand\n'),
+    changesKept: Boolean(e2e && e2e.storedChanges === 'made/new.md:kept,b-note.txt:undone'),
+    undoWaitsForReplies: Boolean(e2e && e2e.busyUndoCode === 'FOLDER_BUSY'),
     // A reply that fails part way keeps its text, with the provider's reason under it.
     failedKeepsPartial: Boolean(e2e && e2e.failedText === 'Partial answer before the failure.' && /stub overloaded/.test(e2e.failedNotice)),
     // Stop that reaches main before the tool loop started still stops the reply.
@@ -826,7 +918,7 @@ async function run(win) {
       liveModelCount: Boolean(live && live.modelCount > 0),
       liveConfigured: Boolean(live && live.configured),
       liveChatReply: Boolean(live && live.reply),
-      liveStreaming: Boolean(live && live.countDeltas >= 3 && /eighty/i.test(live.countText || '')),
+      liveStreaming: Boolean(live && live.countDeltas >= 3 && live.countHasEighty),
       liveCleared: Boolean(live && live.cleared === false),
     } : {}),
   } : { probeFailed: false };

@@ -7,7 +7,7 @@
  * Finished replies keep their steps, folded above the answer (renderMessageSteps).
  */
 import { renderMarkdown } from './markdown.js';
-import { toolActivity, normalizeSteps, stepSummary } from './domain.mjs';
+import { toolActivity, normalizeSteps, stepSummary, normalizeChanges } from './domain.mjs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // A running command's output kept on screen (the end of it).
@@ -138,6 +138,18 @@ export function applyProgress(reply, event) {
       reply.phase = 'working';
       reply.activity = null;
       return { kind: 'step', item: step };
+    }
+    case 'changes': {
+      // The files the reply changed so far (kept for review and undo, also when it is stopped);
+      // null when it changed every one of them back.
+      if (event.changes === null) {
+        reply.changes = null;
+        return { kind: 'changes' };
+      }
+      const changes = normalizeChanges(event.changes);
+      if (!changes) return null;
+      reply.changes = changes;
+      return { kind: 'changes' };
     }
     default:
       return null;
@@ -325,8 +337,9 @@ export function partialReply(reply) {
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
     })));
   const reasoning = replyReasoning(reply);
-  if (!text && !steps.length && !reasoning) return null;
-  return { text, steps, reasoning };
+  const changes = reply.changes || null;
+  if (!text && !steps.length && !reasoning && !changes) return null;
+  return { text, steps, reasoning, changes };
 }
 
 /** A finished reply's steps, folded above its answer ("4 steps · Read 3 files · Ran a command"). */

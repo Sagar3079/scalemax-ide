@@ -11,6 +11,7 @@ const { createStore } = require('./lib/state.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createProgressForwarder } = require('./lib/progress.cjs');
+const { createCheckpoints, validId: validCheckpointId } = require('./lib/checkpoints.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
@@ -280,19 +281,21 @@ const chatSessions = new Set();
 // Chat requests in progress, by request id: whether Stop came before the tool loop started, and
 // the folder the request works in (named in its approval prompts).
 const chatRequests = new Map();
+/** Refuses a folder the user never opened in ScaleMax (the open one or a recent one). */
+function requireOpenedFolder(folder, what = 'This task works in') {
+  if (typeof folder !== 'string' || !path.isAbsolute(folder) || folder.length > 4096) {
+    throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
+  }
+  if (workspaceTools.folder()?.path === folder || readFolders().recent.includes(folder)) return;
+  const name = path.basename(folder) || folder;
+  throw bridgeError('FOLDER_NOT_OPENED', `${what} "${name}", which has not been opened in ScaleMax. Open it with the folder button first.`);
+}
 async function openChatSession(input) {
   const expected = input && typeof input === 'object' && !Array.isArray(input) ? input.folder : undefined;
   await restoreFolder();
   let root = null;
   if (expected !== undefined && expected !== null) {
-    if (typeof expected !== 'string' || !path.isAbsolute(expected) || expected.length > 4096) {
-      throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
-    }
-    const open = workspaceTools.folder();
-    if (open?.path !== expected && !readFolders().recent.includes(expected)) {
-      const name = path.basename(expected) || expected;
-      throw bridgeError('FOLDER_NOT_OPENED', `This task works in "${name}", which has not been opened in ScaleMax. Open it with the folder button first.`);
-    }
+    requireOpenedFolder(expected);
     root = expected;
   } else {
     root = workspaceTools.folder()?.path || null;
@@ -312,10 +315,33 @@ async function openChatSession(input) {
   }
   chatSessions.add(session);
   const getSession = () => session;
-  const tools = createWorkspaceTools({ getWorkspace: getSession });
-  const families = { workspace: tools, web: webTools, computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }) };
-  return {
+  // What a task's reply changes is recorded as it happens (lib/checkpoints.cjs), so the window
+  // can show it for review and undo, also when the reply is stopped part way. Requests without
+  // a task folder (automations) have no window to show it in and are not recorded.
+  const requestId = typeof input?.requestId === 'string' ? input.requestId : '';
+  const recorder = root === expected && session.current()
+    ? checkpoints.recorder({ requestId, folder: session.current() })
+    : null;
+  if (recorder) recordingIds.add(requestId);
+  const chat = {
     folder: session.current(),
+    // Hears the reply's changes after each one ({ id, folderName, files }, or null when all of
+    // them were changed back).
+    onChanges: null,
+    changes: () => recorder?.summary() || null,
+  };
+  const onChange = recorder ? (change) => {
+    try {
+      recorder.record(change);
+    } catch (error) {
+      console.error('[ScaleMax] A change could not be recorded for undo:', error?.code || 'error');
+      return;
+    }
+    if (typeof chat.onChanges === 'function') chat.onChanges(recorder.summary());
+  } : null;
+  const tools = createWorkspaceTools({ getWorkspace: getSession, onChange });
+  const families = { workspace: tools, web: webTools, computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }) };
+  return Object.assign(chat, {
     tools,
     notes: createProjectNotes({ getWorkspace: getSession }),
     source: combineToolSources({
@@ -327,7 +353,70 @@ async function openChatSession(input) {
       chatSessions.delete(session);
       session.dispose();
     },
-  };
+    // After dispose: a save that was finishing when the reply stopped either completes and is
+    // recorded, or stops before it changes the file. Then the recording is complete.
+    settle: async () => {
+      let timer = null;
+      await Promise.race([session.idle(), new Promise((resolve) => { timer = setTimeout(resolve, 3000); })]);
+      clearTimeout(timer);
+      // The tool records the change right after the save returns.
+      await new Promise((resolve) => setImmediate(resolve));
+      recordingIds.delete(requestId);
+    },
+  });
+}
+// Replies whose changes are still being recorded: their checkpoints cannot be undone or kept yet.
+const recordingIds = new Set();
+
+// ---------------------------------------------------------------------------
+// Checkpoints (lib/checkpoints.cjs): what every reply changed, for review and undo in the window.
+// ---------------------------------------------------------------------------
+const checkpoints = createCheckpoints({ dir: path.join(app.getPath('userData'), 'checkpoints') });
+/** Runs `task` with a workspace session on the folder a checkpoint belongs to. */
+async function withCheckpointFolder(id, task) {
+  const folder = checkpoints.folderOf(id);
+  await restoreFolder();
+  requireOpenedFolder(folder.path, 'These changes are in');
+  const session = createWorkspace({ approve: async () => true, getPermission: () => 'ask' });
+  chatSessions.add(session);
+  try {
+    await session.select(folder.path);
+    return await task(session, folder);
+  } finally {
+    chatSessions.delete(session);
+    session.dispose();
+  }
+}
+// Undo and keep change a reply's record: never while that reply still records, and an undo never
+// while any reply works in the same folder (it may be reading or changing those files).
+function requireSettled(id, folderPath = null) {
+  if (recordingIds.has(id)) throw bridgeError('REPLY_RUNNING', 'This reply is still working. Wait for it to finish, or stop it first.');
+  if (folderPath && [...chatRequests.values()].some((request) => request.folderPath === folderPath)) {
+    throw bridgeError('FOLDER_BUSY', 'A reply is working in this folder. Wait for it to finish, or stop it, then undo.');
+  }
+}
+// Operations on one checkpoint run one after another (two quick clicks never interleave).
+const checkpointQueues = new Map();
+function queueCheckpoint(id, task) {
+  const previous = checkpointQueues.get(id) || Promise.resolve();
+  const next = previous.catch(() => {}).then(task);
+  const tail = next.catch(() => {});
+  checkpointQueues.set(id, tail);
+  void tail.then(() => { if (checkpointQueues.get(id) === tail) checkpointQueues.delete(id); });
+  return next;
+}
+function checkpointId(input) {
+  const id = input && typeof input === 'object' ? input.id : undefined;
+  if (!validCheckpointId(id)) throw bridgeError('INVALID_CHECKPOINT', 'That list of changes is not valid.');
+  return id;
+}
+function checkpointPaths(input) {
+  const paths = input && typeof input === 'object' ? input.paths : undefined;
+  if (paths === undefined || paths === null) return null;
+  if (!Array.isArray(paths) || paths.length > 500 || paths.some((item) => typeof item !== 'string' || item.length > 1024)) {
+    throw bridgeError('INVALID_CHECKPOINT', 'Choose the changed files by their project paths.');
+  }
+  return paths;
 }
 
 function projectNotesEnabled() {
@@ -564,7 +653,7 @@ const providerChannels = {
     // Known from the first moment, so Stop works while the folder session and the project
     // context are still being prepared (the tool loop only knows requests it already runs).
     const requestId = typeof input?.requestId === 'string' ? input.requestId : '';
-    const tracked = { stopped: false, folderName: '' };
+    const tracked = { stopped: false, folderName: '', folderPath: '' };
     const owned = Boolean(requestId) && !chatRequests.has(requestId);
     if (owned) chatRequests.set(requestId, tracked);
     const checkStopped = () => {
@@ -577,6 +666,7 @@ const providerChannels = {
       chat = await openChatSession(input);
       checkStopped();
       tracked.folderName = chat.folder?.name || '';
+      tracked.folderPath = chat.folder?.path || '';
       // Working or Coding: the mode decides the working agreement, which tools are offered and
       // how many tool rounds a reply may take.
       const mode = normalizeMode(input?.mode);
@@ -590,6 +680,9 @@ const providerChannels = {
         },
         restore: streamingRepair(prepared.input, folderName),
       });
+      // The files changed so far, after every change: a reply that is stopped or fails still
+      // shows what it changed, for review and undo.
+      chat.onChanges = (changes) => forward.push({ requestId, phase: 'changes', changes });
       let result;
       try {
         // Checked in the same turn as the loop starts, so no Stop falls in between.
@@ -603,11 +696,22 @@ const providerChannels = {
           onProgress: forward.push,
         });
       } finally {
+        chat.onChanges = null;
         forward.close();
       }
-      return prepared.notes?.created ? { ...result, projectNotes: { created: true, path: prepared.notes.path } } : result;
+      const changes = chat.changes();
+      return {
+        ...result,
+        ...(prepared.notes?.created ? { projectNotes: { created: true, path: prepared.notes.path } } : {}),
+        ...(changes ? { changes } : {}),
+      };
     } finally {
-      chat?.dispose();
+      if (chat) {
+        // Commands stop at once; a save that was finishing is waited for, so the reply's list
+        // of changes is complete when the window asks for it.
+        chat.dispose();
+        await chat.settle();
+      }
       if (owned && chatRequests.get(requestId) === tracked) chatRequests.delete(requestId);
     }
   },
@@ -706,6 +810,50 @@ ipcMain.handle('tool:approval-respond', wrap((event, input) => {
   entry.finish(decision, false);
   return { accepted: true };
 }, { code: 'APPROVAL_ERROR', message: 'Approval could not be recorded.' }));
+
+// ---------------------------------------------------------------------------
+// Checkpoint IPC: a reply's changes as a summary and per-file diffs, undo and keep. File
+// contents never cross the bridge, only diff lines of the file being reviewed.
+// ---------------------------------------------------------------------------
+const CHECKPOINT_FALLBACK = { code: 'CHECKPOINT_ERROR', message: 'The changes could not be handled.' };
+const checkpointChannels = {
+  'checkpoint:get': (_event, input) => checkpoints.summary(checkpointId(input)),
+  'checkpoint:diff': async (_event, input) => {
+    const id = checkpointId(input);
+    const file = typeof input?.path === 'string' ? input.path : '';
+    if (!file || file.length > 1024) throw bridgeError('INVALID_CHECKPOINT', 'Choose a changed file.');
+    // How the file is now needs its folder; without it the diff still shows.
+    try {
+      return await withCheckpointFolder(id, (session) => checkpoints.diff(id, file, { workspace: session }));
+    } catch (error) {
+      if (['NO_CHECKPOINT', 'NOT_FOUND', 'INVALID_CHECKPOINT'].includes(error?.code)) throw error;
+      return checkpoints.diff(id, file);
+    }
+  },
+  'checkpoint:undo': (_event, input) => {
+    const id = checkpointId(input);
+    const paths = checkpointPaths(input);
+    return queueCheckpoint(id, () => withCheckpointFolder(id, (session, folder) => {
+      requireSettled(id, folder.path);
+      return checkpoints.undo(id, paths, { workspace: session });
+    }));
+  },
+  'checkpoint:keep': (_event, input) => {
+    const id = checkpointId(input);
+    const paths = checkpointPaths(input);
+    return queueCheckpoint(id, () => {
+      requireSettled(id);
+      return checkpoints.keep(id, paths);
+    });
+  },
+  'checkpoint:remove': (_event, input) => {
+    const ids = Array.isArray(input?.ids) ? input.ids.filter((id) => validCheckpointId(id)).slice(0, 1000) : [];
+    return checkpoints.remove(ids);
+  },
+};
+for (const [channel, run] of Object.entries(checkpointChannels)) {
+  ipcMain.handle(channel, wrap(run, CHECKPOINT_FALLBACK));
+}
 
 // ---------------------------------------------------------------------------
 // Dialog + workspace IPC (native pickers, project files, Git status)
@@ -881,6 +1029,14 @@ app.whenReady().then(() => {
   applyBranding({ app, Menu, shell });
   // Reopen the folder from the last run (the renderer waits for this through workspace:current).
   void restoreFolder();
+  // Changes of replies are kept for 30 days (at most 500 replies).
+  setTimeout(() => {
+    try {
+      checkpoints.prune();
+    } catch (error) {
+      console.error('[ScaleMax] Old reply changes could not be cleaned up:', error.message);
+    }
+  }, 5000).unref?.();
   protocol.handle('scalemax-media', serveMedia);
   // safeStorage is available for encrypting secrets at rest in future revisions.
   if (typeof safeStorage?.isEncryptionAvailable === 'function') {

@@ -3,11 +3,12 @@ import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
 import {
   nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
   toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
-  toolCallGroups, normalizeSteps, historyMessages, INTERRUPTIONS, DEFAULT_SETTINGS,
+  toolCallGroups, normalizeSteps, historyMessages, INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps,
 } from './reply-ui.js';
+import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -225,6 +226,7 @@ const app = {
     bindMcpUi(this);
     bindComposerUi(this);
     bindMediaUi(this);
+    bindChangesUi(this);
     this.bindProfiles();
     await this.restoreWorkspace();
     await this.settleStartFolder();
@@ -310,6 +312,8 @@ const app = {
         const steps = message.role === 'assistant' ? normalizeSteps(message.steps) : [];
         if (steps.length) normalized.steps = steps;
         if (message.role === 'assistant' && INTERRUPTIONS.includes(message.interrupted)) normalized.interrupted = message.interrupted;
+        const changes = message.role === 'assistant' ? normalizeChanges(message.changes) : null;
+        if (changes) normalized.changes = changes;
         // "Thought for Ns" and any thinking text stay with the answer across restarts.
         if (message.role === 'assistant' && Number.isSafeInteger(message.thinkingMs) && message.thinkingMs >= 0) {
           normalized.thinkingMs = message.thinkingMs;
@@ -1611,6 +1615,11 @@ const app = {
       }
       if (message.mediaRequest) bubble.append(element('span', 'msg-media-request', message.mediaRequest));
       if (message.media?.length) bubble.append(renderMediaItems(this, message.media));
+      // The files the reply changed, for review, undo and keep (src/changes-ui.js).
+      if (message.role === 'assistant' && message.changes) {
+        const card = renderChangesCard(this, message, task.id);
+        if (card) bubble.append(card);
+      }
       if (message.notice) {
         const notice = element('span', 'msg-notice', message.notice);
         notice.setAttribute('role', 'note');
@@ -1724,6 +1733,9 @@ const app = {
     if (steps.length) message.steps = steps;
     // A reply that was stopped or failed part way (the next request tells the model so).
     if (role === 'assistant' && INTERRUPTIONS.includes(extra.interrupted)) message.interrupted = extra.interrupted;
+    // The files the reply changed in its folder (lib/checkpoints.cjs keeps their versions).
+    const changes = role === 'assistant' ? normalizeChanges(extra.changes) : null;
+    if (changes) message.changes = changes;
     if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
     if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
     const media = normalizeMediaItems(extra.media);
@@ -1851,13 +1863,25 @@ const app = {
       // Stopped or failed part way: what was written and done so far stays in the task.
       const cancelled = result?.error?.code === 'CANCELLED';
       const reason = result?.error?.message || 'Provider request failed';
-      const partial = partialReply(reply);
+      let partial = partialReply(reply);
+      // A write that was finishing when the reply stopped is recorded after the last progress
+      // event: main's list of the reply's changes is the complete one (main answers only after
+      // that write settled).
+      if (live.sent) {
+        const recorded = await window.scalemaxAPI?.checkpoints?.get?.({ id: requestId }).catch(() => null);
+        if (recorded?.ok) {
+          if (!partial && recorded.data) partial = { text: '', steps: [], reasoning: '', changes: null };
+          if (partial) partial.changes = recorded.data || null;
+        }
+        if (partial && !partial.text && !partial.steps.length && !partial.reasoning && !partial.changes) partial = null;
+      }
       if (partial) {
         const notice = cancelled
           ? (partial.text ? 'Stopped before the reply was finished.' : 'Stopped before an answer was written.')
           : `The reply ended early: ${reason}`;
         this.appendMessage('assistant', partial.text, taskId, {
           steps: partial.steps, reasoning: partial.reasoning, interrupted: cancelled ? 'stopped' : 'failed', notice,
+          changes: partial.changes,
         });
         // The notice under the reply says why; a task in the background also gets a toast.
         if (!cancelled && taskId !== this.currentTaskId) say(reason);
@@ -1865,8 +1889,8 @@ const app = {
         if (taskId === this.currentTaskId) this.renderChat();
         say(cancelled ? 'Response cancelled' : reason);
       }
-      if (folder === this.workspace.root && partial?.steps.some((step) => step.server === 'Workspace'
-        && ['write_file', 'edit_file', 'run_command'].includes(step.tool))) {
+      if (folder === this.workspace.root && (partial?.changes || partial?.steps.some((step) => step.server === 'Workspace'
+        && ['write_file', 'edit_file', 'run_command'].includes(step.tool)))) {
         void this.refreshWorkspace();
       }
       return;
@@ -1879,6 +1903,7 @@ const app = {
     this.appendMessage('assistant', result.data.text, taskId, {
       tools: result.data.toolCalls,
       steps: result.data.steps,
+      changes: result.data.changes,
       reasoning: result.data.reasoning,
       ...(thinking ? { thinkingMs } : {}),
       ...(notes ? {
@@ -1918,6 +1943,12 @@ const app = {
       reply.stopping = false;
       this.renderReplyState();
     }
+  },
+
+  /** A deleted task's recorded changes are forgotten with it (the files stay as they are). */
+  forgetTaskChanges(task) {
+    const ids = (task?.messages || []).map((message) => message.changes?.id).filter((id) => typeof id === 'string');
+    if (ids.length) void window.scalemaxAPI?.checkpoints?.remove?.({ ids });
   },
 
   /** A deleted task's reply is stopped and forgotten (the task is gone, nothing is kept). */

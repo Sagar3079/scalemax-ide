@@ -383,6 +383,22 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     cancel: () => ipcRenderer.invoke('workspace:cancel')
   },
 
+  /**
+   * What each reply changed in its folder (lib/checkpoints.cjs), by the reply's request id:
+   * review a file as a diff, undo files (only while they are as the reply left them) or keep them.
+   */
+  checkpoints: {
+    /** @param {{id: string}} input @returns {Promise<{ok: boolean, data?: {id: string, folderName: string, files: Array<object>}|null}>} */
+    get: (input) => ipcRenderer.invoke('checkpoint:get', input),
+    /** @param {{id: string, path: string}} input @returns {Promise<{ok: boolean, data?: {hunks: Array<object>, current: string}>}} */
+    diff: (input) => ipcRenderer.invoke('checkpoint:diff', input),
+    /** @param {{id: string, paths?: string[]}} input all changed files when paths is left out */
+    undo: (input) => ipcRenderer.invoke('checkpoint:undo', input),
+    /** @param {{id: string, paths?: string[]}} input */
+    keep: (input) => ipcRenderer.invoke('checkpoint:keep', input),
+    /** @param {{ids: string[]}} input forgets the changes of these replies */
+    remove: (input) => ipcRenderer.invoke('checkpoint:remove', input)
+  },
   /** @returns {string} e.g. 'darwin' | 'win32' | 'linux' */
   getPlatform: () => process.platform
 });

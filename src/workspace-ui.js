@@ -707,6 +707,38 @@ export async function openFileInTab(app, path) {
   return true;
 }
 
+/**
+ * Loads open tabs of `paths` again from disk after something else changed them there (an undo
+ * of a reply's changes). Tabs with unsaved edits are left alone; a file that is gone closes.
+ */
+export async function reloadTabs(app, paths) {
+  const bridge = window.scalemaxAPI?.workspace;
+  const wanted = new Set(Array.isArray(paths) ? paths : []);
+  if (!bridge?.read || !wanted.size) return;
+  const root = app.workspace.root;
+  captureActive();
+  let changed = false;
+  for (const tab of [...state.tabs]) {
+    if (!wanted.has(tab.path) || tab.dirty) continue;
+    const result = await bridge.read(tab.path);
+    if (app.workspace.root !== root) return;
+    // Typed into while the file was read: the user's edits win.
+    if (tab.path === state.active) captureActive();
+    if (tab.dirty || !state.tabs.includes(tab)) continue;
+    if (result?.ok) {
+      if (result.data.revision === tab.revision) continue;
+      tab.content = result.data.content;
+      tab.revision = result.data.revision;
+      changed = true;
+    } else if (result?.error?.code === 'ENOENT') {
+      state.tabs = state.tabs.filter((item) => item !== tab);
+      if (state.active === tab.path) state.active = state.tabs[state.tabs.length - 1]?.path || null;
+      changed = true;
+    }
+  }
+  if (changed) loadActive(app);
+}
+
 export function closeTab(app, path) {
   const index = state.tabs.findIndex((tab) => tab.path === path);
   if (index === -1) return;
