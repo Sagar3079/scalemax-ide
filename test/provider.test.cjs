@@ -902,3 +902,74 @@ test('the stream body is cancelled when reading stops early', async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(cancelled, 1);
 });
+
+
+test('catalog keeps optional context and USD token pricing without inventing them for other models', async () => {
+  const { provider } = makeProvider({
+    respond: () => jsonResponse({ data: [
+      {
+        id: 'priced', display_name: 'Priced', context_window: 1_000_000, max_output_tokens: 8192,
+        pricing: { input_per_million: 0.19, output_per_million: 0.51, currency: 'USD' },
+        capabilities: { chat: true, tools: true },
+      },
+      { id: 'unknown', capabilities: { chat: true } },
+    ] }),
+  });
+  const found = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1' });
+  const [priced, unknown] = found.models;
+  assert.deepEqual(priced.pricing, { inputPerMillion: 0.19, outputPerMillion: 0.51, currency: 'USD' });
+  assert.equal(priced.contextWindow, 1_000_000);
+  assert.equal(priced.maxOutputTokens, 8192);
+  assert.equal('pricing' in unknown, false);
+  assert.equal('contextWindow' in unknown, false);
+});
+
+test('chat replies snapshot catalog pricing for later local accounting', async () => {
+  const { provider } = makeProvider({
+    respond: (_url, options) => {
+      if (options.method === 'GET') return jsonResponse({ data: [{
+        id: 'priced', context_window: 4096, max_output_tokens: 512,
+        pricing: { input_per_million: 1, output_per_million: 2, currency: 'USD' }, capabilities: { chat: true },
+      }] });
+      return jsonResponse({ model: 'priced', choices: [{ message: { role: 'assistant', content: 'OK' } }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } });
+    },
+  });
+  const found = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1' });
+  await provider.save({ kind: 'custom', baseUrl: found.baseUrl, model: 'priced', models: found.models });
+  const result = await provider.send({ requestId: 'pricing-snapshot', messages: [{ role: 'user', content: 'hi' }] });
+  assert.deepEqual(result.pricing, { inputPerMillion: 1, outputPerMillion: 2, currency: 'USD' });
+});
+
+
+test('a request snapshot keeps later tool-loop rounds on the original model and price', async () => {
+  const seenModels = [];
+  const { provider } = makeProvider({
+    respond: (_url, options) => {
+      const body = JSON.parse(options.body);
+      seenModels.push(body.model);
+      return jsonResponse({ model: body.model, choices: [{ message: { role: 'assistant', content: 'OK' } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    },
+  });
+  await provider.save({
+    kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1', model: 'one',
+    models: [
+      { id: 'one', pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 } },
+      { id: 'two', pricing: { currency: 'USD', inputPerMillion: 10, outputPerMillion: 20 } },
+    ],
+  });
+  const frozen = provider.snapshot();
+  await provider.setModel({ model: 'two' });
+  const result = await provider.complete({ requestId: 'frozen-round', messages: [{ role: 'user', content: 'hi' }] }, { snapshot: frozen });
+  assert.deepEqual(seenModels, ['one']);
+  assert.equal(result.model, 'one');
+  assert.deepEqual(result.pricing, { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 });
+});
+
+
+test('catalog preserves a valid small advertised maximum-output limit', async () => {
+  const { provider } = makeProvider({
+    respond: () => jsonResponse({ data: [{ id: 'small-output', context_window: 4096, max_output_tokens: 128, capabilities: { chat: true } }] }),
+  });
+  const found = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1' });
+  assert.equal(found.models[0].maxOutputTokens, 128);
+});

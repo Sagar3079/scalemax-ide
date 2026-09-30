@@ -107,6 +107,10 @@ test('runs tool calls through MCP and returns the final answer with a summary', 
     text: 'Final answer.',
     model: 'm1',
     usage: { prompt_tokens: 14, completion_tokens: 5, total_tokens: 19 },
+    usageRounds: [
+      { model: 'm1', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } },
+      { model: 'm1', usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 } },
+    ],
     toolCalls: [{ server: 'fake', tool: 'echo', ok: true, preview: 'echo:hi' }],
     toolErrors: [{ serverId: 'broken', message: 'Command not found: missing-server' }],
     steps: [{ type: 'tool', title: 'fake · echo', server: 'fake', tool: 'echo', ok: true, preview: 'echo:hi' }],
@@ -692,4 +696,47 @@ test('a call that must always ask asks even in bypass, and "allow all" never cov
   assert.equal(careful.requests.length, 3);
   assert.ok(careful.requests.every((request) => request.reason === 'required'));
   assert.deepEqual(broken.ran, []);
+});
+
+
+test('freezes the provider snapshot across every model completion of a tool loop', async () => {
+  const frozen = { id: 'initial-provider-snapshot' };
+  const seen = [];
+  const replies = [
+    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"x"}')], { usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } }),
+    textReply('Done.', { usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }),
+  ];
+  const provider = {
+    snapshot: () => frozen,
+    async complete(_request, options) { seen.push(options?.snapshot); return structuredClone(replies.shift()); },
+    async send() { throw new Error('not used'); },
+    cancel() { return false; },
+  };
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, BYPASS);
+  assert.equal(result.usage.total_tokens, 9);
+  assert.deepEqual(seen, [frozen, frozen]);
+});
+
+test('keeps completed model usage on an error after a tool round', async () => {
+  const provider = fakeProvider([
+    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"x"}')], {
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 },
+    }),
+    () => { throw new Error('provider stopped'); },
+  ]);
+  await assert.rejects(
+    () => createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, BYPASS),
+    (error) => {
+      assert.equal(error.message, 'provider stopped');
+      assert.deepEqual(error.usageSnapshot, {
+        model: 'm1',
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        usageRounds: [{ model: 'm1', usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 }, pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 } }],
+        pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 },
+        incomplete: true,
+      });
+      return true;
+    },
+  );
 });

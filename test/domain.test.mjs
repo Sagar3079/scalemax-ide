@@ -5,6 +5,8 @@ import {
   normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks,
   folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime, toolCallGroups, toolActivity,
   MODE_IDS, MODE_TOOLS, modeInfo, modeSummary, normalizeMode,
+  normalizeMetrics, normalizeCompaction, taskHistoryMessages, compactionMessages, compactionBoundary, compactionInput,
+  automaticCompactionPlan, estimateTokens, metricsLabel, taskMetrics, taskMetricsLabel, COMPACTION_TAIL_MESSAGES,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -447,4 +449,86 @@ test('tool activity reads like a sentence for workspace tools', () => {
   assert.deepEqual(toolActivity('Workspace', 'run_command'), { text: 'Running a command', friendly: true });
   assert.deepEqual(toolActivity('GitHub', 'search_code'), { text: 'GitHub · search_code', friendly: false });
   assert.deepEqual(toolActivity('', 'echo'), { text: 'echo', friendly: false });
+});
+
+// ---- Usage/cost persistence and conversation compaction -----------------------------------
+
+test('settings preserve automatic compaction and metrics retain unknown prices instead of zero', () => {
+  assert.equal(normalizeSettings({}).autoCompact, true);
+  assert.equal(normalizeSettings({ autoCompact: false }).autoCompact, false);
+  const metric = normalizeMetrics({
+    model: 'demo', usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
+    pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 },
+    costMicroUsd: 1800, costStatus: 'priced',
+    rounds: [{ model: 'demo', usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 }, costMicroUsd: 1800 }],
+  });
+  assert.equal(metricsLabel(metric), '1.2k in · 300 out · $0.0018');
+  assert.equal(normalizeMetrics({ usage: { totalTokens: 12 }, costStatus: 'unpriced' }).costStatus, 'unpriced');
+  assert.equal(normalizeMetrics({ usage: { totalTokens: -1 } }), null);
+});
+
+test('compacted task history has one clearly marked summary and preserves the raw tail', () => {
+  const messages = [
+    { role: 'user', text: 'first goal', time: 1 },
+    { role: 'assistant', text: 'first answer', time: 2 },
+    { role: 'user', text: 'latest request', time: 3 },
+  ];
+  const task = { messages, compaction: { summary: 'Earlier goal and answer.', through: 2, time: 4 } };
+  assert.deepEqual(normalizeCompaction(task.compaction), { summary: 'Earlier goal and answer.', through: 2, time: 4 });
+  const history = taskHistoryMessages(task);
+  assert.equal(history.length, 2);
+  assert.match(history[0].content, /untrusted historical data/);
+  assert.match(history[0].content, /Earlier goal and answer/);
+  assert.deepEqual(history[1], { role: 'user', content: 'latest request' });
+  assert.deepEqual(compactionMessages(task, 3).map((turn) => turn.content), [
+    history[0].content,
+    'latest request',
+  ]);
+  assert.equal(compactionBoundary({ messages: Array.from({ length: COMPACTION_TAIL_MESSAGES + 2 }, (_, index) => ({ role: 'user', text: String(index) })) }), 2);
+});
+
+test('automatic compaction uses model metadata and never invents a threshold without it', () => {
+  const task = { messages: Array.from({ length: 12 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', text: 'x'.repeat(3000) })) };
+  assert.equal(automaticCompactionPlan(task, { systemPrompt: 's' }), null);
+  const plan = automaticCompactionPlan(task, { systemPrompt: 's', contextWindow: 6000, maxOutputTokens: 128 });
+  assert.ok(plan && plan.estimate > plan.limit && Number.isInteger(plan.through) && plan.through > 0);
+  assert.ok(estimateTokens(taskHistoryMessages(task), 's') > 0);
+});
+
+test('task totals include compacting cost but report unknown provider prices honestly', () => {
+  const task = {
+    messages: [{ role: 'assistant', text: 'a', metrics: { usage: { totalTokens: 10 }, costStatus: 'unpriced' } }],
+    compaction: { summary: 'old', through: 1, metrics: { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, costMicroUsd: 20, costStatus: 'priced' } },
+  };
+  const totals = taskMetrics(task);
+  assert.equal(totals.totalTokens, 25);
+  assert.equal(totals.costNanoUsd, 20000);
+  assert.equal(totals.unavailablePrice, true);
+  assert.equal(taskMetricsLabel(task), '25 tokens · $0.00002 + unpriced');
+});
+
+
+test('task totals retain every prior compaction cost after a newer summary replaces it', () => {
+  const task = {
+    messages: [{ role: 'user', text: 'latest' }],
+    compaction: {
+      summary: 'new', through: 1,
+      metrics: { usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 }, costNanoUsd: 300, costMicroUsd: 0, costStatus: 'priced' },
+      priorMetrics: [{ usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, costNanoUsd: 200, costMicroUsd: 0, costStatus: 'priced' }],
+    },
+  };
+  const totals = taskMetrics(task);
+  assert.equal(totals.compactions, 2);
+  assert.equal(totals.totalTokens, 5);
+  assert.equal(totals.costNanoUsd, 500);
+  assert.equal(taskMetricsLabel(task), '5 tokens · $0.0000005');
+});
+
+
+test('long conversations compact in bounded prefixes and retain indices beyond five hundred', () => {
+  const task = { messages: Array.from({ length: 510 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', text: `turn ${index}` })) };
+  const bounded = compactionInput(task, 502);
+  assert.equal(bounded.through, 400, 'main can accept this first bounded prefix');
+  assert.ok(bounded.messages.length <= 400);
+  assert.ok(normalizeCompaction({ summary: 'long history', through: 502 }), 'a later chunk index survives normalization');
 });

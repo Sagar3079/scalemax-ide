@@ -3803,3 +3803,28 @@ input[type="range"] {
     flex: 1;
   }
 }
+
+/* Per-reply provider usage/cost and the current task's compacted-context state. */
+.msg-metrics {
+  color: var(--sm-text-weak);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-crumb-metrics,
+.chat-crumb-context {
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--sm-text-weak);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.chat-crumb-context {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--sm-app-surface-hover);
+}
+.compact-context-button:disabled {
+  opacity: 0.52;
+}

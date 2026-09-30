@@ -52,6 +52,15 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     /** @param {string} requestId @returns {Promise<{ok: boolean, data?: boolean}>} */
     cancel: (requestId) => ipcRenderer.invoke('provider:cancel', requestId),
 
+    /**
+     * Summarizes bounded historical user/assistant turns in a separate no-tools provider call.
+     * `/compact` is handled by the app before ordinary chat, so the command never becomes a user
+     * prompt for the normal tool loop.
+     * @param {{requestId: string, messages: Array<{role: 'user'|'assistant', content: string}>}} input
+     * @returns {Promise<{ok: boolean, data?: {summary: string, model: string, metrics?: object}, error?: object}>}
+     */
+    compact: (input) => ipcRenderer.invoke('provider:compact', input),
+
     /** @returns {Promise<{ok: boolean, data?: object, error?: object}>} */
     clear: () => ipcRenderer.invoke('provider:clear'),
 

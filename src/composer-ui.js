@@ -74,6 +74,7 @@ export function renderModelButton(app) {
   const reasoning = $('#model-button-reasoning');
   const button = $('#model-button');
   if (!name || !button) return;
+  button.disabled = chatBusy(app);
   const mode = app.settings.composerMode;
   if (mode === 'image' || mode === 'video') {
     const media = currentMediaModel(app, mode);
@@ -307,7 +308,7 @@ async function useProfile(app, profileId, chatModel) {
 
 async function chooseModel(app, id, profileId = app.provider?.profileId, tab = 'chat') {
   const bridge = providerBridge();
-  if (!id) return;
+  if (!id || chatBusy(app)) return;
   if (tab !== 'chat') {
     if (!(await useProfile(app, profileId))) return;
     app.settings[tab === 'image' ? 'imageModel' : 'videoModel'] = id;
@@ -734,7 +735,7 @@ function bindApprovals(app) {
 const RECENT_FOLDERS_SHOWN = 5;
 
 function chatBusy(app) {
-  return Boolean(app.activeRequestId || app.demoBusy);
+  return Boolean(app.activeRequestId || app.demoBusy || app.compactingTasks?.has?.(app.currentTaskId));
 }
 
 function folderOption(action, name, desc) {

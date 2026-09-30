@@ -28,6 +28,16 @@ function stubReply(body) {
   const run = tools.find((tool) => tool?.function?.name === 'workspace_run');
   const write = tools.find((tool) => tool?.function?.name === 'workspace_write');
   const edit = tools.find((tool) => tool?.function?.name === 'workspace_edit');
+  // `provider:compact` is a separate no-tools call whose fixed system message never reaches the
+  // normal chat/tool loop. Its short response is persisted as app-owned context, not a chat turn.
+  if (messages.some((message) => message.role === 'system' && String(message.content).includes('conversation compactor'))) {
+    return { role: 'assistant', content: 'Stub summary: earlier work is complete; retain the current request and constraints.' };
+  }
+  if (typeof last.content === 'string' && last.content.includes('check compact context')) {
+    const summary = messages.some((message) => String(message.content).startsWith('[ScaleMax conversation summary'));
+    const oldest = messages.some((message) => String(message.content).includes('old-0'));
+    return { role: 'assistant', content: `compact context: ${summary}:${oldest}` };
+  }
   // Creates one file and edits another in one round (the reply's changes, for review and undo).
   if (write && edit && typeof last.content === 'string' && last.content.includes('make changes')) {
     return {
@@ -41,6 +51,13 @@ function stubReply(body) {
   }
   if (typeof last.content === 'string' && last.content.includes('name your tools')) {
     return { role: 'assistant', content: `tools: ${tools.map((tool) => tool.function.name).join(',')}` };
+  }
+  // First completion gets its usage; the next completion fails, exercising partial billing.
+  if (last.role === 'tool' && messages.some((message) => typeof message?.content === 'string' && message.content.includes('fail after tool'))) {
+    return { role: 'assistant', content: 'Partial after a billed tool round.', failAfter: 'stub second round failed' };
+  }
+  if (list && typeof last.content === 'string' && last.content.includes('fail after tool')) {
+    return { role: 'assistant', content: null, tool_calls: [{ id: 'call_smoke_fail_usage', type: 'function', function: { name: 'workspace_list', arguments: '{}' } }] };
   }
   if (last.role === 'tool') return { role: 'assistant', content: `tool said: ${last.content}` };
   // A command that prints, waits and prints again: its output shows while it runs.
@@ -166,7 +183,11 @@ async function startStubServer() {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ id: 'smoke-model' }] }));
+      res.end(JSON.stringify({ data: [{
+        id: 'smoke-model', context_window: 100000, max_output_tokens: 512,
+        pricing: { input_per_million: 1, output_per_million: 2, currency: 'USD' },
+        capabilities: { chat: true, tools: true },
+      }] }));
       return;
     }
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
@@ -190,7 +211,7 @@ async function startStubServer() {
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         const { failAfter, hold, ...whole } = message;
-        res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: whole }] }));
+        res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: whole }], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } }));
       });
       return;
     }
@@ -278,7 +299,7 @@ async function run(win) {
       return {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
-        providerMethods: ['get','save','test','discover','send','cancel','clear','setModel','refreshModels','onProgress','profiles','addProfile','selectProfile','renameProfile','removeProfile'].filter((m) => typeof api.provider?.[m] === 'function'),
+        providerMethods: ['get','save','test','discover','send','cancel','compact','clear','setModel','refreshModels','onProgress','profiles','addProfile','selectProfile','renameProfile','removeProfile'].filter((m) => typeof api.provider?.[m] === 'function'),
         workspaceMethods: ['select','current','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
@@ -287,7 +308,8 @@ async function run(win) {
         checkpointMethods: ['get','diff','undo','keep','remove'].filter((m) => typeof api.checkpoints?.[m] === 'function'),
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
         commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
-        composerControls: ['#attach-btn svg', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
+        conversationSettings: document.querySelector('#auto-compact-toggle')?.getAttribute('aria-checked') === 'true',
+        composerControls: ['#attach-btn svg', '#compact-btn', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
           .every((selector) => Boolean(document.querySelector(selector))),
         attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
         permissionLabel: document.querySelector('#permission-label')?.textContent || '',
@@ -330,6 +352,7 @@ async function run(win) {
         node.value = value;
         node.dispatchEvent(new Event('input', { bubbles: true }));
       };
+      const { default: app } = await import('./app.js');
       const kindSelect = document.querySelector('#provider-kind');
       kindSelect.value = 'custom';
       kindSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -338,6 +361,12 @@ async function run(win) {
       document.querySelector('#provider-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       await new Promise((resolve) => setTimeout(resolve, 400));
       const afterSave = await api.provider.get();
+      // The settings form verifies connectivity but a custom provider catalog is loaded explicitly;
+      // cost/context metadata is persisted with this model snapshot for Phase 4.
+      const smokeCatalog = await api.provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:${port}/v1' });
+      const catalogSaved = smokeCatalog && smokeCatalog.ok
+        ? await api.provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:${port}/v1', model: 'smoke-model', models: smokeCatalog.data.models }) : smokeCatalog;
+      await app.loadProvider();
       const testResult = await api.provider.test();
       const sendResult = await api.provider.send({ requestId: 'smoke-e2e', messages: [{ role: 'user', content: 'ping' }] });
       // Built-in workspace tools: none without a folder, and the instructions say so.
@@ -347,7 +376,6 @@ async function run(win) {
       input.value = 'ping';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       const uiSendBlockedNoFolder = Boolean(document.querySelector('#send-btn')?.disabled);
-      const { default: app } = await import('./app.js');
       await app.openWorkspaceAt(${JSON.stringify(wsToolsDir)});
       const wsToolsSelected = await api.workspace.current();
       input.value = 'ping';
@@ -397,6 +425,9 @@ async function run(win) {
       // can list it (read-only, so Basic runs it without asking).
       const folderReply = await api.provider.send({ requestId: 'smoke-ws-folder', messages: [{ role: 'user', content: 'which folder am I in?' }] });
       const wsToolChat = await api.provider.send({ requestId: 'smoke-ws-list', messages: [{ role: 'user', content: 'Please use workspace list.' }] });
+      // A later model round fails after a billed tool-producing completion. Main must return the
+      // partial metrics rather than silently losing that provider charge.
+      const failedUsage = await api.provider.send({ requestId: 'smoke-failed-usage', folder: ${JSON.stringify(wsToolsDir)}, messages: [{ role: 'user', content: 'Please fail after tool.' }] });
       // A task's messages only run in its own folder.
       // Working and Coding offer different tools (lib/modes.cjs); an unknown mode falls back to Working.
       const modeTools = {};
@@ -611,6 +642,58 @@ async function run(win) {
       const outside = await outsidePending;
       const outsideText = outside && outside.ok ? outside.data.text : (outside && outside.error ? outside.error.message : '');
       await api.store.set('settings', jobSettings || {});
+
+      // Usage/cost and compaction: the exact slash command is handled by the app, never saved as a user turn.
+      // then a narrow model context triggers automatic compaction before the normal request.
+      await app.openWorkspaceAt(${JSON.stringify(jobsDir)});
+      app.newTask({ folder: app.rootFolder() });
+      const manualCompactTask = app.currentTask();
+      manualCompactTask.messages = Array.from({ length: 10 }, (_item, index) => ({
+        role: index % 2 ? 'assistant' : 'user', text: 'old-' + index + ' ' + 'x'.repeat(120), time: Date.now() + index,
+      }));
+      manualCompactTask.updatedAt = Date.now();
+      setValue('#chat-input', '/compact');
+      document.querySelector('#send-btn').click();
+      const manualCompacted = await until(() => Boolean(manualCompactTask.compaction && manualCompactTask.compaction.summary), 5000);
+      const slashNotSaved = !manualCompactTask.messages.some((message) => message.text === '/compact');
+      const manualSummary = manualCompactTask.compaction ? manualCompactTask.compaction.summary : '';
+      const manualMetric = manualCompactTask.compaction ? manualCompactTask.compaction.metrics || null : null;
+      // New task: enough old text for the advertised tiny window. Sending a normal message first
+      // compacts old turns, then the stub confirms it got the summary but not old-0.
+      app.newTask({ folder: app.rootFolder() });
+      const automaticCompactTask = app.currentTask();
+      automaticCompactTask.messages = Array.from({ length: 12 }, (_item, index) => ({
+        role: index % 2 ? 'assistant' : 'user', text: 'old-' + index + ' ' + 'x'.repeat(3000), time: Date.now() + index,
+      }));
+      app.providerCatalog = app.providerCatalog.map((model) => model.id === 'smoke-model'
+        ? { ...model, contextWindow: 8000, maxOutputTokens: 256 } : model);
+      setValue('#chat-input', 'check compact context');
+      document.querySelector('#send-btn').click();
+      await until(() => {
+        const last = automaticCompactTask.messages[automaticCompactTask.messages.length - 1];
+        return last && last.role === 'assistant' && last.text === 'compact context: true:false';
+      }, 8000);
+      const automaticCompacted = Boolean(automaticCompactTask.compaction && automaticCompactTask.compaction.summary);
+      const automaticText = automaticCompactTask.messages[automaticCompactTask.messages.length - 1]?.text || '';
+      const replyMetric = automaticCompactTask.messages[automaticCompactTask.messages.length - 1]?.metrics || null;
+      const metricsUi = document.querySelector('#chat-messages .msg-metrics')?.textContent || '';
+      const crumbMetrics = document.querySelector('#chat-crumb .chat-crumb-metrics')?.textContent || '';
+      const compactContextPill = document.querySelector('#chat-crumb .chat-crumb-context')?.textContent || '';
+      // A context that cannot fit even after a summary must leave the exact typed draft alone;
+      // the user must never have an unsent instruction silently persisted for a later request.
+      app.newTask({ folder: app.rootFolder() });
+      const impossibleCompactTask = app.currentTask();
+      impossibleCompactTask.messages = Array.from({ length: 12 }, (_item, index) => ({
+        role: index % 2 ? 'assistant' : 'user', text: 'too-old-' + index + ' ' + 'x'.repeat(3000), time: Date.now() + index,
+      }));
+      app.providerCatalog = app.providerCatalog.map((model) => model.id === 'smoke-model'
+        ? { ...model, contextWindow: 3000, maxOutputTokens: 256 } : model);
+      const unsentDraft = 'keep this exact draft unsent';
+      setValue('#chat-input', unsentDraft);
+      document.querySelector('#send-btn').click();
+      await sleep(100);
+      const failedAutoDraftKept = document.querySelector('#chat-input').value === unsentDraft
+        && !impossibleCompactTask.messages.some((message) => message.text === unsentDraft);
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -705,11 +788,23 @@ async function run(win) {
         outsideSummary,
         outsideAllHidden,
         outsideText,
+        manualCompacted,
+        slashNotSaved,
+        manualSummary,
+        manualMetric,
+        automaticCompacted,
+        automaticText,
+        replyMetric,
+        metricsUi,
+        crumbMetrics,
+        compactContextPill,
+        failedAutoDraftKept,
         modeTools,
         matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
         wsToolText: wsToolChat && wsToolChat.ok ? wsToolChat.data.text : (wsToolChat?.error?.message || null),
         wsToolCalls: wsToolChat && wsToolChat.ok ? wsToolChat.data.toolCalls : null,
+        failedUsage: failedUsage && !failedUsage.ok ? failedUsage.error.metrics || null : null,
         wsNotesFirst: folderReply && folderReply.ok ? folderReply.data.projectNotes || null : null,
         wsNotesSecond: wsToolChat && wsToolChat.ok ? wsToolChat.data.projectNotes || null : null,
         wsCurrent,
@@ -885,11 +980,12 @@ async function run(win) {
   const checks = probe ? {
     hasBridge: probe.hasBridge,
     reservedKeysHidden: probe.reservedHidden,
-    providerMethods: probe.providerMethods.length === 15,
+    providerMethods: probe.providerMethods.length === 16,
     mediaApi: probe.mediaMethods.length === 6,
     approvalApi: probe.approvalMethods.length === 3,
     checkpointApi: probe.checkpointMethods.length === 5,
     jobsApi: probe.jobMethods.length === 6 && probe.commandSettings === true,
+    conversationSettings: probe.conversationSettings === true,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',
     workspaceApi: probe.workspaceMethods.length === 9,
@@ -930,6 +1026,8 @@ async function run(win) {
     workspaceToolLoop: Boolean(e2e && typeof e2e.wsToolText === 'string' && e2e.wsToolText.startsWith('tool said: ')
       && e2e.wsToolText.includes('smoke-note.txt') && Array.isArray(e2e.wsToolCalls) && e2e.wsToolCalls.length === 1
       && e2e.wsToolCalls[0].server === 'Workspace' && e2e.wsToolCalls[0].tool === 'list_files' && e2e.wsToolCalls[0].ok === true),
+    failedToolUsageRetained: Boolean(e2e && e2e.failedUsage && e2e.failedUsage.costStatus === 'incomplete'
+      && e2e.failedUsage.usage && e2e.failedUsage.usage.totalTokens === 18 && e2e.failedUsage.costMicroUsd === 24),
     // The first message in the folder (sent from the window) created the notes; later ones do not.
     projectNotesCreated: Boolean(e2e && typeof e2e.uiNotice === 'string' && e2e.uiNotice.includes('Created .scalemax/SCALEMAX.md')
       && e2e.wsNotesFirst === null && e2e.wsNotesSecond === null
@@ -985,6 +1083,13 @@ async function run(win) {
     // Leaving the sandbox asks even in Bypass, one call at a time, and then works.
     unsandboxedAsks: Boolean(e2e && e2e.outsideAsked && e2e.outsideTitle === 'Run this command outside the sandbox?'
       && /outside the sandbox/.test(e2e.outsideSummary) && e2e.outsideAllHidden && /outside-ok/.test(e2e.outsideText)),
+    // Usage/provider cost persist on a reply; exact /compact never becomes a user/model prompt,
+    // and automatic compaction uses the published context limit before a normal send.
+    usageAndCompaction: Boolean(e2e && e2e.manualCompacted && e2e.slashNotSaved && /^Stub summary:/.test(e2e.manualSummary)
+      && e2e.manualMetric && e2e.manualMetric.costStatus === 'priced' && e2e.automaticCompacted
+      && e2e.automaticText === 'compact context: true:false' && e2e.replyMetric && e2e.replyMetric.costStatus === 'priced'
+      && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
+      && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     modeToolSets: (() => {
       const sets = (e2e && e2e.modeTools) || {};
       const names = (value) => (typeof value === 'string' && value.startsWith('tools: ') ? value.slice(7).split(',') : []);
