@@ -1,0 +1,286 @@
+/*
+ * Feature specs (src/specs-ui.js): the chip in the composer, the dialog with the specs of the open
+ * folder on the left and the selected one's requirements, design and tasks on the right, and the
+ * "Run this plan" card under a reply written in Plan permission.
+ */
+
+/* ---- The chip in the composer toolbar ------------------------------------------- */
+
+.specs-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Plan permission is read-only, so its chip reads as calm information, not a warning. */
+.composer-chip.is-plan {
+  border-color: var(--sm-palette-blue-3);
+  background: var(--sm-palette-blue-1);
+  color: var(--sm-palette-blue-8);
+}
+
+/* ---- The dialog ----------------------------------------------------------------- */
+
+#specs-dialog {
+  width: min(1040px, 94vw);
+  height: min(720px, 84vh);
+  margin: 7vh auto auto;
+  padding: 0;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-bg-modal);
+  color: var(--sm-text-strong);
+  box-shadow: var(--sm-shadow-popup-large);
+}
+#specs-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+#specs-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+.specs-subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.specs-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.specs-close:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.specs-close:focus-visible,
+.specs-item:focus-visible,
+.specs-tab:focus-visible,
+.specs-doc:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: -2px;
+}
+.specs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border-top: 1px solid var(--sm-app-border);
+  border-bottom: 1px solid var(--sm-app-border);
+}
+
+/* ---- The specs of this folder --------------------------------------------------- */
+
+.specs-side {
+  flex: 0 0 250px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--sm-app-border);
+}
+.specs-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+}
+.specs-empty {
+  margin: 10px 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sm-text-weak);
+}
+.specs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.specs-item:hover {
+  background: var(--sm-app-surface-hover);
+}
+.specs-item.is-selected {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.specs-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+}
+.specs-item.is-selected .specs-item-name {
+  font-weight: 600;
+}
+.specs-item-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+.specs-new {
+  flex-shrink: 0;
+  margin: 0 6px 8px;
+}
+
+/* ---- The selected spec ---------------------------------------------------------- */
+
+.specs-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.specs-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 14px;
+}
+.specs-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.specs-progress {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.specs-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--sm-app-border);
+}
+.specs-tab {
+  padding: 5px 10px 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--sm-text-weak);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.specs-tab:hover {
+  color: var(--sm-text-strong);
+}
+.specs-tab.is-selected {
+  border-bottom-color: var(--sm-brand-primary);
+  color: var(--sm-text-strong);
+  font-weight: 600;
+}
+/* A document the assistant has not written yet is still reachable, just clearly empty. */
+.specs-tab.is-missing {
+  opacity: 0.55;
+}
+.specs-doc {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px 18px;
+  overflow: auto;
+}
+.specs-markdown {
+  font-size: 13px;
+}
+
+/* ---- The task list ------------------------------------------------------------- */
+
+.specs-tasks {
+  margin: 0 0 14px;
+  padding: 8px 0;
+  border: 1px solid var(--sm-app-border);
+  border-radius: 8px;
+  background: var(--sm-app-surface);
+  list-style: none;
+}
+.specs-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 12px 4px calc(12px + var(--specs-task-depth, 0) * 18px);
+}
+.specs-task input[type='checkbox'] {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+  accent-color: var(--sm-brand-primary);
+}
+.specs-task-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sm-text-strong);
+  cursor: pointer;
+}
+.specs-task input[type='checkbox']:checked + .specs-task-text {
+  color: var(--sm-text-weak);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.specs-task input[type='checkbox']:disabled + .specs-task-text {
+  cursor: default;
+}
+
+.specs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.specs-spacer {
+  flex: 1;
+}
+
+/* ---- "Run this plan" under a reply that could only plan ------------------------- */
+
+.plan-card {
+  margin-top: 6px;
+  padding: 10px 12px 11px;
+  border: 1px solid var(--sm-palette-blue-3);
+  border-radius: 8px;
+  background: var(--sm-palette-blue-1);
+  font-size: 12.5px;
+  white-space: normal;
+}
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plan-title {
+  font-weight: 600;
+  color: var(--sm-palette-blue-9);
+}
+.plan-note {
+  margin: 4px 0 9px;
+  line-height: 1.5;
+  color: var(--sm-text-medium);
+}
+.plan-actions {
+  display: flex;
+  gap: 6px;
+}

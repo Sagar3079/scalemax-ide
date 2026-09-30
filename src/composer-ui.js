@@ -11,7 +11,7 @@ import {
 } from './domain.mjs';
 
 const $ = (selector) => document.querySelector(selector);
-const PERMISSION_LABELS = { manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
+const PERMISSION_LABELS = { plan: 'Plan', manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
 const EFFORT_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
 const bound = new WeakSet();
 
@@ -434,6 +434,7 @@ export function renderPermission(app) {
   const button = $('#permission-button');
   if (button) {
     button.classList.toggle('is-bypass', mode === 'bypass');
+    button.classList.toggle('is-plan', mode === 'plan');
     button.setAttribute('aria-label', `Tool permissions: ${PERMISSION_LABELS[mode]}. Change permissions`);
   }
   for (const option of document.querySelectorAll('#permission-menu [data-permission]')) {
@@ -480,13 +481,16 @@ export async function setPermission(app, mode) {
     app.showToast('Permissions unchanged');
     return current;
   }
+  // Remembered so "Run this plan" can put the permission back where it was before planning.
+  if (mode === 'plan' && current !== 'plan') app.settings.prePlanPermission = current;
   app.settings.permission = mode;
   app.settings.bypassConsent = mode === 'bypass';
   // Main reads the persisted settings for every chat request, so this must land first.
   await app.persist('settings');
   renderPermission(app);
   app.showToast(mode === 'bypass' ? 'Autonomous mode: all tool calls run without asking'
-    : mode === 'manual' ? 'Manual: every tool call asks first' : 'Basic: only changes ask first');
+    : mode === 'plan' ? 'Plan: read-only until you run the plan'
+      : mode === 'manual' ? 'Manual: every tool call asks first' : 'Basic: only changes ask first');
   return mode;
 }
 

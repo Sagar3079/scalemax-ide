@@ -18,7 +18,8 @@ const sandbox = require('./lib/sandbox.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
-const { normalizeMode, modeFamilies, modeInstructions, modeMaxRounds } = require('./lib/modes.cjs');
+const { normalizeMode, modeFamilies, modeInstructions, modeMaxRounds, planInstructions } = require('./lib/modes.cjs');
+const { createSpecStore, createSpecTools, DOCS: SPEC_DOCS } = require('./lib/specs.cjs');
 const { collectNames, restoreNames, modelNames } = require('./lib/reply-names.cjs');
 const { createProjectNotes, prepareChatRequest } = require('./lib/project-notes.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
@@ -389,7 +390,13 @@ async function openChatSession(input) {
     if (typeof chat.onChanges === 'function') chat.onChanges(recorder.summary());
   } : null;
   const tools = createWorkspaceTools({ getWorkspace: getSession, onChange, jobs, commandPolicy });
-  const families = { workspace: tools, web: webTools, computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }) };
+  const families = {
+    workspace: tools,
+    web: webTools,
+    computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }),
+    // Specs are project files, so they are recorded with the reply's changes like any other edit.
+    specs: createSpecTools({ getWorkspace: getSession, onChange }),
+  };
   return Object.assign(chat, {
     tools,
     notes: createProjectNotes({ getWorkspace: getSession }),
@@ -505,14 +512,15 @@ const cliConnect = createCliConnect({
     : {})
 });
 
-// Earlier permission values map onto the three modes; bypass never survives without consent.
-const LEGACY_PERMISSIONS = { ask: 'basic', 'auto-write': 'basic', full: 'basic', readonly: 'manual', plan: 'manual' };
+// Earlier permission values map onto the four modes; bypass never survives without consent, and a
+// read-only one becomes Plan, which is exactly that.
+const LEGACY_PERMISSIONS = { ask: 'basic', 'auto-write': 'basic', full: 'basic', readonly: 'plan' };
 
-/** The chat permission mode (manual | basic | bypass) from the persisted assistant settings. */
+/** The chat permission mode (plan | manual | basic | bypass) from the persisted settings. */
 function chatPermission() {
   try {
     const settings = stateStore.get('settings') || {};
-    let mode = ['manual', 'basic', 'bypass'].includes(settings.permission)
+    let mode = ['plan', 'manual', 'basic', 'bypass'].includes(settings.permission)
       ? settings.permission : (LEGACY_PERMISSIONS[settings.permission] || 'basic');
     // Autonomous mode is only honoured when the user agreed to it in the consent dialog.
     if (mode === 'bypass' && settings.bypassConsent !== true) mode = 'basic';
@@ -760,8 +768,18 @@ const providerChannels = {
       // Working or Coding: the mode decides the working agreement, which tools are offered and
       // how many tool rounds a reply may take.
       const mode = normalizeMode(input?.mode);
+      // Read once: the whole reply runs under the permission it started with, and Plan adds a
+      // working agreement of its own (investigate, then propose) on top of the mode's.
+      const permission = chatPermission();
       const prepared = await prepareChatRequest(input, {
-        workspaceTools: chat.tools, projectNotes: chat.notes, notesEnabled: projectNotesEnabled(), modeInstructions: modeInstructions(mode),
+        workspaceTools: chat.tools,
+        projectNotes: chat.notes,
+        // Plan changes nothing at all, so it does not create the project notes either, and /init
+        // says why instead of being turned into an instruction that can only be refused. Existing
+        // notes are still read; the first request that may change something writes them.
+        notesEnabled: projectNotesEnabled() && permission !== 'plan',
+        canChange: permission !== 'plan',
+        modeInstructions: [modeInstructions(mode), permission === 'plan' ? planInstructions() : ''].filter(Boolean).join('\n\n'),
       });
       const folderName = tracked.folderName;
       const forward = createProgressForwarder({
@@ -778,7 +796,7 @@ const providerChannels = {
         // Checked in the same turn as the loop starts, so no Stop falls in between.
         checkStopped();
         result = await toolLoop.send(prepared.input, {
-          permission: chatPermission(),
+          permission,
           mode,
           maxRounds: modeMaxRounds(mode),
           source: chat.source,
@@ -797,6 +815,8 @@ const providerChannels = {
       const metrics = createMetrics(result);
       return {
         ...result,
+        // The window offers "Run this plan" under a reply that could only plan.
+        ...(permission === 'plan' ? { plan: true } : {}),
         ...(metrics ? { metrics } : {}),
         ...(prepared.notes?.created ? { projectNotes: { created: true, path: prepared.notes.path } } : {}),
         ...(changes ? { changes } : {}),
@@ -990,6 +1010,44 @@ const jobChannels = {
 };
 for (const [channel, run] of Object.entries(jobChannels)) {
   ipcMain.handle(channel, wrap(run, JOBS_FALLBACK));
+}
+
+// ---------------------------------------------------------------------------
+// Specs IPC (lib/specs.cjs): the window lists the specs of the open folder, reads their three
+// documents and ticks tasks off. The model writes them with its own spec tools.
+// ---------------------------------------------------------------------------
+const SPEC_FALLBACK = { code: 'SPEC_ERROR', message: 'The spec could not be read.' };
+// The window's own spec store, on the folder that is open in it.
+const windowSpecs = createSpecStore({ getWorkspace: () => getWorkspace() });
+function specName(input) {
+  const value = input && typeof input === 'object' ? input.spec : undefined;
+  if (typeof value !== 'string' || !value.trim() || value.length > 80) throw bridgeError('INVALID_SPEC', 'Choose a spec.');
+  return value;
+}
+const specChannels = {
+  'spec:list': async () => {
+    await restoreFolder();
+    return { folder: windowSpecs.folder(), specs: await windowSpecs.list() };
+  },
+  'spec:read': async (_event, input) => {
+    await restoreFolder();
+    const doc = input && typeof input === 'object' && typeof input.doc === 'string' ? input.doc : null;
+    if (doc && !SPEC_DOCS.includes(doc)) throw bridgeError('INVALID_DOC', 'Choose one of the spec documents.');
+    return windowSpecs.read(specName(input), doc);
+  },
+  // Ticking a task off is the user's own action on their file, like saving in the editor. The
+  // revision the window read the numbers from is carried along, so a task list that changed in
+  // the meantime is refused instead of having the wrong line ticked.
+  'spec:task': async (_event, input) => {
+    await restoreFolder();
+    const number = input && typeof input === 'object' ? input.task : undefined;
+    if (!Number.isSafeInteger(number) || number < 1) throw bridgeError('INVALID_TASK', 'Choose a task by its number.');
+    const revision = typeof input.revision === 'string' && input.revision ? input.revision : null;
+    return windowSpecs.setTask(specName(input), number, input.done === true, { revision });
+  },
+};
+for (const [channel, run] of Object.entries(specChannels)) {
+  ipcMain.handle(channel, wrap(run, SPEC_FALLBACK));
 }
 
 // ---------------------------------------------------------------------------

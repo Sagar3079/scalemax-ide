@@ -52,6 +52,46 @@ function stubReply(body) {
   if (typeof last.content === 'string' && last.content.includes('name your tools')) {
     return { role: 'assistant', content: `tools: ${tools.map((tool) => tool.function.name).join(',')}` };
   }
+  // Feature specs: the three documents in one round, then one task ticked off, then the answer.
+  const said = (text) => messages.some((message) => typeof message?.content === 'string' && message.content.includes(text));
+  const specWrite = tools.find((tool) => tool?.function?.name === 'spec_write');
+  const specTask = tools.find((tool) => tool?.function?.name === 'spec_task');
+  if (specWrite && specTask && said('write the offline sync spec')) {
+    const call = (id, args) => ({ id, type: 'function', function: { name: 'spec_write', arguments: JSON.stringify({ spec: 'Offline Sync', ...args }) } });
+    if (!messages.some((message) => message.role === 'tool')) {
+      return {
+        role: 'assistant',
+        content: 'Writing the spec down first.',
+        tool_calls: [
+          call('call_spec_req', { doc: 'requirements', content: '# Requirements\n\n1. As a user, I can work offline.\n' }),
+          call('call_spec_design', { doc: 'design', content: '# Design\n\nA queue in lib/sync.cjs.\n' }),
+          call('call_spec_tasks', { doc: 'tasks', content: '# Tasks\n\n- [ ] Add the queue\n- [ ] Flush it on reconnect\n  - [ ] Retry once\n' }),
+        ],
+      };
+    }
+    if (!messages.some((message) => message.role === 'tool' && String(message.content).includes('is now done'))) {
+      return {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_spec_tick', type: 'function', function: { name: 'spec_task', arguments: JSON.stringify({ spec: 'offline-sync', task: 1, done: true }) } }],
+      };
+    }
+    return { role: 'assistant', content: 'The spec is written and the first task is done.' };
+  }
+  // Plan permission: the model tries to write and is refused, so it answers with the plan. The
+  // same write, asked for again after "Run this plan", goes through.
+  if (write && (said('plan a change') || said('Run the plan you just proposed'))) {
+    if (last.role === 'tool') {
+      return String(last.content).includes('Plan permission')
+        ? { role: 'assistant', content: 'Plan: create planned.md with one line, then run the tests.' }
+        : { role: 'assistant', content: 'Done: planned.md is written.' };
+    }
+    return {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'call_plan_write', type: 'function', function: { name: 'workspace_write', arguments: JSON.stringify({ path: 'planned.md', content: 'planned line\n' }) } }],
+    };
+  }
   // First completion gets its usage; the next completion fails, exercising partial billing.
   if (last.role === 'tool' && messages.some((message) => typeof message?.content === 'string' && message.content.includes('fail after tool'))) {
     return { role: 'assistant', content: 'Partial after a billed tool round.', failAfter: 'stub second round failed' };
@@ -308,6 +348,10 @@ async function run(win) {
         checkpointMethods: ['get','diff','undo','keep','remove'].filter((m) => typeof api.checkpoints?.[m] === 'function'),
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
         commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
+        specMethods: ['list','read','setTask'].filter((m) => typeof api.specs?.[m] === 'function'),
+        // The specs chip stays hidden until a folder is open; Plan is the first permission offered.
+        specsControls: ['#specs-dialog', '#specs-open[hidden]', '#specs-list', '#specs-tabs', '#specs-doc', '#specs-new', '#specs-work',
+          '#permission-menu [data-permission="plan"]'].every((selector) => Boolean(document.querySelector(selector))),
         conversationSettings: document.querySelector('#auto-compact-toggle')?.getAttribute('aria-checked') === 'true',
         composerControls: ['#attach-btn svg', '#compact-btn', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
           .every((selector) => Boolean(document.querySelector(selector))),
@@ -344,6 +388,9 @@ async function run(win) {
   fs.writeFileSync(path.join(parDirB, 'b-note.txt'), 'line one\nline two\n');
   // A folder for background commands and the sandbox.
   const jobsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-jobs-'));
+  // A folder for feature specs, and an untouched one for Plan permission.
+  const specsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-specs-'));
+  const planDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-plan-'));
   try {
     e2e = await win.webContents.executeJavaScript(`(async () => {
       const api = window.scalemaxAPI;
@@ -694,6 +741,106 @@ async function run(win) {
       await sleep(100);
       const failedAutoDraftKept = document.querySelector('#chat-input').value === unsentDraft
         && !impossibleCompactTask.messages.some((message) => message.text === unsentDraft);
+
+      // Feature specs: the model writes the three documents as ordinary project files, so they
+      // land in the reply's changes; the window lists them and the user ticks one off.
+      // The catalog goes back to the published limits the compaction checks above shrank.
+      await app.loadProvider();
+      await app.openWorkspaceAt(${JSON.stringify(specsDir)});
+      app.newTask({ folder: app.rootFolder() });
+      const specChipShown = await until(() => Boolean(document.querySelector('#specs-open')) && !document.querySelector('#specs-open').hidden, 4000);
+      const specSettings = await api.store.get('settings');
+      await api.store.set('settings', { ...(specSettings || {}), permission: 'bypass', bypassConsent: true });
+      const specChatTask = app.currentTask();
+      setValue('#chat-input', 'Please write the offline sync spec.');
+      document.querySelector('#send-btn').click();
+      const specAnswered = await until(() => {
+        const last = specChatTask.messages[specChatTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && last.text === 'The spec is written and the first task is done.');
+      }, 25000);
+      const specReply = specChatTask.messages[specChatTask.messages.length - 1] || {};
+      const specToolCalls = (specReply.tools || []).map((call) => call.tool + ':' + (call.ok ? 'ok' : 'failed')).join(',');
+      const specReplyChanges = ((specReply.changes || {}).files || []).map((file) => file.path).sort().join(',');
+      // The chip counts the tasks still open in this folder.
+      await until(() => (document.querySelector('#specs-open-label')?.textContent || '').indexOf('open') > 0, 5000);
+      const specChipLabel = document.querySelector('#specs-open-label')?.textContent || '';
+      document.querySelector('#specs-open').click();
+      const specDialogOpen = await until(() => Boolean(document.querySelector('#specs-dialog')?.open)
+        && document.querySelectorAll('#specs-list .specs-item').length > 0, 5000);
+      const specListed = Array.from(document.querySelectorAll('#specs-list .specs-item-name')).map((node) => node.textContent).join(',');
+      const specTabLabels = Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).map((node) => node.textContent).join(',');
+      const specTabsMissing = document.querySelectorAll('#specs-tabs .specs-tab.is-missing').length;
+      const specProgressBefore = document.querySelector('#specs-progress')?.textContent || '';
+      const specRequirementsShown = (document.querySelector('#specs-doc .specs-markdown')?.textContent || '').includes('I can work offline');
+      // The task list has real checkboxes, one already ticked by the model; the user ticks another.
+      Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).find((tab) => tab.dataset.doc === 'tasks')?.click();
+      const specTaskRows = await until(() => document.querySelectorAll('#specs-doc .specs-task').length === 3, 4000)
+        ? Array.from(document.querySelectorAll('#specs-doc .specs-task')).map((row) =>
+          (row.querySelector('input').checked ? 'x' : '-') + row.querySelector('.specs-task-text').textContent).join('|')
+        : 'unexpected task rows';
+      document.querySelectorAll('#specs-doc .specs-task input')[1].click();
+      const specProgressAfter = await until(() => (document.querySelector('#specs-progress')?.textContent || '') === '2/3 tasks done', 6000)
+        ? '2/3 tasks done' : (document.querySelector('#specs-progress')?.textContent || '');
+      // "Work on the open tasks" seeds the message box instead of acting behind the model's back,
+      // and never over something the user is in the middle of typing.
+      setValue('#chat-input', 'half-typed thought');
+      document.querySelector('#specs-work').click();
+      const specDraftKept = document.querySelector('#chat-input').value === 'half-typed thought';
+      setValue('#chat-input', '');
+      await (await import('./specs-ui.js')).openSpecs(app);
+      const specReopened = await until(() => Boolean(document.querySelector('#specs-dialog')?.open)
+        && document.querySelectorAll('#specs-list .specs-item').length > 0 && !document.querySelector('#specs-work').disabled, 5000);
+      const specReopenState = 'open=' + Boolean(document.querySelector('#specs-dialog')?.open)
+        + ' items=' + document.querySelectorAll('#specs-list .specs-item').length
+        + ' disabled=' + document.querySelector('#specs-work').disabled;
+      document.querySelector('#specs-work').click();
+      const specWorkDraft = document.querySelector('#chat-input').value;
+      const specDialogClosed = !document.querySelector('#specs-dialog').open;
+      setValue('#chat-input', '');
+
+      // Plan permission: read-only. A changing tool is refused outright, never offered for
+      // approval, and the reply carries the card that runs the plan. An untouched folder shows
+      // that a plan leaves the project completely alone, project notes included.
+      document.querySelector('#permission-button').click();
+      document.querySelector('#permission-menu [data-permission="plan"]').click();
+      const planLabel = await until(() => (document.querySelector('#permission-label')?.textContent || '') === 'Plan', 4000)
+        ? 'Plan' : (document.querySelector('#permission-label')?.textContent || '');
+      const planStored = await api.store.get('settings');
+      await app.openWorkspaceAt(${JSON.stringify(planDir)});
+      app.newTask({ folder: app.rootFolder() });
+      const planTask = app.currentTask();
+      let planEverAsked = false;
+      const planWatch = window.setInterval(() => {
+        if (document.querySelector('#tool-approval-dialog')?.open) planEverAsked = true;
+      }, 40);
+      setValue('#chat-input', 'Please plan a change for me.');
+      document.querySelector('#send-btn').click();
+      const planAnswered = await until(() => {
+        const last = planTask.messages[planTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && last.text.startsWith('Plan: create planned.md'));
+      }, 25000);
+      window.clearInterval(planWatch);
+      const planReply = planTask.messages[planTask.messages.length - 1] || {};
+      const planFlag = planReply.plan === true;
+      const planReplyChanged = Boolean(planReply.changes);
+      const planToolCalls = (planReply.tools || []).map((call) => call.tool + ':' + (call.ok ? 'ok' : 'failed')).join(',');
+      const planFileBefore = await api.workspace.read('planned.md');
+      const planNotesBefore = await api.workspace.read('.scalemax/SCALEMAX.md');
+      const planNoticeAfterPlan = planReply.notice || '';
+      const planCardTitle = document.querySelector('#chat-messages .plan-card .plan-title')?.textContent || '';
+      // "Run this plan": the permission goes back to what it was before planning, so Basic asks
+      // before the write; approving it once carries the plan out.
+      document.querySelector('#chat-messages .plan-card button.primary').click();
+      const planRunAsked = await until(() => Boolean(document.querySelector('#tool-approval-dialog')?.open), 12000);
+      const planRunPermission = document.querySelector('#permission-label')?.textContent || '';
+      document.querySelector('#approval-once')?.click();
+      const planRan = await until(() => {
+        const last = planTask.messages[planTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && last.text === 'Done: planned.md is written.');
+      }, 25000);
+      const planFileAfter = await api.workspace.read('planned.md');
+      const planNotesAfter = await api.workspace.read('.scalemax/SCALEMAX.md');
+      await api.store.set('settings', specSettings || {});
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -799,6 +946,40 @@ async function run(win) {
         crumbMetrics,
         compactContextPill,
         failedAutoDraftKept,
+        specChipShown,
+        specAnswered,
+        specToolCalls,
+        specReplyChanges,
+        specChipLabel,
+        specDialogOpen,
+        specListed,
+        specTabLabels,
+        specTabsMissing,
+        specProgressBefore,
+        specRequirementsShown,
+        specTaskRows,
+        specProgressAfter,
+        specDraftKept,
+        specReopened,
+        specReopenState,
+        specWorkDraft,
+        specDialogClosed,
+        planLabel,
+        planStoredPermission: planStored && typeof planStored === 'object' ? String(planStored.permission || '') : '',
+        planAnswered,
+        planEverAsked,
+        planFlag,
+        planReplyChanged,
+        planToolCalls,
+        planFileMissingBefore: Boolean(planFileBefore && planFileBefore.ok === false),
+        planNoNotesWhilePlanning: Boolean(planNotesBefore && planNotesBefore.ok === false),
+        planNoticeAfterPlan,
+        planCardTitle,
+        planRunAsked,
+        planRunPermission,
+        planRan,
+        planFileAfter: planFileAfter && planFileAfter.ok ? planFileAfter.data.content : null,
+        planNotesAfterRun: Boolean(planNotesAfter && planNotesAfter.ok === true),
         modeTools,
         matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
@@ -828,7 +1009,15 @@ async function run(win) {
   const wsNotesOnDisk = (() => {
     try { return fs.readFileSync(path.join(wsToolsDir, '.scalemax', 'SCALEMAX.md'), 'utf8'); } catch { return null; }
   })();
-  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir]) fs.rmSync(dir, { recursive: true, force: true });
+  // Read before the folder goes: the spec documents the model wrote are ordinary project files.
+  const specTasksOnDisk = (() => {
+    try { return fs.readFileSync(path.join(specsDir, '.scalemax', 'specs', 'offline-sync', 'tasks.md'), 'utf8'); } catch { return null; }
+  })();
+  const specDocsOnDisk = (() => {
+    try { return fs.readdirSync(path.join(specsDir, '.scalemax', 'specs', 'offline-sync')).sort().join(','); } catch { return null; }
+  })();
+  const plannedOnDisk = fs.existsSync(path.join(planDir, 'planned.md'));
+  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir, specsDir, planDir]) fs.rmSync(dir, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 
   // Automation creation must capture the weekday/month inputs and schedule a next run.
@@ -1090,6 +1279,36 @@ async function run(win) {
       && e2e.automaticText === 'compact context: true:false' && e2e.replyMetric && e2e.replyMetric.costStatus === 'priced'
       && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
+    specApi: probe.specMethods.length === 3 && probe.specsControls === true,
+    // The model writes requirements, design and tasks as project files and ticks a task off; the
+    // documents land in the reply's changes like any other edit.
+    specWriting: Boolean(e2e && e2e.specAnswered && e2e.specToolCalls === 'spec_write:ok,spec_write:ok,spec_write:ok,spec_task:ok'
+      && e2e.specReplyChanges === '.scalemax/specs/offline-sync/design.md,.scalemax/specs/offline-sync/requirements.md,.scalemax/specs/offline-sync/tasks.md'
+      && typeof specDocsOnDisk === 'string' && specDocsOnDisk === 'design.md,requirements.md,tasks.md'
+      && typeof specTasksOnDisk === 'string' && specTasksOnDisk.includes('- [x] Add the queue')),
+    // The window: a chip that counts the open tasks, the three documents, and a task the user
+    // ticks off themselves (which is a change to their own file).
+    specsWindow: Boolean(e2e && e2e.specChipShown && e2e.specDialogOpen && e2e.specListed === 'offline-sync'
+      && e2e.specChipLabel === 'Specs · 1 · 2 open' && e2e.specTabLabels === 'Requirements,Design,Tasks'
+      && e2e.specTabsMissing === 0 && e2e.specProgressBefore === '1/3 tasks done' && e2e.specRequirementsShown
+      && e2e.specTaskRows === 'xAdd the queue|-Flush it on reconnect|-Retry once'
+      && e2e.specProgressAfter === '2/3 tasks done' && typeof specTasksOnDisk === 'string'
+      && specTasksOnDisk.includes('- [x] Flush it on reconnect')
+      && e2e.specDialogClosed && e2e.specDraftKept === true && e2e.specReopened === true
+      && /Work through the open tasks of the "offline-sync" spec/.test(e2e.specWorkDraft)),
+    // Plan permission changes nothing and never asks: the write is refused outright, not offered.
+    planRefusesChanges: Boolean(e2e && e2e.planLabel === 'Plan' && e2e.planStoredPermission === 'plan'
+      && e2e.planAnswered && e2e.planEverAsked === false && e2e.planToolCalls === 'write_file:failed'
+      && e2e.planReplyChanged === false && e2e.planFileMissingBefore === true && e2e.planFlag === true
+      && /Plan only/.test(e2e.planCardTitle)),
+    // A plan leaves the folder completely alone: not even the project notes are written, and the
+    // first request that may change something writes them.
+    planWritesNoNotes: Boolean(e2e && e2e.planNoNotesWhilePlanning === true && e2e.planNoticeAfterPlan === ''
+      && e2e.planNotesAfterRun === true),
+    // "Run this plan" puts the permission back where it was before planning, so Basic asks once,
+    // and then the plan is really carried out.
+    planRunsAfterwards: Boolean(e2e && e2e.planRunAsked && e2e.planRunPermission === 'Basic' && e2e.planRan
+      && e2e.planFileAfter === 'planned line\n' && plannedOnDisk === true),
     modeToolSets: (() => {
       const sets = (e2e && e2e.modeTools) || {};
       const names = (value) => (typeof value === 'string' && value.startsWith('tools: ') ? value.slice(7).split(',') : []);

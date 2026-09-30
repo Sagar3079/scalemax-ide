@@ -393,6 +393,21 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
   },
 
   /**
+   * Feature specs of the open folder (lib/specs.cjs): requirements, design and a task list as
+   * Markdown files in .scalemax/specs. The model writes them; the window reads them and ticks
+   * tasks off.
+   */
+  specs: {
+    /** @returns {Promise<{ok: boolean, data?: {folder: object|null, specs: Array<object>}}>} */
+    list: () => ipcRenderer.invoke('spec:list'),
+    /** @param {{spec: string, doc?: 'requirements'|'design'|'tasks'}} input */
+    read: (input) => ipcRenderer.invoke('spec:read', input),
+    /** @param {{spec: string, task: number, done: boolean, revision?: string}} input
+     *    revision is the tasksRevision read() returned, so a task list that changed is refused. */
+    setTask: (input) => ipcRenderer.invoke('spec:task', input)
+  },
+
+  /**
    * Background commands the model started (lib/jobs.cjs): list them, read their output from a
    * character offset, type into them, stop them. onChanged hears the list when it changes.
    */

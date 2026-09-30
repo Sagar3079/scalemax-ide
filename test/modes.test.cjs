@@ -11,6 +11,7 @@ const { createWorkspaceTools, combineToolSources } = require('../lib/workspace-t
 const { createWebTools } = require('../lib/web-tools.cjs');
 const { createComputerTools } = require('../lib/computer-tools.cjs');
 const { createProjectNotes, prepareChatRequest } = require('../lib/project-notes.cjs');
+const { createSpecTools } = require('../lib/specs.cjs');
 const { createToolLoop } = require('../lib/tool-loop.cjs');
 
 test('there are two modes and Working is the default', () => {
@@ -33,8 +34,9 @@ test('anything unexpected is Working', () => {
 });
 
 test('Working works the computer, Coding stays in the project', () => {
-  assert.deepEqual(modeFamilies('working'), ['workspace', 'web', 'computer']);
-  assert.deepEqual(modeFamilies('coding'), ['workspace', 'web']);
+  assert.deepEqual(modeFamilies('working'), ['workspace', 'web', 'computer', 'specs']);
+  // Coding stays in the project, but writing a feature down before building it belongs to both.
+  assert.deepEqual(modeFamilies('coding'), ['workspace', 'web', 'specs']);
   // Coding gets more rounds: explore, change, run the tests, fix, run again.
   assert.ok(modeMaxRounds('coding') > modeMaxRounds('working'));
   const working = modeInstructions('working');
@@ -74,6 +76,7 @@ async function setup(t) {
       clipboard: { readText: () => clipboardText.value, writeText: (value) => { clipboardText.value = value; } },
       shell: { openPath: async (value) => { opened.push(['open', value]); return ''; }, openExternal: async (value) => { opened.push(['external', value]); }, showItemInFolder: (value) => { opened.push(['reveal', value]); } },
     }),
+    specs: createSpecTools({ getWorkspace }),
   };
   const source = combineToolSources({
     builtins: (mode) => modeFamilies(mode).map((family) => builtins[family]),
@@ -93,6 +96,9 @@ test('the offered tools follow the mode', async (t) => {
   assert.deepEqual(working.filter((name) => name.startsWith('computer_')), ['computer_clipboard_read', 'computer_clipboard_write', 'computer_open', 'computer_reveal']);
   assert.deepEqual(coding.filter((name) => name.startsWith('computer_')), [], 'no computer tools while coding');
   assert.deepEqual(coding.filter((name) => name.startsWith('web_')), ['web_search', 'web_open'], 'the web stays available for docs');
+  for (const set of [working, coding]) {
+    assert.deepEqual(set.filter((name) => name.startsWith('spec_')), ['spec_list', 'spec_read', 'spec_write', 'spec_task'], 'specs in both modes');
+  }
   // An unknown mode gets the Working set, and no mode at all still works.
   assert.deepEqual(names(await source.chatTools({ mode: 'nonsense' })), working);
   assert.deepEqual(names(await source.chatTools({})), working);
@@ -105,10 +111,10 @@ test('every offered tool resolves to its own source, and only writes need approv
   for (const name of names(catalog)) {
     const target = catalog.resolve(name);
     assert.ok(target, name);
-    assert.ok(['Workspace', 'Web', 'Computer'].includes(target.serverId), `${name} -> ${target.serverId}`);
+    assert.ok(['Workspace', 'Web', 'Computer', 'Specs'].includes(target.serverId), `${name} -> ${target.serverId}`);
     if (target.readOnly) readOnly.push(name);
   }
-  assert.deepEqual(readOnly, ['workspace_list', 'workspace_read', 'workspace_search', 'web_search', 'web_open', 'computer_clipboard_read']);
+  assert.deepEqual(readOnly, ['workspace_list', 'workspace_read', 'workspace_search', 'web_search', 'web_open', 'computer_clipboard_read', 'spec_list', 'spec_read']);
   assert.equal(catalog.resolve('computer_open').readOnly, false);
   assert.equal(catalog.resolve('made_up'), null);
 });

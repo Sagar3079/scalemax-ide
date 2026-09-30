@@ -20,6 +20,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - **Long-running commands without losing the reply** — the assistant can run a dev server, watcher or long build in the background, then read its output, type into it or stop it. A bar above the composer shows what is running; **Show** opens a jobs dialog with live output and controls. Background commands stay with their project, are stopped when ScaleMax quits and never need `&`
 - **Tokens and cost you can see** — every reply shows the tokens it used and what it cost with your provider's published prices, and the chat header keeps a running total for the task. When a provider does not report usage or prices, ScaleMax says so instead of showing a made-up `$0.00`
 - **Conversations that stay in context** — type `/compact` (or use Compact) to summarize older turns: your transcript stays exactly as it is, only what the model sees is shortened. If your model publishes a context limit, ScaleMax compacts automatically before a message would overflow it, and leaves your message in the box if it still would not fit. Preferences → Conversation turns the automatic behaviour off
+- **Plan before anything changes** — set permissions to **Plan** and the assistant can only look: it reads and searches, then answers with a plan, and every tool that would change something is refused outright, so there is nothing to approve by accident. Your folder is untouched, notes included. When you agree, **Run this plan** puts your permission back where it was and the assistant carries the plan out
+- **Write a feature down before you build it, like Kiro's specs** — the assistant keeps requirements, a design and a task list per feature as plain Markdown in your project (`.scalemax/specs/<feature>/`), one document at a time so you can correct each one before the next. The **Specs** chip in the composer shows how many tasks are still open; the dialog shows the three documents and lets you tick a task off yourself. Because they are ordinary project files, they show up in the reply's changes card and can be undone like any other edit
 - **Sandboxed model commands** — on macOS, the assistant's foreground and background commands default to a Seatbelt sandbox: project/temp/cache writes only, credential and app-data reads blocked, no Git hook/config changes, common desktop-control launchers and external signals blocked. Preferences → Commands controls sandbox/network; turning network off still allows localhost. Leaving the sandbox, or typing into an already outside-sandbox command, always asks one at a time — including in Bypass. Your own Workspace terminal is never sandboxed
 - **Several tasks at once** — start a task, switch to another one (in another folder too) and ask there while the first keeps working; the sidebar shows which tasks are working and which finished while you were away
 - **Two modes that really differ** — **Working** researches on the web, works with your files and hands results back (it can put something on your clipboard or open a file you asked for); **Coding** explores your project, makes focused changes and runs your tests before it reports. The pills above the message box and the mode chip both switch it
@@ -28,7 +30,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - **Works in your project folder, like Claude Code or Codex** — pick a folder from the folder menu (recent folders included; the last one opens again at start). The model can list, read, search, edit and write its files and run commands there (reads run on their own in Basic; changes and commands ask first unless you chose Bypass all). Each chat remembers its folder. Secret files such as `.env` and keys stay off limits
 - **Project notes** — on the first message in a folder ScaleMax writes `.scalemax/SCALEMAX.md` (overview, stack, commands, structure) and reads it, plus any `AGENTS.md`, `CLAUDE.md` or Kiro steering files, into every chat there. Type `/init` to have ScaleMax rewrite the notes after reading the project; Preferences → Projects turns the automatic notes off
 - **MCP tools** — add Model Context Protocol servers (local stdio commands or remote Streamable HTTP endpoints); the model can call their tools during chat and each call is listed under the reply
-- **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
+- **Composer controls** — pick the model next to Send, turn thinking on or off and set reasoning effort; tool permissions: Plan (read-only, propose first), Manual (ask every time), Basic (read-only tools run automatically) or Bypass all (autonomous, after your consent)
 - **Image & video** — pick an image or video model in the model menu; its options (size, quality, aspect ratio, resolution, duration, edit, image-to-video) appear above the message box, results show in the chat with Download
 - **Several providers** — save more than one provider; the model menu lists all of their models
 - **Six views**, one click away in the sidebar:
@@ -145,6 +147,7 @@ scalemax-ide/
 │   ├── line-diff.cjs     # line diffs for the review
 │   ├── workspace-tools.cjs # built-in chat tools for the open folder
 │   ├── modes.cjs         # what Working and Coding mean: tools, working agreement, rounds
+│   ├── specs.cjs         # feature specs as project files: requirements, design, task list
 │   ├── web-tools.cjs     # web search and reading a page (guarded fetches)
 │   ├── computer-tools.cjs # clipboard, open in the default app, show in the Finder
 │   ├── project-notes.cjs # .scalemax/SCALEMAX.md and the per-chat project context
@@ -162,6 +165,7 @@ scalemax-ide/
 │   ├── reply-ui.js       # replies in progress (one per task), steps + reply.css
 │   ├── changes-ui.js     # the changes card under a reply and the review dialog + changes.css
 │   ├── jobs-ui.js        # background commands bar/dialog and command sandbox preferences + jobs.css
+│   ├── specs-ui.js       # specs chip/dialog and the "Run this plan" card + specs.css
 │   ├── media-ui.js       # image/video generation options, results in chat, download
 │   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)

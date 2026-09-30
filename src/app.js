@@ -3,7 +3,7 @@ import { EXPERTS, SKILLS, CONNECTORS } from './data.js';
 import {
   nextRunAt, normalizeAutomations, normalizeSettings, buildSystemPrompt, requestTemperature, requestReasoning,
   toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
-  toolCallGroups, normalizeSteps, taskHistoryMessages, normalizeMetrics, normalizeCompaction,
+  toolCallGroups, normalizeSteps, taskHistoryMessages, normalizeMetrics, normalizeCompaction, effectivePermission,
   automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS,
 } from './domain.mjs';
@@ -12,6 +12,7 @@ import {
 } from './reply-ui.js';
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
+import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -233,6 +234,7 @@ const app = {
     bindMediaUi(this);
     bindChangesUi(this);
     bindJobsUi(this);
+    bindSpecsUi(this);
     this.bindProfiles();
     await this.restoreWorkspace();
     await this.settleStartFolder();
@@ -329,6 +331,9 @@ const app = {
         }
         const metrics = message.role === 'assistant' ? normalizeMetrics(message.metrics) : null;
         if (metrics) normalized.metrics = metrics;
+        // Written under Plan permission: nothing was changed, and the card offering to run it
+        // stays under the reply across restarts.
+        if (message.role === 'assistant' && message.plan === true) normalized.plan = true;
         // Generated images and videos (files stay in the app's media folder).
         const media = normalizeMediaItems(message.media);
         if (media.length) normalized.media = media;
@@ -556,6 +561,7 @@ const app = {
     this.renderFolderPicker();
     this.renderTaskFolderNotice();
     renderJobsBar(this);
+    void renderSpecsChip(this);
     this.updateSendEnabled();
     if ($('#folder-menu')?.matches(':popover-open')) renderFolderMenu(this);
   },
@@ -1646,6 +1652,12 @@ const app = {
         const card = renderChangesCard(this, message, task.id);
         if (card) bubble.append(card);
       }
+      // A reply that could only plan: "Run this plan" puts the permission back and carries it out
+      // (src/specs-ui.js).
+      if (message.role === 'assistant' && message.plan) {
+        const card = renderPlanCard(this, message, task.id);
+        if (card) bubble.append(card);
+      }
       if (message.notice) {
         const notice = element('span', 'msg-notice', message.notice);
         notice.setAttribute('role', 'note');
@@ -1777,6 +1789,9 @@ const app = {
     if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
     const metrics = role === 'assistant' ? normalizeMetrics(extra.metrics) : null;
     if (metrics) message.metrics = metrics;
+    // The request ran in Plan permission: main refused every changing tool, so the reply is a
+    // proposal (src/specs-ui.js puts "Run this plan" under it).
+    if (role === 'assistant' && extra.plan === true) message.plan = true;
     const media = normalizeMediaItems(extra.media);
     if (media.length) message.media = media;
     if (typeof extra.mediaRequest === 'string' && extra.mediaRequest) message.mediaRequest = extra.mediaRequest.slice(0, 300);
@@ -1964,6 +1979,9 @@ const app = {
     const live = this.beginReply(taskId, requestId);
     const thinking = live.thinking;
     const startedAt = Date.now();
+    // Taken before the request goes out: a plan that is stopped or fails part way still keeps its
+    // "Run this plan" card (a successful reply uses main's own answer instead).
+    const planning = effectivePermission(this.settings) === 'plan';
     // Errors of a task in the background name the task.
     const say = (message) => this.showToast(taskId === this.currentTaskId ? message : `${task.title}: ${message}`);
     let result = null;
@@ -2039,7 +2057,7 @@ const app = {
           : `The reply ended early: ${reason}`;
         this.appendMessage('assistant', partial.text, taskId, {
           steps: partial.steps, reasoning: partial.reasoning, interrupted: cancelled ? 'stopped' : 'failed', notice,
-          changes: partial.changes, metrics: failureMetrics,
+          changes: partial.changes, metrics: failureMetrics, plan: planning && Boolean(partial.text),
         });
         // The notice under the reply says why; a task in the background also gets a toast.
         if (!cancelled && taskId !== this.currentTaskId) say(reason);
@@ -2064,6 +2082,7 @@ const app = {
       changes: result.data.changes,
       reasoning: result.data.reasoning,
       metrics: result.data.metrics,
+      plan: result.data.plan === true,
       ...(thinking ? { thinkingMs } : {}),
       ...(notes ? {
         notice: `Created ${notesPath}: project notes ScaleMax reads in every chat in this folder. Edit them any time, or type /init to have ScaleMax rewrite them.`,

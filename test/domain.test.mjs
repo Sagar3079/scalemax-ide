@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildSystemPrompt, searchItems, normalizeAutomations, nextRunAt,
-  normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks,
+  normalizeSettings, toTemperature, requestTemperature, requestReasoning, effectivePermission, normalizeTasks, PERMISSION_MODES,
   folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime, toolCallGroups, toolActivity,
   MODE_IDS, MODE_TOOLS, modeInfo, modeSummary, normalizeMode,
   normalizeMetrics, normalizeCompaction, taskHistoryMessages, compactionMessages, compactionBoundary, compactionInput,
@@ -36,11 +36,12 @@ test('only the two modes exist and anything else is Working', () => {
 });
 
 test('modeSummary names the tool families the mode can use', () => {
-  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard']);
-  assert.deepEqual([...MODE_TOOLS.coding], ['Files', 'Web']);
-  // Coding has no computer tools (lib/modes.cjs), so the clipboard is not offered there.
-  assert.equal(modeSummary('working'), 'Files · Web · Clipboard');
-  assert.equal(modeSummary('coding'), 'Files · Web');
+  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard', 'Specs']);
+  assert.deepEqual([...MODE_TOOLS.coding], ['Files', 'Web', 'Specs']);
+  // Coding has no computer tools (lib/modes.cjs), so the clipboard is not offered there; writing a
+  // feature down before building it belongs to both.
+  assert.equal(modeSummary('working'), 'Files · Web · Clipboard · Specs');
+  assert.equal(modeSummary('coding'), 'Files · Web · Specs');
   assert.equal(modeSummary('nonsense'), modeSummary('working'));
 });
 
@@ -61,7 +62,7 @@ test('modeInfo gives each mode one short line for the pills and the menu', () =>
   // The returned lists are copies: a caller cannot edit the shared labels.
   const info = modeInfo('working');
   info.tools.push('Nope');
-  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard']);
+  assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard', 'Specs']);
 });
 
 test('a selected expert contributes its prompt context', () => {
@@ -307,7 +308,8 @@ test('search includes valid custom experts and skills and skips invalid ones', (
 
 test('permission modes: legacy values migrate, bypass needs recorded consent', () => {
   assert.equal(normalizeSettings({}).permission, 'basic');
-  for (const [legacy, mode] of [['ask', 'basic'], ['auto-write', 'basic'], ['full', 'basic'], ['readonly', 'manual'], ['plan', 'manual']]) {
+  // 'plan' is a real mode now, and the old read-only value is exactly that.
+  for (const [legacy, mode] of [['ask', 'basic'], ['auto-write', 'basic'], ['full', 'basic'], ['readonly', 'plan'], ['plan', 'plan']]) {
     assert.equal(normalizeSettings({ permission: legacy }).permission, mode, legacy);
   }
   const consented = normalizeSettings({ permission: 'bypass', bypassConsent: true });
@@ -531,4 +533,17 @@ test('long conversations compact in bounded prefixes and retain indices beyond f
   assert.equal(bounded.through, 400, 'main can accept this first bounded prefix');
   assert.ok(bounded.messages.length <= 400);
   assert.ok(normalizeCompaction({ summary: 'long history', through: 502 }), 'a later chunk index survives normalization');
+});
+
+
+test('plan is a real permission mode and a read-only legacy value becomes it', () => {
+  assert.deepEqual([...PERMISSION_MODES], ['plan', 'manual', 'basic', 'bypass']);
+  assert.equal(normalizeSettings({ permission: 'plan' }).permission, 'plan');
+  assert.equal(effectivePermission({ permission: 'plan' }), 'plan', 'plan needs no extra consent');
+  assert.equal(normalizeSettings({ permission: 'readonly' }).permission, 'plan');
+  // Plan must not silently become a mode that can change files.
+  assert.equal(normalizeSettings({ permission: 'plan' }).bypassConsent, false);
+  const prompt = buildSystemPrompt({ permission: 'plan' });
+  assert.match(prompt, /Plan permission: read-only/);
+  assert.match(prompt, /Run this plan/);
 });

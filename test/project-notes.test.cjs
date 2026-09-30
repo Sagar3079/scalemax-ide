@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createWorkspace } = require('../lib/workspace.cjs');
-const { createProjectNotes, isInitCommand, NOTES_PATH, INIT_PROMPT, firstParagraph, frontMatter } = require('../lib/project-notes.cjs');
+const { createProjectNotes, isInitCommand, NOTES_PATH, INIT_PROMPT, NO_CHANGE_INIT, firstParagraph, frontMatter } = require('../lib/project-notes.cjs');
 
 const DAY = new Date('2026-09-27T10:00:00Z');
 
@@ -214,4 +214,16 @@ test('prepareChatRequest: /init, notes turned off, and no folder', async (t) => 
   assert.equal(none.notes, null);
   assert.match(none.input.systemPrompt, /^No workspace folder is open/);
   assert.match(none.input.messages[0].content, /no folder is open/);
+});
+
+test('prepareChatRequest: a reply that may not change anything answers /init instead of trying', async (t) => {
+  const { root, workspace, notes } = await folder(t, 'app');
+  const workspaceTools = createWorkspaceTools({ getWorkspace: () => workspace });
+  // Plan permission: main passes canChange: false, so /init is not turned into "write the notes".
+  const planned = await prepareChatRequest({ requestId: 'r4', messages: [{ role: 'user', content: '/init' }] },
+    { workspaceTools, projectNotes: notes, notesEnabled: false, canChange: false });
+  assert.equal(planned.notes, null);
+  assert.ok(!fs.existsSync(path.join(root, NOTES_PATH)), 'a plan creates nothing');
+  assert.ok(planned.input.messages[0].content.startsWith(NO_CHANGE_INIT));
+  assert.doesNotMatch(planned.input.messages[0].content, /^Write the ScaleMax project notes/);
 });

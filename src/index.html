@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="reply.css" />
   <link rel="stylesheet" href="changes.css" />
   <link rel="stylesheet" href="jobs.css" />
+  <link rel="stylesheet" href="specs.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -160,6 +161,11 @@
                 <div id="media-bar" class="media-bar" role="group" aria-label="Generation options" hidden></div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
                   <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older conversation context (or type /compact)">Compact</button>
+                  <!-- Feature specs of this folder (src/specs-ui.js). -->
+                  <button id="specs-open" class="composer-chip specs-chip" type="button" aria-haspopup="dialog" aria-controls="specs-dialog" hidden>
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path d="M14 3v4h4" /><path d="M9 12h6M9 16h4" /></svg>
+                    <span id="specs-open-label" class="specs-chip-label">Specs</span>
+                  </button>
                   <button id="attach-btn" class="composer-icon-button" type="button" aria-label="Attach file" title="Attach file">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" /></svg>
                   </button>
@@ -200,6 +206,10 @@
               </div>
               <div id="permission-menu" class="composer-menu" popover role="menu" aria-label="Tool permissions">
                 <p class="composer-menu-title">Tool permissions</p>
+                <button class="composer-menu-option" type="button" role="menuitemradio" aria-checked="false" data-permission="plan">
+                  <span class="composer-menu-option-name">Plan</span>
+                  <span class="composer-menu-option-desc">Read-only: it investigates and proposes a plan, and changes nothing until you run it.</span>
+                </button>
                 <button class="composer-menu-option" type="button" role="menuitemradio" aria-checked="false" data-permission="manual">
                   <span class="composer-menu-option-name">Manual</span>
                   <span class="composer-menu-option-desc">Ask before every tool call.</span>
@@ -439,6 +449,7 @@
               <div class="form-group">
                 <label for="permission-select">Tool permissions</label>
                 <select id="permission-select">
+                  <option value="plan">Plan: read-only, propose a plan first</option>
                   <option value="manual">Manual: ask before every tool call</option>
                   <option value="basic" selected>Basic: read-only tools run automatically</option>
                   <option value="bypass">Bypass all permissions (autonomous)</option>
@@ -807,6 +818,33 @@
       <span class="changes-spacer"></span>
       <button id="changes-undo" class="button secondary" type="button">Undo this file</button>
       <button id="changes-keep" class="button primary" type="button">Keep</button>
+    </div>
+  </dialog>
+
+  <!-- Feature specs of the open folder: the specs on the left, the selected one's requirements,
+       design and tasks on the right (src/specs-ui.js). -->
+  <dialog id="specs-dialog" aria-labelledby="specs-title" aria-describedby="specs-subtitle">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Before you build</span><h2 id="specs-title">Feature specs</h2><p id="specs-subtitle" class="specs-subtitle"></p></div>
+      <button id="specs-close" class="specs-close" type="button" aria-label="Close the specs">×</button>
+    </div>
+    <div class="specs-body">
+      <nav class="specs-side" aria-label="Specs in this folder">
+        <div id="specs-list" class="specs-list"></div>
+        <button id="specs-new" class="button secondary compact specs-new" type="button">New spec…</button>
+      </nav>
+      <section class="specs-view" aria-labelledby="specs-name">
+        <div class="specs-view-head">
+          <span id="specs-name" class="specs-name"></span>
+          <span id="specs-progress" class="specs-progress" role="status"></span>
+        </div>
+        <div id="specs-tabs" class="specs-tabs" role="tablist" aria-label="Spec documents"></div>
+        <div id="specs-doc" class="specs-doc" tabindex="0" role="region" aria-label="Spec document"></div>
+      </section>
+    </div>
+    <div class="specs-actions">
+      <span class="specs-spacer"></span>
+      <button id="specs-work" class="button primary" type="button">Work on the open tasks</button>
     </div>
   </dialog>
 

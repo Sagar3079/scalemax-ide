@@ -183,7 +183,8 @@ test('bypass runs everything without asking; unknown modes are treated as manual
   assert.equal(ask.requests.length, 0);
   assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo', 'add']);
 
-  for (const permission of [undefined, 'full', 'plan']) {
+  // 'plan' is a real mode of its own now (see below); anything the loop does not know is Manual.
+  for (const permission of [undefined, 'full', 'readonly']) {
     const strict = approver([]);
     const other = fakeMcp();
     await createToolLoop({ provider: fakeProvider([twoCallReply(), textReply('Done.')]), mcp: other, approve: strict.approve })
@@ -739,4 +740,33 @@ test('keeps completed model usage on an error after a tool round', async () => {
       return true;
     },
   );
+});
+
+
+test('plan permission refuses every changing tool without asking, and read-only ones still run', async () => {
+  const provider = fakeProvider([twoCallReply(), textReply('Here is the plan.')]);
+  const mcp = fakeMcp();
+  const ask = approver([]);
+  const result = await createToolLoop({ provider, mcp, approve: ask.approve }).send({ ...INPUT }, { permission: 'plan' });
+  // echo is read-only and runs; add would change something, so it is refused before any prompt.
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['echo']);
+  assert.equal(ask.requests.length, 0, 'plan mode never asks the user');
+  const [echo, add] = toolMessages(provider.calls.complete[1]).map((message) => message.content);
+  assert.equal(echo, 'ok:echo');
+  assert.match(add, /^Error: this reply is in Plan permission/);
+  assert.match(add, /Run this plan/);
+  assert.deepEqual(result.toolCalls.map((call) => call.ok), [true, false]);
+  assert.equal(result.text, 'Here is the plan.');
+  // The refused call is still a visible step, so the reply cannot silently skip it.
+  assert.deepEqual(result.steps.map((step) => [step.tool, step.ok]), [['echo', true], ['add', false]]);
+});
+
+test('plan permission refuses a call that would otherwise always ask, instead of prompting', async () => {
+  const source = sandboxedSource();
+  const ask = approver(['once', 'once', 'once']);
+  const provider = fakeProvider(unsandboxedReplies());
+  await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve })
+    .send({ ...INPUT }, { permission: 'plan', source });
+  assert.deepEqual(source.ran, [], 'nothing ran, sandboxed or not');
+  assert.equal(ask.requests.length, 0, 'leaving the sandbox cannot be approved in plan mode');
 });
