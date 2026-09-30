@@ -384,6 +384,28 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
   },
 
   /**
+   * Background commands the model started (lib/jobs.cjs): list them, read their output from a
+   * character offset, type into them, stop them. onChanged hears the list when it changes.
+   */
+  jobs: {
+    /** @returns {Promise<{ok: boolean, data?: {sandboxAvailable: boolean, policy: object}}>} */
+    info: () => ipcRenderer.invoke('jobs:info'),
+    list: () => ipcRenderer.invoke('jobs:list'),
+    /** @param {{id: string, from?: number}} input */
+    output: (input) => ipcRenderer.invoke('jobs:output', input),
+    /** @param {{id: string, text: string}} input */
+    input: (input) => ipcRenderer.invoke('jobs:input', input),
+    /** @param {{id: string}} input */
+    stop: (input) => ipcRenderer.invoke('jobs:stop', input),
+    onChanged: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, list) => callback(list);
+      ipcRenderer.on('jobs:changed', listener);
+      return () => ipcRenderer.removeListener('jobs:changed', listener);
+    }
+  },
+
+  /**
    * What each reply changed in its folder (lib/checkpoints.cjs), by the reply's request id:
    * review a file as a diff, undo files (only while they are as the reply left them) or keep them.
    */

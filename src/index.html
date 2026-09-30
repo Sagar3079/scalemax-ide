@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="markdown.css" />
   <link rel="stylesheet" href="reply.css" />
   <link rel="stylesheet" href="changes.css" />
+  <link rel="stylesheet" href="jobs.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -143,6 +144,12 @@
                   <svg class="task-folder-notice-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
                   <span id="task-folder-notice-text" class="task-folder-notice-text"></span>
                   <button id="task-folder-notice-action" class="button secondary compact task-folder-notice-action" type="button" aria-describedby="task-folder-notice-text" hidden></button>
+                </div>
+                <!-- Background commands the model left running (src/jobs-ui.js renderJobsBar). -->
+                <div id="jobs-bar" class="jobs-bar" role="status" hidden>
+                  <span class="jobs-bar-dot" aria-hidden="true"></span>
+                  <span id="jobs-bar-text" class="jobs-bar-text"></span>
+                  <button id="jobs-bar-show" class="button secondary compact jobs-bar-show" type="button" aria-haspopup="dialog" aria-describedby="jobs-bar-text">Show</button>
                 </div>
                 <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step…" aria-label="Message"></textarea>
                 <div id="attachment-row" class="attachment-row" hidden>
@@ -531,6 +538,25 @@
                 <button id="project-notes-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="project-notes-label" aria-describedby="project-notes-desc"><span class="switch-thumb"></span></button>
               </div>
             </section>
+            <!-- How the model's commands run (src/jobs-ui.js renderCommandSettings; main reads the settings before each command). -->
+            <section class="settings-card" aria-labelledby="commands-title">
+              <h2 id="commands-title">Commands</h2>
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="sandbox-label" for="sandbox-toggle">Run the model's commands in a sandbox</label>
+                  <p id="sandbox-desc" class="status-text">They can change files only in the task's folder, temporary folders and package caches, cannot change .git/hooks or .git/config, and cannot read credential folders such as ~/.ssh. A command that must do more asks you first, every time. Commands you run in the Workspace terminal are not sandboxed.</p>
+                </div>
+                <button id="sandbox-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="sandbox-label" aria-describedby="sandbox-desc"><span class="switch-thumb"></span></button>
+              </div>
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="sandbox-network-label" for="sandbox-network-toggle">Network in the sandbox</label>
+                  <p id="sandbox-network-desc" class="status-text">Off: sandboxed commands reach only this computer, so installs and downloads fail while dev servers and their tests still work.</p>
+                </div>
+                <button id="sandbox-network-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="sandbox-network-label" aria-describedby="sandbox-network-desc"><span class="switch-thumb"></span></button>
+              </div>
+              <p id="sandbox-unavailable" class="status-text" hidden>The sandbox needs macOS. Here the model's commands run without it.</p>
+            </section>
             <section class="settings-card" aria-labelledby="data-title">
               <h2 id="data-title">Your data stays yours</h2>
               <p class="body-copy">There is no cloud sign-in. Task history and settings are stored as plain local data on this device, not as encrypted records. Keep exports somewhere you trust.</p>
@@ -770,6 +796,35 @@
       <span class="changes-spacer"></span>
       <button id="changes-undo" class="button secondary" type="button">Undo this file</button>
       <button id="changes-keep" class="button primary" type="button">Keep</button>
+    </div>
+  </dialog>
+
+  <!-- Background commands: every one on the left, the selected one's output on the right, a line
+       to type into it and Stop (src/jobs-ui.js). -->
+  <dialog id="jobs-dialog" aria-labelledby="jobs-title" aria-describedby="jobs-subtitle">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Background</span><h2 id="jobs-title">Background commands</h2><p id="jobs-subtitle" class="jobs-subtitle">Servers, watchers and long builds the model left running. They stop when ScaleMax quits.</p></div>
+      <button id="jobs-close" class="jobs-close" type="button" aria-label="Close background commands">×</button>
+    </div>
+    <div class="jobs-body">
+      <nav id="jobs-list" class="jobs-list" aria-label="Background commands"></nav>
+      <section class="jobs-view" aria-labelledby="jobs-command">
+        <div class="jobs-view-head">
+          <span id="jobs-command" class="jobs-command"></span>
+          <span id="jobs-state" class="jobs-state" role="status"></span>
+        </div>
+        <pre id="jobs-output" class="jobs-output" tabindex="0" aria-label="Output"></pre>
+        <form id="jobs-input-form" class="jobs-input-row">
+          <label for="jobs-input" class="sr-only">Type into the command</label>
+          <input id="jobs-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type into the command, then press Enter" />
+          <button id="jobs-send" class="button secondary compact" type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+    <div class="jobs-actions">
+      <span id="jobs-where" class="jobs-where"></span>
+      <span class="jobs-spacer"></span>
+      <button id="jobs-stop" class="button danger" type="button">Stop</button>
     </div>
   </dialog>
 

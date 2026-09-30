@@ -1,0 +1,250 @@
+/*
+ * Background commands (src/jobs-ui.js): the bar in the message box while one runs, and the
+ * dialog with every command, its output, a line to type into it and Stop.
+ */
+.jobs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 14px;
+  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  background: var(--sm-app-surface-hover);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sm-text-medium);
+}
+.jobs-bar-dot,
+.jobs-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sm-palette-green-8);
+}
+.jobs-bar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 11.5px;
+}
+.jobs-bar-show {
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jobs-bar-dot,
+  .jobs-dot.is-running {
+    animation: jobs-pulse 1.6s ease-in-out infinite;
+  }
+}
+@keyframes jobs-pulse {
+  50% { opacity: 0.35; }
+}
+
+#jobs-dialog {
+  width: min(1040px, 94vw);
+  height: min(720px, 84vh);
+  margin: 7vh auto auto;
+  padding: 0;
+  border: 1px solid var(--sm-color-border-secondary);
+  border-radius: var(--sm-radius-xl);
+  background: var(--sm-bg-modal);
+  color: var(--sm-text-strong);
+  box-shadow: var(--sm-shadow-popup-large);
+}
+#jobs-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+#jobs-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+.jobs-subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.jobs-close {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.jobs-close:hover {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.jobs-close:focus-visible,
+.jobs-item:focus-visible,
+.jobs-output:focus-visible {
+  outline: 2px solid var(--sm-brand-primary);
+  outline-offset: -2px;
+}
+.jobs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border-top: 1px solid var(--sm-app-border);
+  border-bottom: 1px solid var(--sm-app-border);
+}
+.jobs-list {
+  flex: 0 0 270px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+  border-right: 1px solid var(--sm-app-border);
+}
+.jobs-empty {
+  margin: 10px 8px;
+  font-size: 12.5px;
+  color: var(--sm-text-weak);
+}
+.jobs-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sm-text-medium);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.jobs-item:hover {
+  background: var(--sm-app-surface-hover);
+}
+.jobs-item.is-selected {
+  background: var(--sm-app-surface-hover);
+  color: var(--sm-text-strong);
+}
+.jobs-item .jobs-dot {
+  margin-top: 5px;
+}
+.jobs-dot.is-exited,
+.jobs-dot.is-stopped {
+  background: var(--sm-color-border-solid);
+}
+.jobs-dot.is-failed {
+  background: var(--sm-palette-red-8);
+}
+.jobs-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.jobs-item-command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+}
+.jobs-item.is-selected .jobs-item-command {
+  font-weight: 600;
+}
+.jobs-item-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+.jobs-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.jobs-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--sm-app-border);
+}
+.jobs-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-code-family);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.jobs-state {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.jobs-output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 14px;
+  overflow: auto;
+  background: var(--sm-app-muted);
+  color: var(--sm-text-strong);
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 8;
+}
+.jobs-output-empty {
+  font-family: var(--sm-font-family, inherit);
+  color: var(--sm-text-weak);
+  white-space: normal;
+}
+.jobs-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--sm-app-border);
+}
+.jobs-input-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--sm-font-code-family);
+  font-size: 12px;
+}
+.jobs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.jobs-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--sm-text-weak);
+}
+.jobs-spacer {
+  flex: 1;
+}
+
+/* The prompt for a command outside the sandbox stands out a little. */
+#tool-approval-dialog.is-unsandboxed #approval-summary {
+  padding: 8px 10px;
+  border-left: 3px solid var(--sm-color-text-warning-default);
+  border-radius: 4px;
+  background: var(--sm-status-warning-soft);
+}

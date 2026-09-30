@@ -12,6 +12,8 @@ const path = require('node:path');
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const FAKE_MCP_SERVER = path.join(__dirname, '..', 'test', 'fixtures', 'fake-mcp-server.cjs');
+// The smoke run's app data (main.js): the sandbox keeps the model's commands out of it.
+const SMOKE_DATA = path.join(os.tmpdir(), `scalemax-smoke-${process.pid}`);
 
 // Minimal OpenAI-compatible stub on loopback, reachable from the provider.
 // With tools offered and a "use echo" request it answers with a tool call,
@@ -47,6 +49,25 @@ function stubReply(body) {
       role: 'assistant',
       content: 'Running it now.',
       tool_calls: [{ id: 'call_smoke_run', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: 'printf smoke-run-a; sleep 1.2; printf smoke-run-b' }) } }],
+    };
+  }
+  // Background commands and the sandbox: a command that keeps running and answers what is typed
+  // into it; one that tries to read ScaleMax's own data (the sandbox refuses); the same outside
+  // the sandbox (the user is always asked).
+  if (run && typeof last.content === 'string' && last.content.includes('start a job')) {
+    return {
+      role: 'assistant',
+      content: 'Starting it in the background.',
+      tool_calls: [{ id: 'call_smoke_job', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: 'echo job-ready; while read line; do echo "job got $line"; done', background: true, wait_seconds: 2 }) } }],
+    };
+  }
+  if (run && typeof last.content === 'string' && (last.content.includes('read app data') || last.content.includes('leave the sandbox'))) {
+    const outside = last.content.includes('leave the sandbox');
+    const command = `ls ${JSON.stringify(SMOKE_DATA)}${outside ? ' > /dev/null && echo outside-ok' : ''}`;
+    return {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: outside ? 'call_smoke_outside' : 'call_smoke_refused', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify(outside ? { command, sandbox: false } : { command }) } }],
     };
   }
   // Built-in workspace tools: list the open folder, or say which folder the instructions name.
@@ -264,6 +285,8 @@ async function run(win) {
         mediaMethods: ['generate','cancel','info','pickImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
         approvalMethods: ['onRequest','onClosed','respond'].filter((m) => typeof api.approvals?.[m] === 'function'),
         checkpointMethods: ['get','diff','undo','keep','remove'].filter((m) => typeof api.checkpoints?.[m] === 'function'),
+        jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
+        commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
         composerControls: ['#attach-btn svg', '#permission-button', '#model-button', '#model-menu[popover]', '#permission-menu[popover]', '#bypass-dialog', '#tool-approval-dialog']
           .every((selector) => Boolean(document.querySelector(selector))),
         attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
@@ -297,6 +320,8 @@ async function run(win) {
   const parDirA = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-a-'));
   const parDirB = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-b-'));
   fs.writeFileSync(path.join(parDirB, 'b-note.txt'), 'line one\nline two\n');
+  // A folder for background commands and the sandbox.
+  const jobsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-jobs-'));
   try {
     e2e = await win.webContents.executeJavaScript(`(async () => {
       const api = window.scalemaxAPI;
@@ -541,6 +566,51 @@ async function run(win) {
         if (deletedStillInMain && deletedStillInMain.ok && deletedStillInMain.data === false) break;
       }
       const toastAfterDelete = document.querySelector('#toast') ? document.querySelector('#toast').textContent : '';
+
+      // Background commands: the model starts one; it keeps running after the reply, the window
+      // shows it above the message box and in the dialog with its output, typing reaches it and
+      // Stop ends it.
+      await app.openWorkspaceAt(${JSON.stringify(jobsDir)});
+      const jobPending = api.provider.send({ requestId: 'smoke-job', folder: ${JSON.stringify(jobsDir)}, messages: [{ role: 'user', content: 'Please start a job.' }] });
+      await until(() => Boolean(document.querySelector('#tool-approval-dialog')?.open), 8000);
+      const jobApproval = document.querySelector('#approval-summary')?.textContent || '';
+      document.querySelector('#approval-once')?.click();
+      const jobReply = await jobPending;
+      const jobText = jobReply && jobReply.ok ? jobReply.data.text : (jobReply && jobReply.error ? jobReply.error.message : '');
+      const jobListed = await api.jobs.list();
+      const jobBar = await until(() => !document.querySelector('#jobs-bar').hidden
+        && (document.querySelector('#jobs-bar-text')?.textContent || '').includes('echo job-ready'), 3000);
+      document.querySelector('#jobs-bar-show').click();
+      const jobDialogOutput = await until(() => Boolean(document.querySelector('#jobs-dialog')?.open)
+        && (document.querySelector('#jobs-output')?.textContent || '').includes('job-ready'), 3000);
+      const jobWhere = document.querySelector('#jobs-where')?.textContent || '';
+      document.querySelector('#jobs-input').value = 'hello-job';
+      document.querySelector('#jobs-input-form').requestSubmit();
+      const jobTyped = await until(() => (document.querySelector('#jobs-output')?.textContent || '').includes('job got hello-job'), 3000);
+      document.querySelector('#jobs-stop').click();
+      const jobStopped = await until(() => {
+        const item = document.querySelector('#jobs-list .jobs-item.is-selected');
+        return Boolean(item && item.dataset.status === 'stopped');
+      }, 5000);
+      const jobStateText = document.querySelector('#jobs-state')?.textContent || '';
+      const jobInputOff = Boolean(document.querySelector('#jobs-input')?.disabled);
+      document.querySelector('#jobs-close').click();
+      const jobBarGone = await until(() => Boolean(document.querySelector('#jobs-bar').hidden), 3000);
+      // The sandbox: even in Bypass, a command cannot read ScaleMax's data, and the model is told
+      // what the sandbox allows; leaving it asks every time, one call at a time.
+      const jobSettings = await api.store.get('settings');
+      await api.store.set('settings', { ...(jobSettings || {}), permission: 'bypass', bypassConsent: true });
+      const refusal = await api.provider.send({ requestId: 'smoke-refused', folder: ${JSON.stringify(jobsDir)}, messages: [{ role: 'user', content: 'Please read app data.' }] });
+      const refusalText = refusal && refusal.ok ? refusal.data.text : (refusal && refusal.error ? refusal.error.message : '');
+      const outsidePending = api.provider.send({ requestId: 'smoke-outside', folder: ${JSON.stringify(jobsDir)}, messages: [{ role: 'user', content: 'Please leave the sandbox.' }] });
+      const outsideAsked = await until(() => Boolean(document.querySelector('#tool-approval-dialog')?.open), 4000);
+      const outsideTitle = document.querySelector('#approval-title')?.textContent || '';
+      const outsideSummary = document.querySelector('#approval-summary')?.textContent || '';
+      const outsideAllHidden = Boolean(document.querySelector('#approval-all')?.hidden);
+      document.querySelector('#approval-once')?.click();
+      const outside = await outsidePending;
+      const outsideText = outside && outside.ok ? outside.data.text : (outside && outside.error ? outside.error.message : '');
+      await api.store.set('settings', jobSettings || {});
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -618,6 +688,23 @@ async function run(win) {
         deletedGone,
         deletedStillInMain,
         toastAfterDelete,
+        jobApproval,
+        jobText,
+        jobListedCount: jobListed && jobListed.ok ? jobListed.data.length : null,
+        jobBar,
+        jobDialogOutput,
+        jobWhere,
+        jobTyped,
+        jobStopped,
+        jobStateText,
+        jobInputOff,
+        jobBarGone,
+        refusalText,
+        outsideAsked,
+        outsideTitle,
+        outsideSummary,
+        outsideAllHidden,
+        outsideText,
         modeTools,
         matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
@@ -646,7 +733,7 @@ async function run(win) {
   const wsNotesOnDisk = (() => {
     try { return fs.readFileSync(path.join(wsToolsDir, '.scalemax', 'SCALEMAX.md'), 'utf8'); } catch { return null; }
   })();
-  for (const dir of [wsToolsDir, parDirA, parDirB]) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir]) fs.rmSync(dir, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 
   // Automation creation must capture the weekday/month inputs and schedule a next run.
@@ -802,6 +889,7 @@ async function run(win) {
     mediaApi: probe.mediaMethods.length === 6,
     approvalApi: probe.approvalMethods.length === 3,
     checkpointApi: probe.checkpointMethods.length === 5,
+    jobsApi: probe.jobMethods.length === 6 && probe.commandSettings === true,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',
     workspaceApi: probe.workspaceMethods.length === 9,
@@ -885,6 +973,18 @@ async function run(win) {
     // Deleting a working task stops its reply in main and posts nothing afterwards.
     deleteStopsReply: Boolean(e2e && e2e.deletedGone && e2e.deletedStillInMain && e2e.deletedStillInMain.ok
       && e2e.deletedStillInMain.data === false && !/no longer exists/.test(e2e.toastAfterDelete || '')),
+    // A background command: started by the model (in the sandbox, after the prompt said so), it
+    // outlives the reply; the window shows it, its output and what is typed into it, and stops it.
+    backgroundJob: Boolean(e2e && /Background command j\d+: echo job-ready/.test(e2e.jobText) && /running for/.test(e2e.jobText)
+      && /in the sandbox/.test(e2e.jobText) && /job-ready/.test(e2e.jobText) && e2e.jobListedCount >= 1
+      && /keeps running in the background/.test(e2e.jobApproval) && /It runs in the sandbox/.test(e2e.jobApproval)),
+    jobsWindow: Boolean(e2e && e2e.jobBar && e2e.jobDialogOutput && /in the sandbox/.test(e2e.jobWhere) && e2e.jobTyped
+      && e2e.jobStopped && /^Stopped/.test(e2e.jobStateText) && e2e.jobInputOff && e2e.jobBarGone),
+    // In the sandbox a command cannot read ScaleMax's data, and the model hears what it allows.
+    sandboxRefusal: Boolean(e2e && /operation not permitted/i.test(e2e.refusalText) && /sandbox: false/.test(e2e.refusalText)),
+    // Leaving the sandbox asks even in Bypass, one call at a time, and then works.
+    unsandboxedAsks: Boolean(e2e && e2e.outsideAsked && e2e.outsideTitle === 'Run this command outside the sandbox?'
+      && /outside the sandbox/.test(e2e.outsideSummary) && e2e.outsideAllHidden && /outside-ok/.test(e2e.outsideText)),
     modeToolSets: (() => {
       const sets = (e2e && e2e.modeTools) || {};
       const names = (value) => (typeof value === 'string' && value.startsWith('tools: ') ? value.slice(7).split(',') : []);

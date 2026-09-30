@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   reasoningEffort: 'medium',
   // Main writes .scalemax/SCALEMAX.md on the first message in a folder (Preferences > Projects).
   projectNotes: true,
+  // The model's commands run in the macOS sandbox (lib/sandbox.cjs), with or without network.
+  sandbox: true,
+  sandboxNetwork: true,
   // What the composer sends: chat, or an image / video generation with the chosen model.
   composerMode: 'chat',
   imageModel: '',
@@ -179,6 +182,9 @@ export function normalizeSettings(value) {
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
   if (typeof own(value, 'projectNotes') === 'boolean') result.projectNotes = value.projectNotes;
+  for (const key of ['sandbox', 'sandboxNetwork']) {
+    if (typeof own(value, key) === 'boolean') result[key] = value[key];
+  }
   if (['chat', 'image', 'video'].includes(own(value, 'composerMode'))) result.composerMode = value.composerMode;
   for (const key of ['imageModel', 'videoModel']) {
     if (typeof own(value, key) === 'string' && MODEL_ID.test(value[key])) result[key] = value[key];

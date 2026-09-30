@@ -638,3 +638,58 @@ test('cancelling a reply aborts the signal a running tool was given', async () =
   await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
   assert.equal(signal.aborted, true);
 });
+
+// A per-reply source whose run tool must always ask when it leaves the sandbox.
+function sandboxedSource({ alwaysAsk = (args) => (args.sandbox === false ? 'unsandboxed' : '') } = {}) {
+  const ran = [];
+  return {
+    ran,
+    async chatTools() {
+      return {
+        tools: [{ type: 'function', function: { name: 'ws_run', parameters: { type: 'object', properties: {} } } }],
+        resolve: (name) => (name === 'ws_run' ? { serverId: 'Workspace', toolName: 'run_command', readOnly: false, alwaysAsk } : null),
+        errors: [],
+      };
+    },
+    async callTool(input) {
+      ran.push(input.arguments.command);
+      return { text: 'Exit code: 0' };
+    },
+  };
+}
+function unsandboxedReplies() {
+  return [
+    toolReply([toolCall('c1', 'ws_run', '{"command":"ls"}'), toolCall('c2', 'ws_run', '{"command":"git init","sandbox":false}')]),
+    toolReply([toolCall('c3', 'ws_run', '{"command":"git config user.name x","sandbox":false}')]),
+    textReply('Done.'),
+  ];
+}
+
+test('a call that must always ask asks even in bypass, and "allow all" never covers it', async () => {
+  // Bypass: the sandboxed command runs without asking; each one outside the sandbox asks, with
+  // the reason, and "allow all in this reply" lets that one call run, not the next.
+  const source = sandboxedSource();
+  const ask = approver(['request', 'deny']);
+  const provider = fakeProvider(unsandboxedReplies());
+  await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve }).send({ ...INPUT }, { ...BYPASS, source });
+  assert.deepEqual(ask.requests.map((request) => [request.toolName, request.reason]), [['run_command', 'unsandboxed'], ['run_command', 'unsandboxed']]);
+  assert.deepEqual(source.ran, ['ls', 'git init']);
+  assert.match(toolMessages(provider.calls.complete[2]).at(-1).content, /^Error: the user denied this tool call/);
+
+  // Manual: "allow all" on an ordinary call does not approve the calls that must always ask.
+  const manual = sandboxedSource();
+  const strict = approver(['request', 'once']);
+  await createToolLoop({ provider: fakeProvider(unsandboxedReplies()), mcp: fakeMcp(), approve: strict.approve })
+    .send({ ...INPUT, requestId: 'r2' }, { permission: 'manual', source: manual });
+  assert.deepEqual(strict.requests.map((request) => request.reason), [undefined, 'unsandboxed', 'unsandboxed']);
+  assert.deepEqual(manual.ran, ['ls', 'git init']);
+
+  // A check that fails asks too.
+  const broken = sandboxedSource({ alwaysAsk: () => { throw new Error('policy unavailable'); } });
+  const careful = approver([]);
+  await createToolLoop({ provider: fakeProvider(unsandboxedReplies()), mcp: fakeMcp(), approve: careful.approve })
+    .send({ ...INPUT, requestId: 'r3' }, { ...BYPASS, source: broken });
+  assert.equal(careful.requests.length, 3);
+  assert.ok(careful.requests.every((request) => request.reason === 'required'));
+  assert.deepEqual(broken.ran, []);
+});

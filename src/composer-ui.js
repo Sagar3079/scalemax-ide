@@ -580,8 +580,26 @@ function approvalBridge() {
 const WORKSPACE_SUMMARIES = {
   write_file: (where) => `The model wants to create or replace a file in ${where}. A replaced file is backed up first.`,
   edit_file: (where) => `The model wants to change part of a file in ${where}. The previous version is backed up first.`,
-  run_command: (where) => `The model wants to run a command in ${where}. It stops at its time limit (2 minutes unless the model asks for up to 10) or when you press Stop.`,
+  run_command: (where, args) => (args.background === true
+    ? `The model wants to start a command in ${where} that keeps running in the background, like a dev server or a watcher. It runs until it ends, the model or you stop it, or ScaleMax quits.`
+    : `The model wants to run a command in ${where}. It stops at its time limit (2 minutes unless the model asks for up to 10) or when you press Stop.`),
+  job_input: (where) => `The model wants to type into a background command running in ${where}.`,
+  job_stop: (where) => `The model wants to stop a background command in ${where}, and everything it started.`,
 };
+// How a command runs (main says, from Preferences > Commands).
+const SANDBOX_NOTES = {
+  on: ' It runs in the sandbox: it can change files only in this folder, temporary folders and package caches.',
+  offline: ' It runs in the sandbox without network: it can change files only in this folder, temporary folders and package caches.',
+};
+// The arguments as the prompt shows them (JSON, cut at 4 KB), or {} when they do not parse.
+function approvalArguments(request) {
+  try {
+    const value = JSON.parse(request.arguments);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
 // Working-mode tools that reach past the folder (lib/computer-tools.cjs).
 const COMPUTER_SUMMARIES = {
   write_clipboard: 'The model wants to put text on your clipboard, replacing what is on it now.',
@@ -591,8 +609,13 @@ const COMPUTER_SUMMARIES = {
 function approvalSummary(request) {
   if (request.kind === 'workspace') {
     const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
+    if (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input') {
+      const action = request.reason === 'unsandboxed-input' ? 'type into a command' : 'run a command';
+      return `The model wants to ${action} in ${where} outside the sandbox. There it can change any of your files, read credential folders such as ~/.ssh and use the network. ScaleMax asks about this every time, whatever the permission mode.`;
+    }
     const summary = WORKSPACE_SUMMARIES[request.toolName];
-    return summary ? summary(where) : `The model wants to read files in ${where}.`;
+    if (!summary) return `The model wants to read files in ${where}.`;
+    return summary(where, approvalArguments(request)) + (request.toolName === 'run_command' ? SANDBOX_NOTES[request.sandbox] || '' : '');
   }
   if (request.kind === 'computer') {
     return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
@@ -618,9 +641,17 @@ function showNextApproval() {
   const task = reply && reply.taskId !== approvals.app.currentTaskId
     ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
   $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
-  $('#approval-title').textContent = `Allow ${request.serverName} · ${request.toolName}?`;
+  // A call that always asks (a command outside the sandbox) is allowed one at a time.
+  const always = Boolean(request.reason);
+  const outside = request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input';
+  $('#approval-title').textContent = request.reason === 'unsandboxed-input'
+    ? 'Type into this command outside the sandbox?'
+    : outside ? 'Run this command outside the sandbox?' : `Allow ${request.serverName} · ${request.toolName}?`;
   $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
+  const all = $('#approval-all');
+  if (all) all.hidden = always;
+  dialog.classList.toggle('is-unsandboxed', outside);
   const queue = $('#approval-queue');
   if (queue) {
     queue.hidden = approvals.queue.length < 2;
@@ -634,9 +665,10 @@ async function answerApproval(app, decision) {
   const request = approvals.showing;
   if (!request) return;
   approvals.queue = approvals.queue.filter((item) => item.approvalId !== request.approvalId);
-  // "Allow all in this reply" also answers the other prompts already waiting for this reply.
-  const siblings = decision === 'request'
-    ? approvals.queue.filter((item) => item.requestId === request.requestId) : [];
+  // "Allow all in this reply" also answers the other prompts already waiting for this reply,
+  // except those that must always ask.
+  const siblings = decision === 'request' && !request.reason
+    ? approvals.queue.filter((item) => item.requestId === request.requestId && !item.reason) : [];
   approvals.queue = approvals.queue.filter((item) => !siblings.includes(item));
   showNextApproval();
   const bridge = approvalBridge();
@@ -662,6 +694,10 @@ function bindApprovals(app) {
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
       folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
+      // Why it always asks ('unsandboxed', or another reason main gives), and how a command runs.
+      reason: typeof request.reason === 'string' && request.reason
+        ? (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input' ? request.reason : 'required') : '',
+      sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',
     });
     if (!approvals.showing) {
       showNextApproval();

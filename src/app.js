@@ -9,6 +9,7 @@ import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps,
 } from './reply-ui.js';
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
+import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -227,6 +228,7 @@ const app = {
     bindComposerUi(this);
     bindMediaUi(this);
     bindChangesUi(this);
+    bindJobsUi(this);
     this.bindProfiles();
     await this.restoreWorkspace();
     await this.settleStartFolder();
@@ -543,6 +545,7 @@ const app = {
     this.renderSidebarFolder();
     this.renderFolderPicker();
     this.renderTaskFolderNotice();
+    renderJobsBar(this);
     this.updateSendEnabled();
     if ($('#folder-menu')?.matches(':popover-open')) renderFolderMenu(this);
   },
@@ -2059,6 +2062,7 @@ const app = {
     if ($('#temperature-enabled')) $('#temperature-enabled').checked = Boolean(this.settings.temperatureEnabled);
     this.renderTemperatureValue();
     this.renderProjectNotesToggle();
+    renderCommandSettings(this);
     renderPermission(this);
     renderModelButton(this);
   },

@@ -59,7 +59,9 @@ test('an open folder offers six tools; reads are read-only, writes and commands 
   assert.ok(note.includes(`"${path.basename(root)}"`));
   assert.ok(!note.includes(root));
   assert.equal(tools.marker(), `[Workspace folder right now: "${path.basename(root)}"]`);
-  assert.equal(TOOLS.length, 6);
+  // Four more (background commands) only come with a job manager (test/jobs.test.cjs).
+  assert.equal(TOOLS.length, 10);
+  assert.equal(tools.resolve('workspace_job_output'), null);
   assert.equal(tools.resolve('workspace_edit').readOnly, false);
 });
 

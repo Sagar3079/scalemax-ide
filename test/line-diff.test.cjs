@@ -97,6 +97,7 @@ test('repetitive large files never take long: the edit budget shrinks with the s
   const after = Array.from({ length: 200000 }, (_, index) => (index % 3 ? 'x' : 'y'));
   const started = Date.now();
   const result = countChanges(`${before.join('\n')}\n`, `${after.join('\n')}\n`);
-  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  // About 0.6 s on its own; test files run in parallel, and an unbounded diff would take minutes.
+  assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
   assert.equal(typeof result.approximate, 'boolean');
 });

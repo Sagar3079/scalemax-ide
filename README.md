@@ -17,6 +17,8 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
 - **Real chat, streamed** — replies appear as they are written; every file the assistant reads or edits and every command it runs shows as a step (with the command's output while it runs), folded above the answer when it is done. Stop keeps what was written so far
 - **Review and undo what a reply changed** — under every reply that changed files, a card lists them with their added and removed lines; open one to see the diff, then keep it or undo it (file by file, or all at once). Undo never overwrites work done since, and the assistant is told what you undid
+- **Long-running commands without losing the reply** — the assistant can run a dev server, watcher or long build in the background, then read its output, type into it or stop it. A bar above the composer shows what is running; **Show** opens a jobs dialog with live output and controls. Background commands stay with their project, are stopped when ScaleMax quits and never need `&`
+- **Sandboxed model commands** — on macOS, the assistant's foreground and background commands default to a Seatbelt sandbox: project/temp/cache writes only, credential and app-data reads blocked, no Git hook/config changes, common desktop-control launchers and external signals blocked. Preferences → Commands controls sandbox/network; turning network off still allows localhost. Leaving the sandbox, or typing into an already outside-sandbox command, always asks one at a time — including in Bypass. Your own Workspace terminal is never sandboxed
 - **Several tasks at once** — start a task, switch to another one (in another folder too) and ask there while the first keeps working; the sidebar shows which tasks are working and which finished while you were away
 - **Two modes that really differ** — **Working** researches on the web, works with your files and hands results back (it can put something on your clipboard or open a file you asked for); **Coding** explores your project, makes focused changes and runs your tests before it reports. The pills above the message box and the mode chip both switch it
 - **Every task lives in a folder, like Kiro** — a conversation starts once you choose a folder (any folder, the Desktop included), and after the first message the task stays in that folder. The sidebar lists your projects with their tasks and a **+** to start another task in the same folder; New task lets you pick a different one
@@ -131,7 +133,10 @@ scalemax-ide/
 │   ├── media.cjs         # image/video generation, polling, downloads (main process)
 │   ├── mcp-oauth.cjs     # zero-setup MCP sign-in: discovery, dynamic client registration, PKCE
 │   ├── mcp-directory.cjs # official MCP servers behind one-click connector sign-in
-│   ├── tool-loop.cjs     # chat tool-calling loop over workspace + MCP tools (streamed, with steps)
+│   ├── tool-loop.cjs     # chat tool-calling loop, approvals and streamed steps
+│   ├── commands.cjs      # cross-platform shell, macOS terminal wrapper and cleaned output
+│   ├── jobs.cjs          # main-level background commands: output, input, stop and process groups
+│   ├── sandbox.cjs       # macOS Seatbelt policy for commands the model runs
 │   ├── progress.cjs      # forwards a reply's progress to the window in 40 ms batches
 │   ├── checkpoints.cjs   # what each reply changed: review, undo and keep
 │   ├── line-diff.cjs     # line diffs for the review
@@ -153,6 +158,7 @@ scalemax-ide/
 │   ├── markdown.js       # replies as formatted text (DOM only, never HTML) + markdown.css
 │   ├── reply-ui.js       # replies in progress (one per task), steps + reply.css
 │   ├── changes-ui.js     # the changes card under a reply and the review dialog + changes.css
+│   ├── jobs-ui.js        # background commands bar/dialog and command sandbox preferences + jobs.css
 │   ├── media-ui.js       # image/video generation options, results in chat, download
 │   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)
 │   ├── mcp-directory.js  # renderer mirror of the one-click directory (connector ids only)

@@ -12,6 +12,8 @@ const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createProgressForwarder } = require('./lib/progress.cjs');
 const { createCheckpoints, validId: validCheckpointId } = require('./lib/checkpoints.cjs');
+const { createJobManager } = require('./lib/jobs.cjs');
+const sandbox = require('./lib/sandbox.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
@@ -217,6 +219,12 @@ function requestToolApproval(request, { signal } = {}) {
       toolName: request.toolName,
       readOnly: request.readOnly,
       arguments: request.arguments,
+      // Why this call always asks, whatever the permission mode ('unsandboxed': a command that
+      // leaves the sandbox).
+      ...(typeof request.reason === 'string' && request.reason ? { reason: request.reason } : {}),
+      // How a command would run: 'on' (in the sandbox), 'offline' (in it, without network), 'off'.
+      ...(request.serverId === workspaceTools.SERVER_ID && request.toolName === 'run_command'
+        ? { sandbox: commandSandbox(request.reason) } : {}),
       // Several tasks can work at once, each in its own folder: the prompt says which.
       folderName: chatRequests.get(request.requestId)?.folderName || '',
     });
@@ -227,9 +235,49 @@ function denyAllApprovals() {
   for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false);
 }
 
+// Background commands the model starts (lib/jobs.cjs). They outlive the reply that started them
+// and belong to their folder; the window lists them (jobs:*) and ScaleMax ends them when it quits.
+const JOB_NOTIFY_MS = 250;
+let jobNotifyTimer = null;
+function notifyJobs() {
+  if (jobNotifyTimer) return;
+  jobNotifyTimer = setTimeout(() => {
+    jobNotifyTimer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('jobs:changed', jobs.list());
+  }, JOB_NOTIFY_MS);
+  jobNotifyTimer.unref?.();
+}
+const jobs = createJobManager({
+  // What the model's foreground commands get too (lib/workspace.cjs environment()).
+  environment: () => {
+    const env = { HOME: os.homedir(), PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin' };
+    for (const key of ['LANG', 'TMPDIR']) if (typeof process.env[key] === 'string') env[key] = process.env[key];
+    return env;
+  },
+  onUpdate: notifyJobs,
+});
+/**
+ * How the model's commands run (Preferences > Commands): in the macOS sandbox unless it is off
+ * or missing, with or without network. The sandbox also keeps commands out of ScaleMax's data.
+ */
+function commandPolicy() {
+  let settings = {};
+  try { settings = stateStore.get('settings') || {}; } catch { /* defaults */ }
+  return {
+    sandbox: sandbox.available() && settings.sandbox !== false,
+    network: settings.sandboxNetwork !== false,
+    appData: app.getPath('userData'),
+  };
+}
+/** How a command the user is asked about would run (the approval prompt says so). */
+function commandSandbox(reason) {
+  const policy = commandPolicy();
+  if (reason === 'unsandboxed' || !policy.sandbox) return 'off';
+  return policy.network ? 'on' : 'offline';
+}
 // Workspace tools on the Workspace tab's service (getWorkspace below): the folder open in the
 // window. Chat replies get tools of their own, bound to their task's folder (openChatSession).
-const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace() });
+const workspaceTools = createWorkspaceTools({ getWorkspace: () => getWorkspace(), jobs, commandPolicy });
 // Web and computer tools belong to the mode the user picked above the message box: Working gets all
 // three families, Coding the project and the web (lib/modes.cjs).
 const webTools = createWebTools();
@@ -339,7 +387,7 @@ async function openChatSession(input) {
     }
     if (typeof chat.onChanges === 'function') chat.onChanges(recorder.summary());
   } : null;
-  const tools = createWorkspaceTools({ getWorkspace: getSession, onChange });
+  const tools = createWorkspaceTools({ getWorkspace: getSession, onChange, jobs, commandPolicy });
   const families = { workspace: tools, web: webTools, computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }) };
   return Object.assign(chat, {
     tools,
@@ -856,6 +904,33 @@ for (const [channel, run] of Object.entries(checkpointChannels)) {
 }
 
 // ---------------------------------------------------------------------------
+// Background commands IPC: the window lists them, shows their output, types into them and stops
+// them (jobs:changed tells it when the list changes).
+// ---------------------------------------------------------------------------
+const JOBS_FALLBACK = { code: 'JOB_ERROR', message: 'The background command could not be reached.' };
+function jobId(input) {
+  const id = input && typeof input === 'object' ? input.id : undefined;
+  if (typeof id !== 'string' || !/^j\d{1,9}$/.test(id)) throw bridgeError('INVALID_JOB', 'Choose a background command.');
+  return id;
+}
+const jobChannels = {
+  'jobs:info': () => ({ sandboxAvailable: sandbox.available(), policy: { ...commandPolicy(), appData: undefined } }),
+  'jobs:list': () => jobs.list(),
+  'jobs:output': (_event, input) => {
+    const from = Number.isSafeInteger(input?.from) && input.from >= 0 ? input.from : 0;
+    return jobs.read(jobId(input), { from, maxChars: 256 * 1024 });
+  },
+  'jobs:input': (_event, input) => {
+    if (typeof input?.text !== 'string' || input.text.length > 64 * 1024) throw bridgeError('INVALID_INPUT', 'Type at most 64 KB at a time.');
+    return jobs.write(jobId(input), input.text);
+  },
+  'jobs:stop': (_event, input) => jobs.stop(jobId(input)),
+};
+for (const [channel, run] of Object.entries(jobChannels)) {
+  ipcMain.handle(channel, wrap(run, JOBS_FALLBACK));
+}
+
+// ---------------------------------------------------------------------------
 // Dialog + workspace IPC (native pickers, project files, Git status)
 // ---------------------------------------------------------------------------
 const DIALOG_FALLBACK = { code: 'DIALOG_ERROR', message: 'Dialog request failed.' };
@@ -1075,10 +1150,12 @@ app.on('before-quit', () => {
   cliConnect.closeAll();
   mediaStudio.closeAll();
   void mcp.closeAll();
-  // Commands run in their own process group and would outlive the app: end them.
+  // Commands run in their own process group and would outlive the app: end them, and the
+  // background commands too.
   for (const session of [...chatSessions]) session.dispose();
   chatSessions.clear();
   workspace?.dispose();
+  jobs.stopAll();
 });
 
 app.on('window-all-closed', () => {
