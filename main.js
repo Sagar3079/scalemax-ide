@@ -1,4 +1,5 @@
-const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol, session: electronSession } = require('electron');
+const { pathToFileURL, fileURLToPath } = require('url');
 const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
 const path = require('path');
@@ -82,6 +83,40 @@ const stateStore = buildStateStore();
 // ---------------------------------------------------------------------------
 let mainWindow = null;
 
+// The only page that may use the bridge (see trustedSender).
+const APP_PAGE = path.join(__dirname, 'src', 'index.html');
+const APP_PAGE_URL = pathToFileURL(APP_PAGE).href;
+
+/**
+ * True when an IPC message comes from the app's own page in its own window. The page cannot
+ * navigate or open windows (below), so this is defence in depth: if anything ever loaded other
+ * content, that content still could not reach a single channel.
+ */
+function trustedSender(event) {
+  const frame = event?.senderFrame;
+  if (!frame || !mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false;
+  if (frame !== mainWindow.webContents.mainFrame) return false;
+  const url = typeof frame.url === 'string' ? frame.url.split('#')[0] : '';
+  if (!url.startsWith('file:')) return false;
+  // Compared as paths, not as URL text: a folder name with % or other escaped characters is
+  // written differently by Chromium and by Node, yet it is the same file.
+  try {
+    return url === APP_PAGE_URL || fileURLToPath(url) === APP_PAGE;
+  } catch {
+    return false;
+  }
+}
+
+// Web permissions the page asks Chromium for. Only writing to the clipboard (Copy buttons) and
+// showing a video full screen are used; everything else (camera, microphone, location,
+// notifications, screen capture, reading the clipboard, …) is refused without a prompt.
+const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen']);
+function guardPermissions() {
+  const allowed = (contents, permission) => Boolean(mainWindow && contents === mainWindow.webContents && ALLOWED_PERMISSIONS.has(permission));
+  electronSession.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(allowed(contents, permission)));
+  electronSession.defaultSession.setPermissionCheckHandler((contents, permission) => allowed(contents, permission));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -98,11 +133,32 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Said out loud rather than left to the default: the page runs in Chromium's sandbox.
+      sandbox: true,
       webSecurity: true
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
+  mainWindow.loadFile(APP_PAGE);
+
+  // Leaving with unsaved editor tabs asks first (the page cancels its unload while any tab has
+  // changes; Electron then asks here instead of silently refusing to close).
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    if (process.env.SCALEMAX_SMOKE === '1') {
+      event.preventDefault();
+      return;
+    }
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: ['Discard changes', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: 'Some files in the editor have unsaved changes.',
+      detail: 'Discard them and continue? Cancel to go back and save them.',
+    });
+    // preventDefault here lets the unload go ahead.
+    if (choice === 0) event.preventDefault();
+  });
 
   // Links in replies open in the browser (web and mail links only); the app window itself never
   // navigates away from the app or opens other windows.
@@ -220,10 +276,13 @@ function requestToolApproval(request, { signal } = {}) {
           : request.serverId === computerTools.SERVER_ID ? 'computer' : 'mcp',
       toolName: request.toolName,
       readOnly: request.readOnly,
+      // The server labels the tool read-only, but the user has not chosen to trust its labels.
+      ...(request.claimsReadOnly === true ? { claimsReadOnly: true } : {}),
       arguments: request.arguments,
       // Why this call always asks, whatever the permission mode ('unsandboxed': a command that
-      // leaves the sandbox).
+      // leaves the sandbox; 'egress': an address the model made up, with its host).
       ...(typeof request.reason === 'string' && request.reason ? { reason: request.reason } : {}),
+      ...(typeof request.host === 'string' && request.host ? { host: request.host.slice(0, 255) } : {}),
       // How a command would run: 'on' (in the sandbox), 'offline' (in it, without network), 'off'.
       ...(request.serverId === workspaceTools.SERVER_ID && request.toolName === 'run_command'
         ? { sandbox: commandSandbox(request.reason) } : {}),
@@ -320,8 +379,8 @@ const toolLoop = createToolLoop({
  * several tasks can run at once in different folders, and opening another folder in the window
  * never pulls the files out from under a running reply.
  * The folder must be one the user opened in ScaleMax (the open one or a recent one); a request
- * for any other folder is refused (FOLDER_NOT_OPENED). A request without a folder (automations)
- * works in the folder that is open, if any.
+ * for any other folder is refused (FOLDER_NOT_OPENED). `folder: null` means no folder at all (an
+ * automation made without one); a request that leaves `folder` out works in the open folder.
  * Returns the session's tools, its project notes (.scalemax/SCALEMAX.md: created on the first
  * message in a folder that has none, and read, with AGENTS.md / CLAUDE.md / Kiro steering, into
  * every chat there) and dispose(), which ends the session and any command it still runs.
@@ -332,11 +391,21 @@ const chatSessions = new Set();
 // the folder the request works in (named in its approval prompts).
 const chatRequests = new Map();
 /** Refuses a folder the user never opened in ScaleMax (the open one or a recent one). */
-function requireOpenedFolder(folder, what = 'This task works in') {
+/** True when a saved automation was made in `folder` (it keeps working after 8 other folders). */
+function automationFolder(folder) {
+  try {
+    const automations = stateStore.get('automations');
+    return Array.isArray(automations) && automations.some((item) => item && typeof item === 'object' && item.folder?.path === folder);
+  } catch {
+    return false;
+  }
+}
+function requireOpenedFolder(folder, what = 'This task works in', { automation = false } = {}) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder) || folder.length > 4096) {
     throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
   }
   if (workspaceTools.folder()?.path === folder || readFolders().recent.includes(folder)) return;
+  if (automation && automationFolder(folder)) return;
   const name = path.basename(folder) || folder;
   throw bridgeError('FOLDER_NOT_OPENED', `${what} "${name}", which has not been opened in ScaleMax. Open it with the folder button first.`);
 }
@@ -345,8 +414,11 @@ async function openChatSession(input) {
   await restoreFolder();
   let root = null;
   if (expected !== undefined && expected !== null) {
-    requireOpenedFolder(expected);
+    requireOpenedFolder(expected, 'This task works in', { automation: typeof input?.requestId === 'string' && input.requestId.startsWith('automation-') });
     root = expected;
+  } else if (expected === null) {
+    // Explicitly no folder (an automation made without one): no file tools, whatever is open.
+    root = null;
   } else {
     root = workspaceTools.folder()?.path || null;
   }
@@ -647,8 +719,8 @@ function normaliseEntries(entries) {
 // ---------------------------------------------------------------------------
 ipcMain.handle('app:get-version', async () => app.getVersion());
 
-ipcMain.handle('app:quit', async () => {
-  app.quit();
+ipcMain.handle('app:quit', async (event) => {
+  if (trustedSender(event)) app.quit();
 });
 
 // Provider, connector, OAuth client and MCP records are reserved: they are only
@@ -657,8 +729,8 @@ ipcMain.handle('app:quit', async () => {
 // for the same reason. (lib/state.cjs also refuses every non-public key.)
 const RESERVED_STATE_KEYS = new Set(['provider', 'providerProfiles', 'connectors', 'connectorOAuthClients', 'mcpServers', 'workspaceFolders', 'user']);
 
-ipcMain.handle('store:get', async (_event, key) => {
-  if (typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return undefined;
+ipcMain.handle('store:get', async (event, key) => {
+  if (!trustedSender(event) || typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return undefined;
   try {
     return stateStore.get(key);
   } catch {
@@ -668,8 +740,8 @@ ipcMain.handle('store:get', async (_event, key) => {
 
 // The returned boolean tells the renderer whether the write was accepted, so
 // it can fall back to localStorage when the allowlisted store rejects the key.
-ipcMain.handle('store:set', async (_event, key, value) => {
-  if (typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return false;
+ipcMain.handle('store:set', async (event, key, value) => {
+  if (!trustedSender(event) || typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return false;
   try {
     stateStore.set(key, value);
     return true;
@@ -682,6 +754,7 @@ ipcMain.handle('store:set', async (_event, key, value) => {
 // the renderer never receives a raw stack trace across the bridge.
 function wrap(run, fallback) {
   return async (event, ...args) => {
+    if (!trustedSender(event)) return { ok: false, error: { code: 'UNTRUSTED_SENDER', message: 'This request did not come from the ScaleMax window.' } };
     try {
       return { ok: true, data: await run(event, ...args) };
     } catch (error) {
@@ -1233,6 +1306,7 @@ app.whenReady().then(() => {
     }
   }, 5000).unref?.();
   protocol.handle('scalemax-media', serveMedia);
+  guardPermissions();
   // safeStorage is available for encrypting secrets at rest in future revisions.
   if (typeof safeStorage?.isEncryptionAvailable === 'function') {
     console.log(
@@ -1265,8 +1339,10 @@ app.whenReady().then(() => {
   app.exit(1);
 });
 
-// MCP stdio servers run in their own process groups; stop them with the app.
-app.on('before-quit', () => {
+// MCP stdio servers run in their own process groups; stop them with the app. `will-quit` comes
+// after every window agreed to close: a quit the user cancels (unsaved editor tabs) must leave
+// the workspace, replies, commands and servers exactly as they were.
+app.on('will-quit', () => {
   cliConnect.closeAll();
   mediaStudio.closeAll();
   void mcp.closeAll();

@@ -194,6 +194,7 @@ test('save encrypts env secrets and list() exposes key names only', () => {
     cwd: null,
     url: null,
     enabled: true,
+    trustReadOnly: false,
     envKeys: ['API_TOKEN', 'REGION'],
     headerKeys: [],
     secretStorage: 'encrypted',
@@ -677,19 +678,54 @@ test('chatTools builds sanitized, unique function names and isolates failures', 
   assert.deepEqual(tools[0].function.parameters, readFileSchema);
   assert.deepEqual(tools[1].function.parameters, { type: 'object', properties: {} });
   assert.deepEqual(tools[2].function.parameters, { type: 'object', properties: {} });
-  assert.deepEqual(resolve('mcp_docs_get_file'), { serverId: 'docs', toolName: 'get.file', readOnly: true });
+  // A server's own read-only label is only a claim until the user trusts the server.
+  assert.deepEqual(resolve('mcp_docs_get_file'), { serverId: 'docs', toolName: 'get.file', readOnly: false, claimsReadOnly: true });
   assert.deepEqual(resolve(names[1]), { serverId: 'docs', toolName: 'get_file', readOnly: false });
-  assert.deepEqual(resolve(names[2]), { serverId: 'docs', toolName: longName, readOnly: true });
+  assert.deepEqual(resolve(names[2]), { serverId: 'docs', toolName: longName, readOnly: false, claimsReadOnly: true });
   assert.deepEqual(resolve('mcp_fake_add'), { serverId: 'fake', toolName: 'add', readOnly: false });
   assert.equal(resolve('mcp_off_echo'), null);
   assert.equal(resolve(42), null);
   assert.deepEqual(errors, [{ serverId: 'broken', message: `Command not found: ${MISSING_COMMAND}` }]);
   // The disabled server was never started.
   assert.equal(spawnCalls.filter((call) => call.command === process.execPath).length, 1);
+  assert.deepEqual((await mcp.chatTools({ readOnlyOnly: true })).tools, [], 'no label counts before trust');
 
+  // Trusted, the labels count: read-only tools resolve read-only, the others still do not.
+  mcp.save({ id: 'docs', name: 'Docs', transport: 'http', url: server.url, trustReadOnly: true });
+  mcp.save(stdioInput({ id: 'fake', trustReadOnly: true }));
+  const trusted = await mcp.chatTools();
+  assert.deepEqual(trusted.resolve('mcp_docs_get_file'), { serverId: 'docs', toolName: 'get.file', readOnly: true });
+  assert.deepEqual(trusted.resolve('mcp_fake_add'), { serverId: 'fake', toolName: 'add', readOnly: false });
   const readOnly = await mcp.chatTools({ readOnlyOnly: true });
   assert.deepEqual(readOnly.tools.map((tool) => tool.function.name), [names[0], names[2], 'mcp_fake_echo']);
   assert.equal(readOnly.resolve('mcp_fake_add'), null);
+});
+
+test('trust in read-only labels belongs to one program: a changed command or address starts over', () => {
+  const { mcp } = makeManager();
+  assert.equal(mcp.save(stdioInput({ trustReadOnly: true })).trustReadOnly, true);
+  // Turning the server off and on keeps it (same program).
+  assert.equal(mcp.save(stdioInput({ id: 'fake', enabled: false })).trustReadOnly, true);
+  // Another command is another program.
+  assert.equal(mcp.save(stdioInput({ id: 'fake', args: [FIXTURE, '--other'] })).trustReadOnly, false);
+  assert.throws(() => mcp.save(stdioInput({ id: 'fake', trustReadOnly: 'yes' })), /trustReadOnly flag must be a boolean/);
+});
+
+test('a local server inherits only what programs need, never the rest of the environment', async (t) => {
+  const { mcp, spawnCalls } = makeManager({
+    env: { PATH: '/usr/bin:/bin', HOME: '/private/tmp', LC_ALL: 'en_US.UTF-8', SSH_AUTH_SOCK: '/private/tmp/agent', OPENAI_API_KEY: 'sk-secret', AWS_SECRET_ACCESS_KEY: 'aws-secret', GITHUB_TOKEN: 'ghp-secret' },
+    platform: 'linux',
+  });
+  t.after(() => mcp.closeAll());
+  mcp.save(stdioInput({ env: { MY_SERVER_TOKEN: 'configured-for-this-server' } }));
+  await mcp.test({ id: 'fake' });
+  const { env } = spawnCalls[0].options;
+  assert.equal(env.PATH, '/usr/bin:/bin');
+  assert.equal(env.HOME, '/private/tmp');
+  assert.equal(env.LC_ALL, 'en_US.UTF-8');
+  assert.equal(env.SSH_AUTH_SOCK, '/private/tmp/agent');
+  assert.equal(env.MY_SERVER_TOKEN, 'configured-for-this-server', 'what the user gave this server');
+  for (const key of ['OPENAI_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN']) assert.equal(env[key], undefined, key);
 });
 
 test('chatTools exposes at most 128 tools', async (t) => {

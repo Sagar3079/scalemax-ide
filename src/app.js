@@ -235,6 +235,14 @@ const app = {
     bindChangesUi(this);
     bindJobsUi(this);
     bindSpecsUi(this);
+    // Quitting, closing or reloading with unsaved editor tabs is held back; main then asks
+    // whether to discard them (will-prevent-unload in main.js).
+    window.addEventListener('beforeunload', (event) => {
+      const dirty = this.workspace?.dirty || (Array.isArray(this.workspace?.tabs) && this.workspace.tabs.some((tab) => tab.dirty));
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
     this.bindProfiles();
     await this.restoreWorkspace();
     await this.settleStartFolder();
@@ -345,6 +353,8 @@ const app = {
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
       updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now,
       ...taskFolderField(task.folder),
+      // The automation whose runs this task collects (src/scheduler.js).
+      ...(typeof task.automationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(task.automationId) ? { automationId: task.automationId } : {}),
       ...(() => {
         const compaction = normalizeCompaction(task.compaction);
         return compaction && compaction.through < (Array.isArray(task.messages) ? task.messages.length : 0) ? { compaction } : {};
@@ -2474,6 +2484,15 @@ const app = {
       const status = element('div', 'status-text', `${automation.lastStatus || 'idle'}${last} · Next: ${next}`);
       status.style.fontSize = '11px';
       info.append(status);
+      // Where it runs: fixed when it was made, never the folder that happens to be open.
+      const where = element('div', 'status-text automation-where', !('folder' in automation)
+        ? 'Runs in whichever folder is open when it fires. Edit and save it to fix it to the open folder.'
+        : automation.folder
+          ? `Runs in ${automation.folder.name} · ${automation.mode === 'coding' ? 'Coding' : 'Working'}`
+          : 'No folder: runs without file tools');
+      where.style.fontSize = '11px';
+      where.title = automation.folder ? automation.folder.path : ('folder' in automation ? 'Made while no folder was open' : '');
+      info.append(where);
       if (automation.lastStatus === 'error' || automation.lastStatus === 'interrupted') {
         if (automation.lastError) {
           const error = element('div', 'status-text automation-error', automation.lastError);
@@ -2612,16 +2631,24 @@ const app = {
     const now = Date.now();
     const editId = $('#automation-edit-id')?.value || '';
     const existing = editId ? this.automations.find((item) => item.id === editId) : null;
+    // A new schedule works in the folder and mode that are open now, whatever is open when it
+    // fires (src/scheduler.js); an edit keeps where it runs.
     const automation = existing ? { ...existing, ...fields } : {
       id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, ...fields,
       active: true, createdAt: now, schemaVersion: 2, nextRun: null, pendingCatchUp: false,
       lastRun: null, lastStatus: 'idle', lastError: '', history: [],
+      folder: this.rootFolder() || null, mode: this.settings.mode === 'coding' ? 'coding' : 'working',
     };
     try {
       automation.nextRun = nextRunAt(automation, now);
     } catch (problem) {
       this.showToast(problem?.message || 'Choose a valid schedule and time');
       return;
+    }
+    // One made before automations remembered their folder is fixed to the open one by an edit.
+    if (existing && !('folder' in existing)) {
+      automation.folder = this.rootFolder() || null;
+      automation.mode = this.settings.mode === 'coding' ? 'coding' : 'working';
     }
     if (existing) {
       // Mutate in place so an in-flight run keeps pointing at the same record.

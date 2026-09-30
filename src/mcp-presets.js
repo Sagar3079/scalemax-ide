@@ -44,13 +44,16 @@ export const MCP_PRESETS = Object.freeze([
   { id: 'huggingface', name: 'Hugging Face', group: 'public', url: 'https://huggingface.co/mcp', description: 'Search models, datasets and Spaces.' },
   { id: 'gitmcp', name: 'GitMCP', group: 'public', url: 'https://gitmcp.io/docs', description: 'Documentation and code of any GitHub project.' },
 
-  { id: 'filesystem', name: 'Filesystem', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '{folder}'], folder: true, description: 'Read and write files in the open workspace folder.' },
-  { id: 'git', name: 'Git', group: 'local', command: 'uvx', args: ['mcp-server-git', '--repository', '{folder}'], folder: true, description: 'Status, diffs, log and commits of the open workspace.' },
-  { id: 'playwright', name: 'Playwright browser', group: 'local', command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless'], description: 'Open web pages, click, type and take snapshots.' },
-  { id: 'fetch', name: 'Fetch', group: 'local', command: 'uvx', args: ['mcp-server-fetch'], description: 'Fetch a web page as Markdown.' },
-  { id: 'memory', name: 'Memory', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], description: 'A knowledge graph the model can remember things in.' },
-  { id: 'sequential-thinking', name: 'Sequential thinking', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'], description: 'Step-by-step problem solving.' },
-  { id: 'time', name: 'Time', group: 'local', command: 'uvx', args: ['mcp-server-time'], description: 'Current time and time-zone conversion.' },
+  // Local servers run as the user, outside the sandbox, so each is pinned to one exact release
+  // (checked 2026-09-30 on npm and PyPI): a new release, compromised or not, never runs on its
+  // own. Update a version here deliberately.
+  { id: 'filesystem', name: 'Filesystem', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem@2026.8.31', '{folder}'], folder: true, description: 'Read and write files in the open workspace folder.' },
+  { id: 'git', name: 'Git', group: 'local', command: 'uvx', args: ['mcp-server-git@2026.8.18', '--repository', '{folder}'], folder: true, description: 'Status, diffs, log and commits of the open workspace.' },
+  { id: 'playwright', name: 'Playwright browser', group: 'local', command: 'npx', args: ['-y', '@playwright/mcp@0.0.83', '--headless'], description: 'Open web pages, click, type and take snapshots.' },
+  { id: 'fetch', name: 'Fetch', group: 'local', command: 'uvx', args: ['mcp-server-fetch@2026.8.18'], description: 'Fetch a web page as Markdown.' },
+  { id: 'memory', name: 'Memory', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory@2026.8.31'], description: 'A knowledge graph the model can remember things in.' },
+  { id: 'sequential-thinking', name: 'Sequential thinking', group: 'local', command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking@2026.8.31'], description: 'Step-by-step problem solving.' },
+  { id: 'time', name: 'Time', group: 'local', command: 'uvx', args: ['mcp-server-time@2026.8.18'], description: 'Current time and time-zone conversion.' },
 ].map((preset) => Object.freeze(preset)));
 
 export const PRESET_GROUPS = Object.freeze([
@@ -71,9 +74,18 @@ export function presetServer(preset, servers) {
     if (preset.via === 'cli') return server.connector === 'github';
     if (preset.url) return server.transport === 'http' && server.url?.replace(/\/+$/, '') === preset.url.replace(/\/+$/, '');
     if (preset.command) {
-      const pkg = preset.args.find((arg) => !arg.startsWith('-') && arg !== '{folder}');
-      return server.transport === 'stdio' && server.command === preset.command && (server.args || []).includes(pkg);
+      // By package, whatever version: a server added before the presets were pinned still counts.
+      const pkg = packageName(preset.args.find((arg) => !arg.startsWith('-') && arg !== '{folder}'));
+      return server.transport === 'stdio' && server.command === preset.command
+        && (server.args || []).some((arg) => packageName(arg) === pkg);
     }
     return false;
   }) || null;
+}
+
+/** "@scope/name@1.2.3" → "@scope/name", "name@1.2.3" → "name". */
+function packageName(arg) {
+  if (typeof arg !== 'string') return '';
+  const at = arg.lastIndexOf('@');
+  return at > 0 ? arg.slice(0, at) : arg;
 }

@@ -130,3 +130,53 @@ test('a one-time schedule deactivates after it fires', async (t) => {
   assert.equal(app.automations[0].active, false);
   assert.equal(app.automations[0].nextRun, null);
 });
+
+test('a run works in the folder and mode the automation was made in, never in whatever is open', async (t) => {
+  const folder = { name: 'reports', path: '/Users/you/reports' };
+  const app = fakeApp({
+    automations: [automation({ folder, mode: 'coding' }), automation({ id: 'a2', name: 'Digest', folder: null, mode: null })],
+    settings: { mode: 'working' },
+  });
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  await scheduler.runNow('a1');
+  await scheduler.runNow('a2');
+  assert.equal(app.sent[0].folder, '/Users/you/reports');
+  assert.equal(app.sent[0].mode, 'coding', 'its own mode, not the one on screen');
+  assert.match(app.sent[0].systemPrompt, /Coding/);
+  // Made without a folder: no file tools at all (null), not the folder open at the time.
+  assert.equal(app.sent[1].folder, null);
+  assert.equal(app.sent[1].mode, 'working');
+  // Two automations with the same name keep their own tasks, and the first sits in its project.
+  assert.equal(app.tasks.length, 2);
+  const first = app.tasks.find((task) => task.automationId === 'a1');
+  const second = app.tasks.find((task) => task.automationId === 'a2');
+  assert.ok(first && second && first !== second);
+  assert.deepEqual(first.folder, folder);
+  assert.equal(second.folder, undefined);
+  // The next run of a1 lands in the same task.
+  await scheduler.runNow('a1');
+  assert.equal(first.messages.length, 4);
+});
+
+test('the folder and mode survive a reload', () => {
+  const [saved] = normalizeAutomations([automation({ folder: { name: 'reports', path: '/Users/you/reports' }, mode: 'coding' })]);
+  assert.deepEqual(saved.folder, { name: 'reports', path: '/Users/you/reports' });
+  assert.equal(saved.mode, 'coding');
+  const [broken] = normalizeAutomations([automation({ folder: 'relative/nope', mode: 'plan' })]);
+  assert.equal(broken.folder, null);
+  assert.equal(broken.mode, null);
+  // Made before automations remembered their folder: nothing recorded, which is not "no folder".
+  const [legacy] = normalizeAutomations([automation()]);
+  assert.equal('folder' in legacy, false);
+});
+
+test('an automation from before folders were remembered keeps the open folder', async (t) => {
+  const app = fakeApp({ automations: [automation()] });
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  await scheduler.runNow('a1');
+  assert.equal('folder' in app.sent[0], false, 'no folder in the request: main uses the open one');
+});

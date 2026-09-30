@@ -56,8 +56,14 @@ test('command lines: the shell, a terminal on request, the sandbox around it', (
 test('the sandbox profile: paths only as parameters, network rules only when off', () => {
   const online = sandbox.profile({ network: true });
   const offline = sandbox.profile({ network: false });
-  assert.equal(online.includes('network-outbound'), false);
+  // With the network on, the only outbound rule closes the container daemons' sockets.
+  assert.equal(online.includes('(deny network-outbound)'), false);
+  assert.match(online, /\(deny network-outbound\n {2}\(literal "\/private\/var\/run\/docker\.sock"\)/);
   assert.match(offline, /\(deny network-outbound\)/);
+  // The daemon sockets are closed last in both, so localhost sockets cannot reopen them.
+  for (const text of [online, offline]) assert.ok(text.lastIndexOf('docker.sock') > text.lastIndexOf('allow network-outbound'));
+  // Copies of desktop programs are covered by closing the services themselves.
+  for (const service of sandbox.DESKTOP_SERVICES) assert.match(online, new RegExp(`\\(global-name "${service.replace(/\./g, '\\.')}"\\)`));
   assert.match(offline, /mDNSResponder/);
   assert.match(online, /osascript/);
   assert.match(online, /\(deny signal\)/);

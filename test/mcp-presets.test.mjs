@@ -22,9 +22,17 @@ test('presets are unique, grouped, and well-formed', () => {
   assert.equal(MCP_PRESETS.find((preset) => preset.id === 'atlassian').connectorId, 'jira');
 });
 
+test('local presets are pinned to one exact release', () => {
+  for (const preset of MCP_PRESETS.filter((item) => item.group === 'local')) {
+    const pkg = preset.args.find((arg) => !arg.startsWith('-') && arg !== '{folder}');
+    assert.match(pkg, /^(@[\w.-]+\/)?[\w.-]+@\d+\.\d+\.\d+$/, `${preset.id}: ${pkg}`);
+    assert.doesNotMatch(pkg, /@latest$/, preset.id);
+  }
+});
+
 test('folder presets use the workspace and saved servers are recognised', () => {
   const git = MCP_PRESETS.find((preset) => preset.id === 'git');
-  assert.deepEqual(presetCommand(git, '/Users/you/project'), { command: 'uvx', args: ['mcp-server-git', '--repository', '/Users/you/project'] });
+  assert.deepEqual(presetCommand(git, '/Users/you/project'), { command: 'uvx', args: ['mcp-server-git@2026.8.18', '--repository', '/Users/you/project'] });
   const servers = [
     { transport: 'http', url: 'https://mcp.deepwiki.com/mcp/' },
     { transport: 'http', url: 'https://mcp.notion.com/mcp', auth: { directoryId: 'notion' } },

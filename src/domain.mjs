@@ -803,6 +803,8 @@ export function normalizeTasks(value, now = Date.now()) {
       updatedAt: Math.max(createdAt, latestMessage, timestamp(own(task, 'updatedAt'), fallbackTime)),
       ...(folder ? { folder } : {}),
       ...(compaction && compaction.through < messages.length ? { compaction } : {}),
+      // The automation whose runs this task collects (src/scheduler.js).
+      ...(validId(own(task, 'automationId')) ? { automationId: task.automationId } : {}),
     });
     ids.add(task.id);
     if (result.length === 500) break;
@@ -962,6 +964,11 @@ export function normalizeAutomations(value, now = Date.now()) {
         : ['idle', 'success', 'error', 'interrupted'].includes(status) ? status : 'idle',
       lastError: boundedText(own(automation, 'lastError'), MAX_ERROR),
       history: normalizeHistory(own(automation, 'history'), fallbackTime),
+      // The folder and mode it was made in: a run works there, whatever is open when it fires.
+      // null folder: no file tools at all. No `folder` key at all: made before automations
+      // remembered their folder; it runs in the open folder until it is edited (src/app.js).
+      ...(own(automation, 'folder') !== undefined ? { folder: normalizeTaskFolder(own(automation, 'folder')) } : {}),
+      mode: MODE_IDS.includes(own(automation, 'mode')) ? automation.mode : null,
       schemaVersion: 2,
     };
     if (interrupted && !normalized.lastError) {

@@ -607,6 +607,7 @@ function approvalArguments(request) {
 }
 // Working-mode tools that reach past the folder (lib/computer-tools.cjs).
 const COMPUTER_SUMMARIES = {
+  read_clipboard: 'The model wants to read what is on your clipboard. It may hold a password or other private text, so ScaleMax always asks first.',
   write_clipboard: 'The model wants to put text on your clipboard, replacing what is on it now.',
   open: 'The model wants to open something in the app that owns it.',
   reveal: 'The model wants to show a file of your project in the Finder.',
@@ -622,12 +623,21 @@ function approvalSummary(request) {
     if (!summary) return `The model wants to read files in ${where}.`;
     return summary(where, approvalArguments(request)) + (request.toolName === 'run_command' ? SANDBOX_NOTES[request.sandbox] || '' : '');
   }
+  // An address the model put together itself: it could carry what the reply read to that site.
+  if (request.reason === 'egress') {
+    const what = request.kind === 'computer' ? 'open an address in your browser' : 'open a page';
+    if (!request.host) return `The model wants to ${what}, but its address could not be read. Check the arguments below before allowing it.`;
+    return `The model wants to ${what} on ${request.host} with an address it wrote itself. Addresses from your messages, your files, search results and pages it read open without asking; one the model makes up could carry text from this conversation to that site. Check the address below.`;
+  }
   if (request.kind === 'computer') {
     return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
   }
   if (request.kind === 'web') return 'The model wants to search the web or read a page.';
+  if (request.claimsReadOnly) {
+    return `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data, but ScaleMax cannot check that. If you trust this server, turn on "Trust its read-only labels" for it in Assistant → MCP servers.`;
+  }
   return request.readOnly
-    ? `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data.`
+    ? `The model wants to run "${request.toolName}" on ${request.serverName}. You trust this server's label that the tool only reads data.`
     : `The model wants to run "${request.toolName}" on ${request.serverName}. This tool can change data there.`;
 }
 function showNextApproval() {
@@ -646,16 +656,22 @@ function showNextApproval() {
   const task = reply && reply.taskId !== approvals.app.currentTaskId
     ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
   $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
-  // A call that always asks (a command outside the sandbox) is allowed one at a time.
-  const always = Boolean(request.reason);
+  // A call that always asks (a command outside the sandbox, the clipboard) is allowed one at a
+  // time; an address the model made up can be allowed for its site, for the rest of this reply.
+  const egress = request.reason === 'egress' && Boolean(request.host);
+  const always = Boolean(request.reason) && !egress;
   const outside = request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input';
   $('#approval-title').textContent = request.reason === 'unsandboxed-input'
     ? 'Type into this command outside the sandbox?'
-    : outside ? 'Run this command outside the sandbox?' : `Allow ${request.serverName} · ${request.toolName}?`;
+    : outside ? 'Run this command outside the sandbox?'
+      : egress ? `Open an address on ${request.host || 'this site'}?` : `Allow ${request.serverName} · ${request.toolName}?`;
   $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
   const all = $('#approval-all');
-  if (all) all.hidden = always;
+  if (all) {
+    all.hidden = always;
+    all.textContent = egress ? `Allow ${request.host || 'this site'} in this reply` : 'Allow all in this reply';
+  }
   dialog.classList.toggle('is-unsandboxed', outside);
   const queue = $('#approval-queue');
   if (queue) {
@@ -699,9 +715,11 @@ function bindApprovals(app) {
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
       folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
-      // Why it always asks ('unsandboxed', or another reason main gives), and how a command runs.
+      // Why it always asks ('unsandboxed', 'egress', or another reason main gives), and how a command runs.
       reason: typeof request.reason === 'string' && request.reason
-        ? (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input' ? request.reason : 'required') : '',
+        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private'].includes(request.reason) ? request.reason : 'required') : '',
+      host: typeof request.host === 'string' ? request.host.slice(0, 255) : '',
+      claimsReadOnly: request.claimsReadOnly === true,
       sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',
     });
     if (!approvals.showing) {

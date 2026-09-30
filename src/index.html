@@ -740,6 +740,8 @@
         <div class="form-group"><label for="mcp-headers">Headers <span class="small-label">Name: value per line, stored encrypted</span></label><textarea id="mcp-headers" rows="3" spellcheck="false" autocapitalize="off" placeholder="Authorization: Bearer …" aria-describedby="mcp-headers-hint"></textarea><p id="mcp-headers-hint" class="status-text"></p></div>
       </div>
       <label class="checkbox-label" for="mcp-enabled"><input id="mcp-enabled" type="checkbox" checked /><span>Offer this server's tools to the model in chat</span></label>
+      <label class="checkbox-label" for="mcp-trust"><input id="mcp-trust" type="checkbox" aria-describedby="mcp-trust-hint" /><span>Trust its read-only labels</span></label>
+      <p id="mcp-trust-hint" class="status-text">A server says itself which of its tools only read. Trusted, those run without asking in Basic and while planning; otherwise ScaleMax asks first. A tool that "only reads" can still fetch web pages or send what it is given somewhere, so trust only servers you know. Changing the command, folder or address turns this off again.</p>
       <div class="button-row mcp-dialog-actions">
         <button id="mcp-save" class="button primary" type="submit">Save and test</button>
         <button id="mcp-cancel" class="button secondary" type="button">Cancel</button>

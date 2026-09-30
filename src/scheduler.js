@@ -71,15 +71,29 @@ function fail(app, automation, message) {
   app.showToast(`Automation failed: ${automation.name} — ${message}`);
 }
 
-function appendOutput(app, automation, text) {
+// The automation's own task, found by its id (a title is shared by automations with the same
+// name, and by any chat the user happens to call that). Older output tasks are adopted by title.
+function outputTask(app, automation) {
   const title = `Automation · ${automation.name}`;
-  let task = app.tasks.find((item) => item.title === title);
+  let task = app.tasks.find((item) => item.automationId === automation.id)
+    || app.tasks.find((item) => !item.automationId && item.title === title && item.messages.every((message) => message.role !== 'user' || message.text === automation.prompt));
   if (!task) {
     task = app.makeTask(title);
     app.tasks.unshift(task);
   }
+  task.automationId = automation.id;
+  // Listed under its project, like any task in that folder.
+  if (automation.folder && !task.folder) task.folder = { ...automation.folder };
+  return { task, title };
+}
+
+function appendOutput(app, automation, data) {
+  const { task, title } = outputTask(app, automation);
   app.appendMessage('user', automation.prompt, task.id);
-  app.appendMessage('assistant', text, task.id);
+  // What the run did on the way and what it changed, like any reply (steps and the changes card).
+  app.appendMessage('assistant', String(data?.text ?? ''), task.id, {
+    tools: data?.toolCalls, steps: data?.steps, changes: data?.changes, metrics: data?.metrics,
+  });
   // appendMessage renames a task on its first user message, so restore the stable automation title.
   task.title = title;
   return task;
@@ -105,14 +119,19 @@ async function runAutomation(app, automation, { manual = false } = {}) {
       if (manual) app.showToast('Connect a provider in Assistant first');
       return 'error';
     }
+    // It works in the folder and mode it was made in, never in whatever is open when it fires;
+    // made without a folder, it gets no file tools at all (`folder: null`). One made before
+    // automations remembered their folder has none recorded and keeps the open folder.
+    const settings = automation.mode ? { ...app.settings, mode: automation.mode } : app.settings;
     const payload = {
       requestId: `automation-${automation.id}-${start}`,
+      ...('folder' in automation ? { folder: automation.folder?.path || null } : {}),
       messages: [{ role: 'user', content: automation.prompt }],
-      // Same system prompt, mode and temperature rules as interactive chat.
-      mode: app.settings.mode,
+      // Same system prompt and temperature rules as interactive chat.
+      mode: settings.mode,
       systemPrompt: typeof app.buildSystemPrompt === 'function'
-        ? app.buildSystemPrompt(app.settings)
-        : buildSystemPrompt(app.settings),
+        ? app.buildSystemPrompt(settings)
+        : buildSystemPrompt(settings),
     };
     const temperature = requestTemperature(app.settings);
     if (temperature !== undefined) payload.temperature = temperature;
@@ -135,7 +154,7 @@ async function runAutomation(app, automation, { manual = false } = {}) {
     automation.lastError = '';
     const text = String(result.data?.text ?? '');
     record(automation, 'success', text);
-    const task = appendOutput(app, automation, text);
+    const task = appendOutput(app, automation, result.data);
     void app.persist('tasks');
     void app.persist('automations');
     syncAutomationViews(app);

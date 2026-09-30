@@ -129,6 +129,8 @@ function renderServers() {
       status.append(element('span', 'mcp-secret-keys',
         `Signed in via ${server.auth.issuer}${server.auth.storage === 'session' ? ' (this session only)' : ''}`));
     }
+    // Whether its "only reads" labels count (lib/mcp.cjs trustReadOnly).
+    status.append(element('span', 'mcp-secret-keys', server.trustReadOnly ? 'Read-only labels trusted' : 'Read-only labels not trusted'));
     const actions = element('div', 'mcp-server-actions');
     const buttons = [['test', 'Test'], ['tools', expanded.has(server.id) ? 'Hide tools' : 'Tools']];
     if (server.signInPending) buttons.push(['cancelsignin', 'Cancel sign-in']);
@@ -432,6 +434,8 @@ function openDialog(server = null) {
   set('mcp-headers', '');
   const enabled = byId('mcp-enabled');
   if (enabled) enabled.checked = server ? server.enabled : true;
+  const trust = byId('mcp-trust');
+  if (trust) trust.checked = server?.trustReadOnly === true;
   const keepHint = (keys) => (keys?.length ? `Stored: ${keys.join(', ')}. Leave blank to keep them; entering any lines replaces them all.` : '');
   const envHint = byId('mcp-env-hint');
   if (envHint) envHint.textContent = keepHint(server?.envKeys);
@@ -455,6 +459,7 @@ function readForm() {
     name: value('mcp-name').trim(),
     transport,
     enabled: Boolean(byId('mcp-enabled')?.checked),
+    trustReadOnly: Boolean(byId('mcp-trust')?.checked),
   };
   const editId = value('mcp-edit-id');
   if (editId) input.id = editId;

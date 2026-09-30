@@ -121,6 +121,22 @@ test('a task list that changed since it was read is not ticked by number', async
   assert.deepEqual((await store.setTask('ship-it', 2, true, { revision: fresh.tasksRevision })).task.text, 'One');
 });
 
+test('the model ticks against the task list it read: an edit in between is refused, not mis-ticked', async (t) => {
+  const { root, tools } = await open(t);
+  await tools.call('spec_write', { spec: 'ship-it', doc: 'tasks', content: '- [ ] One\n- [ ] Two\n' });
+  await tools.call('spec_read', { spec: 'ship-it' });
+  // The user inserts a step by hand: the model's "task 2" was "Two", which is now task 3.
+  const file = path.join(root, '.scalemax/specs/ship-it/tasks.md');
+  fs.writeFileSync(file, '- [ ] Zero\n- [ ] One\n- [ ] Two\n');
+  await assert.rejects(tools.call('spec_task', { spec: 'ship-it', task: 2 }), { code: 'SPEC_CHANGED' });
+  assert.equal(fs.readFileSync(file, 'utf8'), '- [ ] Zero\n- [ ] One\n- [ ] Two\n', 'nothing was ticked');
+  // After reading again the numbers are current, and ticks in a row keep working.
+  await tools.call('spec_read', { spec: 'ship-it' });
+  assert.match((await tools.call('spec_task', { spec: 'ship-it', task: 3 })).text, /is now done: Two/);
+  assert.match((await tools.call('spec_task', { spec: 'ship-it', task: 1 })).text, /is now done: Zero/);
+  assert.equal(fs.readFileSync(file, 'utf8'), '- [x] Zero\n- [ ] One\n- [x] Two\n');
+});
+
 test('one unreadable document does not hide the other specs of the folder', async (t) => {
   const { root, store } = await open(t);
   await store.write('good-one', 'requirements', '# Fine\n');
