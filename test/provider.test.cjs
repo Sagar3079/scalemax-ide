@@ -46,6 +46,8 @@ function makeProvider(overrides = {}) {
     store,
     safeStorage: overrides.safeStorage,
     approve: overrides.approve || (async () => true),
+    // Retries wait a few milliseconds here, not seconds.
+    retryDelays: overrides.retryDelays || [1, 1, 1],
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
       return overrides.respond(url, options);
@@ -440,14 +442,42 @@ test('complete rejects invalid requests before calling the provider', async () =
   assert.equal(calls.length, 0);
 });
 
-test('complete requires assistant text or tool calls in the response', async () => {
-  const { provider } = await configuredProvider(() => jsonResponse({
+test('complete requires assistant text or tool calls in the response, asking once more first', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({
     choices: [{ message: { role: 'assistant', content: '   ', tool_calls: [] } }],
   }));
   await assert.rejects(
     () => provider.complete({ requestId: 'c-4', messages: [{ role: 'user', content: 'Hi' }] }),
     /did not contain assistant text or tool calls/,
   );
+  assert.equal(calls.length, 2, 'the empty reply and one more try');
+});
+
+test('a streamed reply that only thought is asked again; both attempts count toward usage', async () => {
+  const usage = (tokens) => ({ object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 10, completion_tokens: tokens, total_tokens: 10 + tokens } });
+  const answers = [
+    () => sseResponse([chunk({ reasoning_content: 'Hmm.' }), chunk({}, { finish_reason: 'stop' }), usage(30), '[DONE]']),
+    () => sseResponse([chunk({ content: 'Answer.' }, { finish_reason: 'stop' }), usage(4), '[DONE]']),
+  ];
+  const { provider, calls } = await configuredProvider(() => answers.shift()());
+  const heard = [];
+  const result = await provider.complete({ requestId: 'e-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) });
+  assert.equal(result.content, 'Answer.');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(heard.map((delta) => delta.type), ['reasoning', 'retry', 'text']);
+  assert.equal(heard[1].reason, 'EMPTY');
+  assert.deepEqual(result.usage, { prompt_tokens: 20, completion_tokens: 34, total_tokens: 54 });
+});
+
+test('a model that answers only in its thinking twice gets a clear error', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({
+    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '', reasoning_content: 'one, two, three' } }],
+  }));
+  await assert.rejects(
+    () => provider.complete({ requestId: 'e-2', messages: [{ role: 'user', content: 'Count' }] }),
+    (error) => error.code === 'EMPTY_REPLY' && /wrote only its thinking/.test(error.message),
+  );
+  assert.equal(calls.length, 2);
 });
 
 test('complete is cancellable through the shared requestId', async () => {
@@ -797,10 +827,32 @@ test('other refusals are not retried and carry the provider message, status and 
   }, { status: 400 }));
   await assert.rejects(
     () => provider.complete({ requestId: 's-5', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
-    (error) => error.status === 400 && error.providerCode === 'image_input_unsupported'
+    // No picture was sent, so this is not taken for a picture refusal.
+    (error) => error.status === 400 && error.providerCode === 'image_input_unsupported' && error.code === 'PROVIDER_ERROR'
       && error.message === 'The provider refused the request (HTTP 400): This model does not accept images. Use another model.',
   );
   assert.equal(calls.length, 1);
+});
+
+test('a picture refusal is told apart by its code or its words; other 400s are not', async () => {
+  const picture = [{ role: 'user', content: [{ type: 'text', text: 'Which color?' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] }];
+  const text = [{ role: 'user', content: 'Hi' }];
+  const cases = [
+    [{ message: "deepseek-v4-flash can't read images. Use a model with image input.", code: 'image_input_unsupported' }, picture, 'IMAGES_UNSUPPORTED'],
+    [{ message: 'Image input is not supported for this model' }, picture, 'IMAGES_UNSUPPORTED'],
+    [{ message: 'image_url is only supported by certain models.' }, picture, 'IMAGES_UNSUPPORTED'],
+    [{ message: 'Failed to deserialize the JSON body: unknown variant `image_url`, expected `text`' }, picture, 'IMAGES_UNSUPPORTED'],
+    // A picture that is too big or broken, and refusals of requests without pictures, are not.
+    [{ message: 'Image too large: exceeds 5 MB', code: 'image_too_large' }, picture, 'PROVIDER_ERROR'],
+    [{ message: 'Invalid image format: could not decode' }, picture, 'PROVIDER_ERROR'],
+    [{ message: "smoke can't read images.", code: 'image_input_unsupported' }, text, 'PROVIDER_ERROR'],
+    [{ message: 'messages must not be empty', code: 'invalid_request' }, picture, 'PROVIDER_ERROR'],
+  ];
+  for (const [error, messages, code] of cases) {
+    const { provider } = await configuredProvider(() => jsonResponse({ error }, { status: 400 }));
+    await assert.rejects(() => provider.complete({ requestId: 'img-1', messages }),
+      (thrown) => thrown.code === code, `${error.message} -> ${code}`);
+  }
 });
 test('provider error details never contain the API key and HTML pages are not shown', async () => {
   const key = 'sk-secret-streaming-key-123456';
@@ -972,4 +1024,119 @@ test('catalog preserves a valid small advertised maximum-output limit', async ()
   });
   const found = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1' });
   assert.equal(found.models[0].maxOutputTokens, 128);
+});
+
+// ---- Phase 7: retries, cached tokens, pictures, long conversations --------------------------
+
+test('a passing failure (rate limit, overloaded server, cut stream, dropped connection) is retried', async () => {
+  const answers = [
+    () => new Response('', { status: 429, headers: { 'retry-after': '0' } }),
+    () => jsonResponse({ error: { message: 'overloaded' } }, { status: 503 }),
+    () => { throw new TypeError('fetch failed'); },
+    () => jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: 'Made it.' } }] }),
+  ];
+  const { provider, calls } = await configuredProvider(() => answers.shift()());
+  const result = await provider.complete({ requestId: 'r-1', messages: [{ role: 'user', content: 'Hi' }] });
+  assert.equal(result.content, 'Made it.');
+  assert.equal(calls.length, 4);
+});
+
+test('refusals are not retried, and retries give up after three', async () => {
+  for (const [status, expected] of [[400, 1], [401, 1], [404, 1]]) {
+    const { provider, calls } = await configuredProvider(() => jsonResponse({ error: { message: 'no' } }, { status }));
+    await assert.rejects(() => provider.complete({ requestId: `n-${status}`, messages: [{ role: 'user', content: 'Hi' }] }));
+    assert.equal(calls.length, expected, `HTTP ${status}`);
+  }
+  const { provider, calls } = await configuredProvider(() => jsonResponse({ error: { message: 'busy' } }, { status: 502 }));
+  await assert.rejects(() => provider.complete({ requestId: 'n-502', messages: [{ role: 'user', content: 'Hi' }] }), (error) => error.status === 502);
+  assert.equal(calls.length, 4, 'the first try and three retries');
+});
+
+test('a stream cut part way is asked again, and the listener is told to start the round over', async () => {
+  const answers = [
+    () => sseResponse([chunk({ content: 'Half an ans' })]),
+    () => sseResponse([chunk({ content: 'The whole answer.' }, { finish_reason: 'stop' }), '[DONE]']),
+  ];
+  const { provider } = await configuredProvider(() => answers.shift()());
+  const heard = [];
+  const result = await provider.complete({ requestId: 'c-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) });
+  assert.equal(result.content, 'The whole answer.');
+  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'text']);
+  assert.equal(heard[1].reason, 'CUT_OFF');
+});
+
+test('Stop while a retry waits ends it without another request', async () => {
+  const { provider, calls } = makeProvider({ respond: () => jsonResponse({ error: { message: 'busy' } }, { status: 503 }), retryDelays: [5000, 5000, 5000] });
+  await provider.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'test-model' });
+  const pending = provider.complete({ requestId: 'w-1', messages: [{ role: 'user', content: 'Hi' }] });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(provider.cancel('w-1'), true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
+  assert.equal(calls.length, 1);
+});
+
+test('a request waiting to be tried again keeps its id, so Stop still reaches it', async () => {
+  const { provider, calls } = makeProvider({ respond: () => jsonResponse({ error: { message: 'busy' } }, { status: 503 }), retryDelays: [5000, 5000, 5000] });
+  await provider.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'test-model' });
+  const pending = provider.complete({ requestId: 'w-2', messages: [{ role: 'user', content: 'Hi' }] });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await assert.rejects(() => provider.complete({ requestId: 'w-2', messages: [{ role: 'user', content: 'Again' }] }), /already in flight/);
+  assert.equal(provider.cancel('w-2'), true);
+  await assert.rejects(() => pending, (error) => error.code === 'CANCELLED');
+  assert.equal(calls.length, 1);
+});
+
+test('prompt tokens served from the cache are reported', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({
+    choices: [{ finish_reason: 'stop', message: { content: 'ok' } }],
+    usage: { prompt_tokens: 1200, completion_tokens: 5, total_tokens: 1205, prompt_tokens_details: { cached_tokens: 1024 } },
+  }));
+  const result = await provider.complete({ requestId: 'k-1', messages: [{ role: 'user', content: 'Hi' }] });
+  assert.deepEqual(result.usage, { prompt_tokens: 1200, completion_tokens: 5, total_tokens: 1205, cached_tokens: 1024 });
+});
+
+test('a user message may carry pictures as data-URL image parts, nothing else', async () => {
+  const { provider, calls } = await configuredProvider(() => jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: 'Red.' } }] }));
+  const picture = { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } };
+  await provider.complete({ requestId: 'i-1', messages: [{ role: 'user', content: [{ type: 'text', text: 'Which color?' }, picture] }] });
+  assert.deepEqual(JSON.parse(calls[0].options.body).messages[0].content, [{ type: 'text', text: 'Which color?' }, picture]);
+  for (const bad of [
+    [{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }],
+    [{ type: 'image_url', image_url: { url: 'data:image/svg+xml;base64,PHN2Zz4=' } }],
+    [{ type: 'input_audio', input_audio: {} }],
+  ]) {
+    await assert.rejects(() => provider.complete({ requestId: 'i-2', messages: [{ role: 'user', content: bad }] }), /pictures/);
+  }
+});
+
+test('a long tool reply may send more than 500 messages', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] }));
+  const messages = Array.from({ length: 1200 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `m${index}` }));
+  const result = await provider.complete({ requestId: 'l-1', messages });
+  assert.equal(result.content, 'ok');
+});
+
+test('thinking goes back with the tool calls only to models that ask for it', async () => {
+  const bodies = [];
+  const { provider } = makeProvider({
+    respond: (url, options) => {
+      if (url.endsWith('/models')) {
+        return jsonResponse({ data: [{ id: 'think-back', capabilities: { chat: true, tools: true, reasoning: true, reasoning_replay: true } }, { id: 'plain', capabilities: { chat: true, tools: true } }] });
+      }
+      bodies.push(JSON.parse(options.body));
+      return jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] });
+    },
+  });
+  const discovered = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1' });
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1', model: 'think-back', models: discovered.models });
+  const messages = [
+    { role: 'user', content: 'Go' },
+    { role: 'assistant', content: null, reasoning_content: 'I should list files.', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'ls', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: 'a.txt' },
+  ];
+  await provider.complete({ requestId: 'rb-1', messages });
+  assert.equal(bodies[0].messages[1].reasoning_content, 'I should list files.');
+  await provider.setModel({ model: 'plain' });
+  await provider.complete({ requestId: 'rb-2', messages });
+  assert.equal('reasoning_content' in bodies[1].messages[1], false);
 });

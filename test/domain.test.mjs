@@ -35,6 +35,41 @@ test('only the two modes exist and anything else is Working', () => {
   assert.equal(normalizeSettings({ mode: 'nonsense' }).mode, 'working');
 });
 
+test('pictures on user messages go to the model by id, never into a compaction', async () => {
+  const { historyMessages, taskHistoryMessages, compactionMessages, normalizeMessageImages } = await import('../src/domain.mjs');
+  const messages = [
+    { role: 'user', text: 'What is this?', time: 1, images: [{ id: 'm-0123456789abcdef', name: 'shot.png' }, { id: 'nope' }] },
+    { role: 'assistant', text: 'A cat.', time: 2 },
+  ];
+  assert.deepEqual(normalizeMessageImages(messages[0].images), [{ id: 'm-0123456789abcdef', name: 'shot.png' }]);
+  assert.deepEqual(taskHistoryMessages({ messages })[0], { role: 'user', content: 'What is this?', images: ['m-0123456789abcdef'] });
+  assert.deepEqual(historyMessages(messages)[0], { role: 'user', content: 'What is this?' });
+  assert.equal('images' in compactionMessages({ messages }, 2)[0], false);
+  // A model that cannot read pictures gets a note where they were instead.
+  const withoutPictures = taskHistoryMessages({ messages }, { images: false });
+  assert.equal('images' in withoutPictures[0], false);
+  assert.match(withoutPictures[0].content, /^What is this\?\n\n\[Note from ScaleMax, the app: the user attached a picture here, left out because this model cannot read pictures\.\]$/);
+  assert.deepEqual(withoutPictures[1], { role: 'assistant', content: 'A cat.' });
+});
+
+test('the to-do list a reply left is picked up only while something on it is open', async () => {
+  const { normalizeTodos, openTodos, metricsLabel } = await import('../src/domain.mjs');
+  assert.deepEqual(normalizeTodos([{ content: ' Add  it ', status: 'in_progress' }, { content: '', status: 'pending' }, { content: 'x', status: 'weird' }]),
+    [{ content: 'Add it', status: 'in_progress' }, { content: 'x', status: 'pending' }]);
+  const open = [{ content: 'a', status: 'completed' }, { content: 'b', status: 'pending' }];
+  assert.deepEqual(openTodos({ messages: [{ role: 'assistant', text: 'x', todos: open }, { role: 'user', text: 'go on' }] }), open);
+  assert.deepEqual(openTodos({ messages: [{ role: 'assistant', text: 'x', todos: [{ content: 'a', status: 'completed' }] }] }), []);
+  // Only the latest reply counts: an older open list is not revived.
+  assert.deepEqual(openTodos({ messages: [{ role: 'assistant', text: 'x', todos: open }, { role: 'assistant', text: 'y' }] }), []);
+  // Cached prompt tokens show in the footer.
+  assert.match(metricsLabel({ usage: { inputTokens: 1200, outputTokens: 5, cachedTokens: 1024 } }), /1\.2k in \(1k cached\) · 5 out/);
+  // The list's updates read as words in the folded steps.
+  const { toolCallGroups } = await import('../src/domain.mjs');
+  const todoCall = { server: 'Todos', tool: 'todo_write', ok: true };
+  assert.equal(toolCallGroups([todoCall]).map((group) => group.label).join(), 'Updated the to-do list');
+  assert.equal(toolCallGroups([todoCall, todoCall]).map((group) => group.label).join(), 'Updated the to-do list 2 times');
+});
+
 test('modeSummary names the tool families the mode can use', () => {
   assert.deepEqual([...MODE_TOOLS.working], ['Files', 'Web', 'Clipboard', 'Specs']);
   assert.deepEqual([...MODE_TOOLS.coding], ['Files', 'Web', 'Specs']);

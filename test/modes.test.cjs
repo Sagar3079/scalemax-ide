@@ -34,9 +34,12 @@ test('anything unexpected is Working', () => {
 });
 
 test('Working works the computer, Coding stays in the project', () => {
-  assert.deepEqual(modeFamilies('working'), ['workspace', 'web', 'computer', 'specs']);
-  // Coding stays in the project, but writing a feature down before building it belongs to both.
-  assert.deepEqual(modeFamilies('coding'), ['workspace', 'web', 'specs']);
+  assert.deepEqual(modeFamilies('working'), ['workspace', 'web', 'computer', 'specs', 'todos']);
+  // Coding stays in the project, but writing a feature down before building it, and keeping a
+  // to-do list while doing it, belong to both.
+  assert.deepEqual(modeFamilies('coding'), ['workspace', 'web', 'specs', 'todos']);
+  assert.match(modeInstructions('working'), /todo_write/);
+  assert.match(modeInstructions('coding'), /todo_write/);
   // Coding gets more rounds: explore, change, run the tests, fix, run again.
   assert.ok(modeMaxRounds('coding') > modeMaxRounds('working'));
   const working = modeInstructions('working');

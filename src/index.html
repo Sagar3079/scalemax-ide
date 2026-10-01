@@ -152,7 +152,11 @@
                   <span id="jobs-bar-text" class="jobs-bar-text"></span>
                   <button id="jobs-bar-show" class="button secondary compact jobs-bar-show" type="button" aria-haspopup="dialog" aria-describedby="jobs-bar-text">Show</button>
                 </div>
-                <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step…" aria-label="Message"></textarea>
+                <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step… (@ names a file, and you can paste a picture)" aria-label="Message"></textarea>
+                <!-- Files of the open folder while typing "@name" (src/context-ui.js). -->
+                <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files in this folder" hidden></div>
+                <!-- Pictures that go with the next message (src/context-ui.js). -->
+                <div id="image-row" class="image-row" aria-label="Pictures for this message" hidden></div>
                 <div id="attachment-row" class="attachment-row" hidden>
                   <span id="attachment-status" class="attachment-chip"></span>
                   <button id="remove-attachment-btn" class="button secondary" type="button" hidden>Remove</button>
@@ -168,6 +172,9 @@
                   </button>
                   <button id="attach-btn" class="composer-icon-button" type="button" aria-label="Attach file" title="Attach file">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" /></svg>
+                  </button>
+                  <button id="image-btn" class="composer-icon-button" type="button" aria-label="Add a picture" title="Add a picture (or paste one)">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m20.5 16-5-5-8 8" /></svg>
                   </button>
                   <button id="permission-button" class="composer-chip" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="permission-menu" title="Tool permissions">
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6l-7-3Z" /></svg>

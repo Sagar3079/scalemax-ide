@@ -128,6 +128,8 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
 
     /** Opens a file picker and imports an image to edit or animate. @returns {Promise<{ok: boolean, data?: object|null}>} */
     pickImage: () => ipcRenderer.invoke('media:pick-image'),
+    /** A pasted or dropped picture: { data: base64, name } → the media item (id, kind, mime). */
+    importImage: (input) => ipcRenderer.invoke('media:import-image', input),
 
     /** Saves a generated file where the user chooses. @param {{id: string}} input */
     save: (input) => ipcRenderer.invoke('media:save', input),
@@ -366,6 +368,8 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
      * @returns {Promise<{ok: boolean, data?: {path: string, content: string, revision: string}, error?: object}>}
      */
     read: (path) => ipcRenderer.invoke('workspace:read', path),
+    /** Files of the open folder whose names match `query` (for @-mentions): { files, complete }. */
+    find: (query) => ipcRenderer.invoke('workspace:find', query),
 
     /**
      * @param {{path: string, content: string, revision: string}} input

@@ -7,7 +7,7 @@
  * Finished replies keep their steps, folded above the answer (renderMessageSteps).
  */
 import { renderMarkdown } from './markdown.js';
-import { toolActivity, normalizeSteps, stepSummary, normalizeChanges } from './domain.mjs';
+import { toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos } from './domain.mjs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // A running command's output kept on screen (the end of it).
@@ -139,6 +139,16 @@ export function applyProgress(reply, event) {
       reply.activity = null;
       return { kind: 'step', item: step };
     }
+    case 'todos': {
+      // The model's to-do list (todo_write), shown above the reply while it works.
+      reply.todos = normalizeTodos(event.items);
+      return { kind: 'todos' };
+    }
+    case 'retry':
+      // The provider failed part way and the round is asked again (its text was reset already).
+      reply.phase = 'retrying';
+      reply.activity = null;
+      return { kind: 'status' };
     case 'changes': {
       // The files the reply changed so far (kept for review and undo, also when it is stopped);
       // null when it changed every one of them back.
@@ -179,6 +189,8 @@ export function statusText(reply) {
       return 'Writing…';
     case 'working':
       return 'Working…';
+    case 'retrying':
+      return 'The provider did not answer in full; trying again…';
     default:
       if (reply.thinking) return 'Thinking…';
       return reply.items.length ? 'Working…' : 'Writing…';
@@ -221,6 +233,27 @@ function itemNode(view, item) {
   return node;
 }
 
+const TODO_MARKS = { completed: 'Done', in_progress: 'Now', pending: 'To do' };
+/**
+ * The model's to-do list (todo_write) as a checklist: done items struck through, the current one
+ * marked. Used live and under finished replies.
+ */
+export function renderTodoList(todos) {
+  const items = normalizeTodos(todos);
+  const done = items.filter((item) => item.status === 'completed').length;
+  const box = element('section', 'reply-todos');
+  box.setAttribute('aria-label', `To-do list, ${done} of ${items.length} done`);
+  box.append(element('div', 'reply-todos-head', `To-do · ${done}/${items.length} done`));
+  const list = element('ol', 'reply-todos-list');
+  for (const item of items) {
+    const row = element('li', `reply-todo is-${item.status.replace('_', '-')}`);
+    row.append(element('span', 'reply-todo-mark', TODO_MARKS[item.status]), element('span', 'reply-todo-text', item.content));
+    list.append(row);
+  }
+  box.append(list);
+  return box;
+}
+
 /** The bubble of a reply in progress; patchReply keeps it current. */
 export function renderLiveReply(reply) {
   // The bubble it replaces never draws again.
@@ -237,7 +270,9 @@ export function renderLiveReply(reply) {
     view.items = element('div', 'live-items');
     view.items.setAttribute('aria-busy', 'true');
     for (const item of reply.items) view.items.append(itemNode(view, item));
-    bubble.append(view.reasoning, view.items);
+    view.todos = element('div', 'live-todos');
+    if (reply.todos?.length) view.todos.append(renderTodoList(reply.todos));
+    bubble.append(view.todos, view.reasoning, view.items);
   }
   const status = element('div', 'pending-reply-row live-status');
   status.setAttribute('role', 'status');
@@ -279,7 +314,9 @@ export function patchReply(reply, change, container) {
   const view = reply?.view;
   if (!view || !view.bubble.isConnected || !change) return false;
   const stick = nearBottom(container);
-  if (change.kind === 'reasoning' && view.reasoning) {
+  if (change.kind === 'todos' && view.todos) {
+    view.todos.replaceChildren(...(reply.todos?.length ? [renderTodoList(reply.todos)] : []));
+  } else if (change.kind === 'reasoning' && view.reasoning) {
     const text = replyReasoning(reply);
     view.reasoningText.textContent = text;
     view.reasoning.hidden = !text;
@@ -338,8 +375,9 @@ export function partialReply(reply) {
     })));
   const reasoning = replyReasoning(reply);
   const changes = reply.changes || null;
-  if (!text && !steps.length && !reasoning && !changes) return null;
-  return { text, steps, reasoning, changes };
+  const todos = normalizeTodos(reply.todos);
+  if (!text && !steps.length && !reasoning && !changes && !todos.length) return null;
+  return { text, steps, reasoning, changes, todos };
 }
 
 /** A finished reply's steps, folded above its answer ("4 steps · Read 3 files · Ran a command"). */

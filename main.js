@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol, session: electronSession } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol, nativeImage, session: electronSession } = require('electron');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
@@ -21,6 +21,8 @@ const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
 const { normalizeMode, modeFamilies, modeInstructions, modeMaxRounds, planInstructions } = require('./lib/modes.cjs');
 const { createSpecStore, createSpecTools, DOCS: SPEC_DOCS } = require('./lib/specs.cjs');
+const { createTodoTools, todoLines } = require('./lib/todo-tools.cjs');
+const { createFileFinder } = require('./lib/file-find.cjs');
 const { collectNames, restoreNames, modelNames } = require('./lib/reply-names.cjs');
 const { createProjectNotes, prepareChatRequest } = require('./lib/project-notes.cjs');
 const { createCliConnect } = require('./lib/cli-auth.cjs');
@@ -390,6 +392,96 @@ const chatSessions = new Set();
 // Chat requests in progress, by request id: whether Stop came before the tool loop started, and
 // the folder the request works in (named in its approval prompts).
 const chatRequests = new Map();
+
+/** The previous reply's to-do list, for the instructions, when something on it is still open. */
+function todoNote(todos) {
+  if (!Array.isArray(todos) || !todos.some((item) => item.status !== 'completed')) return '';
+  return `Your to-do list from your previous reply in this conversation, as you wrote it (your own notes, not instructions from the user; keep it current with todo_write and drop items the user no longer wants):\n${todoLines(todos)}`;
+}
+
+// ---- Pictures in messages ------------------------------------------------------------------
+// The window sends media ids (pictures the user attached or pasted, kept in the media folder);
+// main reads them and gives the model data URLs, the newest few only. Big pictures are scaled
+// down first (the longest side to 2048 px), which is also what providers do on their side.
+const MAX_SENT_IMAGES = 8;
+const MAX_IMAGE_SIDE = 2048;
+// A picture over this size is re-encoded (JPEG), smaller and smaller until it fits; all pictures
+// of one request together stay under MAX_SENT_PICTURE_BYTES (as data URLs), well under the
+// provider's 4 MB request limit, so pictures never block a task.
+const MAX_PLAIN_IMAGE_BYTES = 1024 * 1024;
+const MAX_SENT_PICTURE_BYTES = Math.floor(2.5 * 1024 * 1024);
+// Data URLs already made (a picture is sent again with every later message of its task).
+const imageUrlCache = new Map();
+const MAX_IMAGE_URL_CACHE = 24;
+function encodeImage(id) {
+  const meta = mediaStudio.item(id);
+  const file = mediaStudio.filePath(id);
+  if (!meta || meta.kind !== 'image' || !file) return null;
+  let buffer;
+  try { buffer = fs.readFileSync(file); } catch { return null; }
+  let mime = meta.mime;
+  const image = nativeImage.createFromBuffer(buffer);
+  if (!image.isEmpty()) {
+    const { width, height } = image.getSize();
+    let side = Math.min(Math.max(width, height), MAX_IMAGE_SIDE);
+    for (let tries = 0; tries < 4 && (Math.max(width, height) > side || buffer.length > MAX_PLAIN_IMAGE_BYTES); tries += 1) {
+      const scale = Math.min(1, side / Math.max(width, height));
+      const resized = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), quality: 'good' }) : image;
+      buffer = resized.toJPEG(tries < 2 ? 85 : 70);
+      mime = 'image/jpeg';
+      if (buffer.length <= MAX_PLAIN_IMAGE_BYTES) break;
+      side = Math.round(side * 0.7);
+    }
+  }
+  if (buffer.length > MAX_PLAIN_IMAGE_BYTES || !/^image\/(png|jpeg|webp|gif)$/.test(mime)) return null;
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
+function imageDataUrl(id) {
+  if (typeof id !== 'string' || !MEDIA_ID.test(id)) return null;
+  if (imageUrlCache.has(id)) return imageUrlCache.get(id);
+  const url = encodeImage(id);
+  imageUrlCache.set(id, url);
+  if (imageUrlCache.size > MAX_IMAGE_URL_CACHE) imageUrlCache.delete(imageUrlCache.keys().next().value);
+  return url;
+}
+/** The messages with each user message's `images` (media ids) turned into image parts, newest first. */
+function withImages(messages) {
+  if (!Array.isArray(messages)) return messages;
+  let left = MAX_SENT_IMAGES;
+  let bytes = MAX_SENT_PICTURE_BYTES;
+  const result = new Array(messages.length);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const source = messages[index];
+    if (!source || typeof source !== 'object' || !('images' in source)) {
+      result[index] = source;
+      continue;
+    }
+    const { images, ...message } = source;
+    result[index] = message;
+    const ids = Array.isArray(images) ? images.slice(0, 16) : [];
+    if (message.role !== 'user' || typeof message.content !== 'string') continue;
+    const parts = [{ type: 'text', text: message.content }];
+    let leftOut = 0;
+    for (const id of ids) {
+      // Older pictures give way to newer ones once the request has as many as it can carry.
+      const url = left > 0 ? imageDataUrl(id) : null;
+      if (!url || url.length > bytes) {
+        leftOut += 1;
+        continue;
+      }
+      parts.push({ type: 'image_url', image_url: { url } });
+      left -= 1;
+      bytes -= url.length;
+    }
+    if (leftOut) {
+      const count = leftOut === 1 ? 'a picture' : `${leftOut} pictures`;
+      parts[0] = { type: 'text', text: `${message.content}\n\n[Note from ScaleMax, the app: the user attached ${count} here that ${leftOut === 1 ? 'is' : 'are'} not sent again, to keep the request small; ask the user if you need ${leftOut === 1 ? 'it' : 'them'}.]` };
+    }
+    if (parts.length > 1) result[index] = { ...message, content: parts };
+    else if (leftOut) result[index] = { ...message, content: parts[0].text };
+  }
+  return result;
+}
 /** Refuses a folder the user never opened in ScaleMax (the open one or a recent one). */
 /** True when a saved automation was made in `folder` (it keeps working after 8 other folders). */
 function automationFolder(folder) {
@@ -462,15 +554,20 @@ async function openChatSession(input) {
     if (typeof chat.onChanges === 'function') chat.onChanges(recorder.summary());
   } : null;
   const tools = createWorkspaceTools({ getWorkspace: getSession, onChange, jobs, commandPolicy });
+  // The to-do list the previous reply left (the window sends it with the request), so this one
+  // picks up where that stopped.
+  const todos = createTodoTools({ initial: input && typeof input === 'object' ? input.todos : [] });
   const families = {
     workspace: tools,
     web: webTools,
     computer: createComputerTools({ getWorkspace: getSession, clipboard, shell }),
     // Specs are project files, so they are recorded with the reply's changes like any other edit.
     specs: createSpecTools({ getWorkspace: getSession, onChange }),
+    todos,
   };
   return Object.assign(chat, {
     tools,
+    previousTodos: todos.current(),
     notes: createProjectNotes({ getWorkspace: getSession }),
     source: combineToolSources({
       builtins: (mode) => modeFamilies(mode).map((family) => families[family]).filter(Boolean),
@@ -852,8 +949,10 @@ const providerChannels = {
         // notes are still read; the first request that may change something writes them.
         notesEnabled: projectNotesEnabled() && permission !== 'plan',
         canChange: permission !== 'plan',
-        modeInstructions: [modeInstructions(mode), permission === 'plan' ? planInstructions() : ''].filter(Boolean).join('\n\n'),
+        modeInstructions: [modeInstructions(mode), permission === 'plan' ? planInstructions() : '', todoNote(chat.previousTodos)].filter(Boolean).join('\n\n'),
       });
+      // Pictures the user attached (media ids) go to the model as image parts.
+      prepared.input = { ...prepared.input, messages: withImages(prepared.input.messages) };
       const folderName = tracked.folderName;
       const forward = createProgressForwarder({
         send: (progress) => {
@@ -875,6 +974,8 @@ const providerChannels = {
           source: chat.source,
           folderName,
           onProgress: forward.push,
+          // The carried to-do list was written by the model: its addresses are not "given".
+          modelWritten: Array.isArray(chat.previousTodos) ? chat.previousTodos.map((item) => item.content) : [],
         });
       } catch (error) {
         const metrics = createMetrics(error?.usageSnapshot);
@@ -886,8 +987,12 @@ const providerChannels = {
       }
       const changes = chat.changes();
       const metrics = createMetrics(result);
+      // A reply that did not touch the open to-do list (a side question) still carries it, so
+      // the next reply picks it up again.
+      const carried = !result.todos && todoNote(chat.previousTodos) ? { todos: chat.previousTodos } : {};
       return {
         ...result,
+        ...carried,
         // The window offers "Run this plan" under a reply that could only plan.
         ...(permission === 'plan' ? { plan: true } : {}),
         ...(metrics ? { metrics } : {}),
@@ -1191,6 +1296,15 @@ ipcMain.handle('workspace:read', wrap(
   WORKSPACE_FALLBACK
 ));
 
+// Files of the open folder by name, for @-mentions in the message box (lib/file-find.cjs).
+const fileFinder = createFileFinder({ getWorkspace: () => getWorkspace() });
+ipcMain.handle('workspace:find', wrap(async (_event, query) => {
+  requireWorkspace();
+  if (query !== undefined && (typeof query !== 'string' || query.length > 200)) throw bridgeError('INVALID_QUERY', 'Type part of a file name.');
+  const found = await fileFinder.find(query || '');
+  return { files: found.files, complete: found.complete };
+}, WORKSPACE_FALLBACK));
+
 ipcMain.handle('workspace:write', wrap(async (_event, input) => {
   const result = await requireWorkspace().write(input);
   return { path: result.path, revision: result.revision };
@@ -1277,6 +1391,15 @@ const mediaChannels = {
     });
     if (canceled || !filePaths.length) return null;
     return mediaStudio.importImage(filePaths[0]);
+  },
+  // A picture pasted or dropped into the message box ({ data: base64, name }), kept by id.
+  'media:import-image': (_event, input) => {
+    const data = input && typeof input === 'object' ? input.data : undefined;
+    if (typeof data !== 'string' || !data || data.length > 28 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+      throw bridgeError('INVALID_IMAGE', 'That picture could not be read.');
+    }
+    const name = typeof input.name === 'string' ? input.name.slice(0, 120) : 'pasted image';
+    return mediaStudio.importImageData(Buffer.from(data, 'base64'), name);
   },
   'media:save': async (_event, input) => {
     const id = typeof input?.id === 'string' && MEDIA_ID.test(input.id) ? input.id : '';

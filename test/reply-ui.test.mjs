@@ -195,3 +195,21 @@ test('a live reply keeps the latest changes, and a stopped one carries them', ()
   assert.equal(reply.changes, null);
   assert.equal(partialReply(reply), null);
 });
+
+test('a to-do list and a retry reach the live reply, and a stopped reply keeps its list', () => {
+  const reply = createReply({ taskId: 't', requestId: 'r' });
+  applyProgress(reply, { phase: 'thinking', round: 0 });
+  applyProgress(reply, { phase: 'delta', kind: 'text', text: 'Half' });
+  assert.deepEqual(applyProgress(reply, { phase: 'todos', items: [{ content: 'Add the test', status: 'in_progress' }, { content: '', status: 'pending' }] }), { kind: 'todos' });
+  assert.deepEqual(reply.todos, [{ content: 'Add the test', status: 'in_progress' }]);
+  // The provider is asked again: the text shown so far was reset by main (text-set ''), and the
+  // status says why the reply is taking longer.
+  applyProgress(reply, { phase: 'text-set', kind: 'text', text: '' });
+  applyProgress(reply, { phase: 'retry', attempt: 1 });
+  assert.equal(reply.phase, 'retrying');
+  assert.match(statusText(reply), /trying again/);
+  applyProgress(reply, { phase: 'delta', kind: 'text', text: 'Whole answer.' });
+  const partial = partialReply(reply);
+  assert.equal(partial.text, 'Whole answer.');
+  assert.deepEqual(partial.todos, [{ content: 'Add the test', status: 'in_progress' }]);
+});

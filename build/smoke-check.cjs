@@ -105,6 +105,34 @@ function stubReply(body) {
     return probe('local', 'web_open', { url: given ? given[0] : 'http://[::ffff:127.0.0.1]/' });
   }
   if (clipboardRead && said('read my clipboard')) return probe('clipboard', 'computer_clipboard_read', {});
+  // Phase 7. An answer cut off at the output limit, and its continuation.
+  if (said('write a long answer')) {
+    return typeof last.content === 'string' && last.content.includes('your last answer was cut off')
+      ? { role: 'assistant', content: 'second half.' }
+      : { role: 'assistant', content: 'First half, ', finish: 'length' };
+  }
+  // A to-do list kept with todo_write.
+  const todoWrite = tools.find((tool) => tool?.function?.name === 'todo_write');
+  if (todoWrite && said('keep a todo list')) {
+    if (last.role === 'tool') return { role: 'assistant', content: 'Listed.' };
+    const todos = [{ content: 'Read the notes', status: 'completed' }, { content: 'Write the summary', status: 'in_progress' }, { content: 'Check it', status: 'pending' }];
+    return { role: 'assistant', content: null, tool_calls: [{ id: 'call_todos', type: 'function', function: { name: 'todo_write', arguments: JSON.stringify({ todos }) } }] };
+  }
+  // A picture in the newest message: say which kind arrived.
+  if (Array.isArray(last.content) && last.content.some((part) => part?.type === 'image_url')) {
+    const url = last.content.find((part) => part?.type === 'image_url').image_url.url;
+    const mime = url.slice(5, url.indexOf(';'));
+    // A big picture: main re-encodes it, and the whole request stays well under 4 MB.
+    if (last.content.some((part) => part?.type === 'text' && part.text.includes('big picture'))) {
+      return { role: 'assistant', content: `big picture: ${mime}, small: ${url.length <= 1.4 * 1024 * 1024}, request under 4 MB: ${JSON.stringify(body).length < 4 * 1024 * 1024}` };
+    }
+    return { role: 'assistant', content: `saw picture: ${mime}` };
+  }
+  // A file named with @: say which file and what it holds.
+  if (typeof last.content === 'string' && last.content.includes('(named by the user with @)')) {
+    const match = /File (\S+) \(named by the user with @\):\n```\n([\s\S]*?)\n```/.exec(last.content);
+    return { role: 'assistant', content: `mention: ${match ? `${match[1]}=${match[2]}` : 'none'}` };
+  }
   // First completion gets its usage; the next completion fails, exercising partial billing.
   if (last.role === 'tool' && messages.some((message) => typeof message?.content === 'string' && message.content.includes('fail after tool'))) {
     return { role: 'assistant', content: 'Partial after a billed tool round.', failAfter: 'stub second round failed' };
@@ -176,6 +204,7 @@ function stubReply(body) {
   return { role: 'assistant', content: 'pong' };
 }
 
+const stubCounters = { failOnce: 0 };
 // A held stream waits for the next request containing "release" after its own request arrived
 // (a release that came first still counts), or 15 s.
 const heldStreams = new Set();
@@ -200,7 +229,7 @@ function streamReply(res, message, delayMs) {
   if (message.failAfter) {
     events.push({ error: { message: message.failAfter, type: 'server_error' } });
   } else {
-    events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }] });
+    events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: message.finish || (message.tool_calls ? 'tool_calls' : 'stop') }] });
     events.push({ ...base, choices: [], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } });
   }
   let index = 0;
@@ -250,6 +279,31 @@ async function startStubServer() {
         let body = null;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { body = null; }
         const lastContent = String(body?.messages?.[body.messages.length - 1]?.content || '');
+        // "refuse the picture": a model that cannot read pictures, the way ScaleMax says it.
+        const lastMessage = body?.messages?.[body.messages.length - 1];
+        const sentPictures = (body?.messages || []).some((item) => Array.isArray(item?.content) && item.content.some((part) => part?.type === 'image_url'));
+        if (sentPictures && Array.isArray(lastMessage?.content) && lastMessage.content.some((part) => part?.type === 'text' && part.text.includes('refuse the picture'))) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: "smoke-model can't read images. Use a model with image input.", code: 'image_input_unsupported' } }));
+          return;
+        }
+        if (typeof lastMessage?.content === 'string' && lastMessage.content.includes('go on without it')) {
+          const noted = (body.messages || []).some((item) => typeof item?.content === 'string' && item.content.includes('left out because this model cannot read pictures'));
+          const message = { role: 'assistant', content: `without pictures: ${!sentPictures}, noted: ${noted}` };
+          if (body?.stream === true) streamReply(res, message, 0);
+          else { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message, finish_reason: 'stop' }] })); }
+          return;
+        }
+        // "fail once please": the first try is refused like an overloaded server (503), the retry
+        // is answered; stubCounters says how many tries there were.
+        if (lastContent.includes('fail once please')) {
+          stubCounters.failOnce += 1;
+          if (stubCounters.failOnce === 1) {
+            res.writeHead(503, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'overloaded, try again', type: 'server_error' } }));
+            return;
+          }
+        }
         // "hold stream" in the newest message: two pieces, then the stream waits until a request
         // saying "release" is answered, so two replies overlap however fast or slow the machine is.
         const message = { ...stubReply(body), ...(lastContent.includes('hold stream') ? { hold: true } : {}) };
@@ -263,8 +317,8 @@ async function startStubServer() {
           return;
         }
         res.writeHead(200, { 'content-type': 'application/json' });
-        const { failAfter, hold, ...whole } = message;
-        res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: whole }], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } }));
+        const { failAfter, hold, finish, ...whole } = message;
+        res.end(JSON.stringify({ model: 'smoke-model', choices: [{ message: whole, finish_reason: finish || (whole.tool_calls ? 'tool_calls' : 'stop') }], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } }));
       });
       return;
     }
@@ -353,10 +407,11 @@ async function run(win) {
         hasBridge: Boolean(api.store && api.provider && api.connectors && api.mcp),
         reservedHidden: Object.values(reserved).every((value) => value === undefined),
         providerMethods: ['get','save','test','discover','send','cancel','compact','clear','setModel','refreshModels','onProgress','profiles','addProfile','selectProfile','renameProfile','removeProfile'].filter((m) => typeof api.provider?.[m] === 'function'),
-        workspaceMethods: ['select','current','list','read','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
+        workspaceMethods: ['select','current','list','read','find','write','gitStatus','gitDiff','run','cancel'].filter((m) => typeof api.workspace?.[m] === 'function'),
         dialogMethods: ['openFolder','openFile'].filter((m) => typeof api.dialog?.[m] === 'function'),
         connectorMethods: ['list','save','remove','test','fetch','saveOAuthConfig','getOAuthConfig','startOAuth','oauthStatus','disconnectOAuth','cliAvailable','cliConnect','cliWait','cliStatus','cliCancel'].filter((m) => typeof api.connectors?.[m] === 'function'),
-        mediaMethods: ['generate','cancel','info','pickImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
+        mediaMethods: ['generate','cancel','info','pickImage','importImage','save','onProgress'].filter((m) => typeof api.media?.[m] === 'function'),
+        contextControls: ['#image-btn', '#image-row[hidden]', '#mention-menu[hidden]'].every((selector) => Boolean(document.querySelector(selector))),
         approvalMethods: ['onRequest','onClosed','respond'].filter((m) => typeof api.approvals?.[m] === 'function'),
         checkpointMethods: ['get','diff','undo','keep','remove'].filter((m) => typeof api.checkpoints?.[m] === 'function'),
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
@@ -898,6 +953,135 @@ async function run(win) {
       const planFileAfter = await api.workspace.read('planned.md');
       const planNotesAfter = await api.workspace.read('.scalemax/SCALEMAX.md');
       await api.store.set('settings', specSettings || {});
+
+      // Reliability and context, sent from the window in the notes folder: an overloaded first
+      // try is tried again, an answer cut off at the output limit is continued, a to-do list shows
+      // with the reply, a pasted picture goes with the message, and a file named with @ goes along
+      // as its contents. Each in a task of its own (the stub reads the whole conversation).
+      await app.openWorkspaceAt(${JSON.stringify(wsToolsDir)});
+      const sendInNewTask = async (text, expected, ms) => {
+        app.newTask({ folder: app.rootFolder() });
+        const task = app.currentTask();
+        setValue('#chat-input', text);
+        document.querySelector('#send-btn').click();
+        await until(() => {
+          const last = task.messages[task.messages.length - 1];
+          return Boolean(last && last.role === 'assistant' && last.text === expected);
+        }, ms || 12000);
+        const last = task.messages[task.messages.length - 1] || {};
+        return { task, text: last.role === 'assistant' ? last.text + (last.notice ? ' | ' + last.notice : '') : 'no answer', last };
+      };
+      const retried = await sendInNewTask('Please fail once please and then answer.', 'pong', 15000);
+      const continued = await sendInNewTask('Please write a long answer.', 'First half, second half.');
+      const todoReply = await sendInNewTask('Please keep a todo list.', 'Listed.');
+      const todoCount = Array.isArray(todoReply.last.todos) ? todoReply.last.todos.length : -1;
+      await until(() => Boolean(document.querySelector('#chat-messages .reply-todos')), 3000);
+      const todoUi = document.querySelector('#chat-messages .reply-todos .reply-todos-head')?.textContent || '';
+      const todoRows = document.querySelectorAll('#chat-messages .reply-todos .reply-todo').length;
+      // A picture pasted into the message box (a 2x2 PNG drawn here).
+      app.newTask({ folder: app.rootFolder() });
+      const pictureTask = app.currentTask();
+      const canvas = document.createElement('canvas');
+      canvas.width = 2;
+      canvas.height = 2;
+      canvas.getContext('2d').fillRect(0, 0, 2, 2);
+      const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      const pasted = new DataTransfer();
+      pasted.items.add(new File([pngBlob], 'dot.png', { type: 'image/png' }));
+      document.querySelector('#chat-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: pasted, bubbles: true, cancelable: true }));
+      const pictureAdded = await until(() => Boolean(document.querySelector('#image-row img')) && !document.querySelector('#image-row').hidden, 5000);
+      setValue('#chat-input', 'What is in this picture?');
+      await until(() => !document.querySelector('#send-btn').disabled, 3000);
+      document.querySelector('#send-btn').click();
+      await until(() => {
+        const last = pictureTask.messages[pictureTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && String(last.text || '').startsWith('saw picture'));
+      }, 12000);
+      const pictureLast = pictureTask.messages[pictureTask.messages.length - 1] || {};
+      const pictureText = pictureLast.role === 'assistant' ? pictureLast.text + (pictureLast.notice ? ' | ' + pictureLast.notice : '') : 'no answer';
+      const pictureUser = pictureTask.messages.find((message) => message.role === 'user') || {};
+      const pictureStored = Array.isArray(pictureUser.images) ? pictureUser.images.length : -1;
+      const pictureShown = document.querySelectorAll('#chat-messages .msg-images img').length;
+      const pictureRowCleared = document.querySelector('#image-row').hidden === true;
+      // A big picture (noise, so it hardly compresses): sent re-encoded and small.
+      app.newTask({ folder: app.rootFolder() });
+      const bigTask = app.currentTask();
+      const noise = document.createElement('canvas');
+      noise.width = 1600;
+      noise.height = 1600;
+      const noiseContext = noise.getContext('2d');
+      const pixels = noiseContext.createImageData(1600, 1600);
+      for (let index = 0; index < pixels.data.length; index += 1) pixels.data[index] = index % 4 === 3 ? 255 : (Math.random() * 256) | 0;
+      noiseContext.putImageData(pixels, 0, 0);
+      const bigBlob = await new Promise((resolve) => noise.toBlob(resolve, 'image/png'));
+      const bigTransfer = new DataTransfer();
+      bigTransfer.items.add(new File([bigBlob], 'noise.png', { type: 'image/png' }));
+      document.querySelector('#chat-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: bigTransfer, bubbles: true, cancelable: true }));
+      setValue('#chat-input', 'Please look at this big picture.');
+      // Send waits while the picture is still being added.
+      const bigSendHeld = document.querySelector('#send-btn').disabled === true;
+      await until(() => Boolean(document.querySelector('#image-row img')) && !document.querySelector('#send-btn').disabled, 15000);
+      document.querySelector('#send-btn').click();
+      await until(() => {
+        const last = bigTask.messages[bigTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && String(last.text || '').startsWith('big picture'));
+      }, 15000);
+      const bigLast = bigTask.messages[bigTask.messages.length - 1] || {};
+      const bigPictureText = bigLast.role === 'assistant' ? bigLast.text + (bigLast.notice ? ' | ' + bigLast.notice : '') : 'no answer';
+      const bigPictureBytes = bigBlob.size;
+      // A model that refuses the picture: the window says so, leaves the task's pictures out for
+      // that model from then on (the model hears they were there), and takes no new ones for it.
+      app.newTask({ folder: app.rootFolder() });
+      const refusedTask = app.currentTask();
+      const pasteDot = () => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([pngBlob], 'dot.png', { type: 'image/png' }));
+        document.querySelector('#chat-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
+      };
+      pasteDot();
+      await until(() => Boolean(document.querySelector('#image-row img')), 5000);
+      setValue('#chat-input', 'Please refuse the picture.');
+      await until(() => !document.querySelector('#send-btn').disabled, 3000);
+      document.querySelector('#send-btn').click();
+      const refusalToastShown = await until(() => (document.querySelector('#toast')?.textContent || '').includes('Pictures are left out'), 8000);
+      const refusalToast = document.querySelector('#toast')?.textContent || '';
+      const refusalRemembered = app.noPictureModels.has('smoke-model');
+      await until(() => !app.replies.has(refusedTask.id), 4000);
+      const goOn = await (async () => {
+        setValue('#chat-input', 'Please go on without it.');
+        document.querySelector('#send-btn').click();
+        await until(() => {
+          const last = refusedTask.messages[refusedTask.messages.length - 1];
+          return Boolean(last && last.role === 'assistant' && String(last.text || '').startsWith('without pictures'));
+        }, 8000);
+        const last = refusedTask.messages[refusedTask.messages.length - 1] || {};
+        return last.role === 'assistant' ? last.text : 'no answer';
+      })();
+      pasteDot();
+      const repasteRefused = await until(() => (document.querySelector('#toast')?.textContent || '').includes('cannot read pictures'), 4000)
+        && !document.querySelector('#image-row img');
+      app.noPictureModels.clear();
+      // A file named with @: the menu offers the folder's files, Enter picks one, and on send
+      // the file goes along as its contents.
+      app.newTask({ folder: app.rootFolder() });
+      const mentionTask = app.currentTask();
+      const mentionInput = document.querySelector('#chat-input');
+      mentionInput.focus();
+      setValue('#chat-input', 'Look at @smoke-no');
+      const mentionMenu = await until(() => Boolean(document.querySelector('#mention-menu .mention-option')) && !document.querySelector('#mention-menu').hidden, 4000);
+      const mentionOffered = Array.from(document.querySelectorAll('#mention-menu .mention-option')).map((node) => node.dataset.path).join(',');
+      mentionInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      const mentionValue = mentionInput.value;
+      const mentionMenuClosed = document.querySelector('#mention-menu').hidden === true;
+      setValue('#chat-input', mentionValue + 'what does it say?');
+      document.querySelector('#send-btn').click();
+      await until(() => {
+        const last = mentionTask.messages[mentionTask.messages.length - 1];
+        return Boolean(last && last.role === 'assistant' && String(last.text || '').startsWith('mention:'));
+      }, 12000);
+      const mentionLast = mentionTask.messages[mentionTask.messages.length - 1] || {};
+      const mentionText = mentionLast.role === 'assistant' ? mentionLast.text : 'no answer';
+      const mentionUserText = (mentionTask.messages.find((message) => message.role === 'user') || {}).text || '';
       await api.provider.clear();
 
       // OAuth app settings: the secret is write-only and HTTPS-only providers refuse loopback sign-in.
@@ -1052,6 +1236,31 @@ async function run(win) {
         planRan,
         planFileAfter: planFileAfter && planFileAfter.ok ? planFileAfter.data.content : null,
         planNotesAfterRun: Boolean(planNotesAfter && planNotesAfter.ok === true),
+        retryText: retried.text,
+        continuedText: continued.text,
+        todoText: todoReply.text,
+        todoCount,
+        todoUi,
+        todoRows,
+        pictureAdded,
+        pictureText,
+        pictureStored,
+        pictureShown,
+        pictureRowCleared,
+        bigSendHeld,
+        bigPictureText,
+        bigPictureBytes,
+        refusalToastShown,
+        refusalToast,
+        refusalRemembered,
+        goOn,
+        repasteRefused,
+        mentionMenu,
+        mentionOffered,
+        mentionValue,
+        mentionMenuClosed,
+        mentionText,
+        mentionUserText,
         modeTools,
         matchedText: matched && matched.ok ? matched.data.text : (matched?.error?.message || null),
         wsFolderText: folderReply && folderReply.ok ? folderReply.data.text : (folderReply?.error?.message || null),
@@ -1260,14 +1469,14 @@ async function run(win) {
     hasBridge: probe.hasBridge,
     reservedKeysHidden: probe.reservedHidden,
     providerMethods: probe.providerMethods.length === 16,
-    mediaApi: probe.mediaMethods.length === 6,
+    mediaApi: probe.mediaMethods.length === 7 && probe.contextControls === true,
     approvalApi: probe.approvalMethods.length === 3,
     checkpointApi: probe.checkpointMethods.length === 5,
     jobsApi: probe.jobMethods.length === 6 && probe.commandSettings === true,
     conversationSettings: probe.conversationSettings === true,
     composerControls: probe.composerControls === true && probe.attachIsIcon === true,
     permissionDefaultBasic: probe.permissionLabel === 'Basic',
-    workspaceApi: probe.workspaceMethods.length === 9,
+    workspaceApi: probe.workspaceMethods.length === 10,
     dialogApi: probe.dialogMethods.length === 2,
     connectorApi: probe.connectorMethods.length === 15,
     mcpApi: probe.mcpMethods.length === 7,
@@ -1413,6 +1622,29 @@ async function run(win) {
     // and then the plan is really carried out.
     planRunsAfterwards: Boolean(e2e && e2e.planRunAsked && e2e.planRunPermission === 'Basic' && e2e.planRan
       && e2e.planFileAfter === 'planned line\n' && plannedOnDisk === true),
+    // An overloaded first try (503) is tried again once, and the user just gets the answer.
+    retriesOverload: Boolean(e2e && e2e.retryText === 'pong' && stubCounters.failOnce === 2),
+    // An answer cut off at the output limit is continued, and the two parts are one answer.
+    continuesCutAnswer: Boolean(e2e && e2e.continuedText === 'First half, second half.'),
+    // The model's to-do list is kept with the reply and shown under it.
+    todoList: Boolean(e2e && e2e.todoText === 'Listed.' && e2e.todoCount === 3 && e2e.todoUi === 'To-do · 1/3 done'
+      && e2e.todoRows === 3),
+    // A pasted picture waits in the message box, goes to the model as an image part, and stays
+    // with the sent message.
+    pastedPicture: Boolean(e2e && e2e.pictureAdded && e2e.pictureText === 'saw picture: image/png' && e2e.pictureStored === 1
+      && e2e.pictureShown >= 1 && e2e.pictureRowCleared),
+    // A big picture holds Send until it is added, then goes re-encoded, small, in a request
+    // under the provider's 4 MB limit.
+    bigPicture: Boolean(e2e && e2e.bigPictureBytes > 4 * 1024 * 1024 && e2e.bigSendHeld
+      && e2e.bigPictureText === 'big picture: image/jpeg, small: true, request under 4 MB: true'),
+    // A model that cannot read pictures: said clearly, and the task goes on without them.
+    pictureRefusal: Boolean(e2e && e2e.refusalToastShown && /can't read images/.test(e2e.refusalToast) && e2e.refusalRemembered
+      && e2e.goOn === 'without pictures: true, noted: true' && e2e.repasteRefused),
+    // "@" offers the folder's files; the one picked goes to the model as its contents, while the
+    // saved message keeps just what the user typed.
+    atMention: Boolean(e2e && e2e.mentionMenu && e2e.mentionOffered.split(',').includes('smoke-note.txt')
+      && e2e.mentionValue === 'Look at @smoke-note.txt ' && e2e.mentionMenuClosed
+      && e2e.mentionText === 'mention: smoke-note.txt=note' && e2e.mentionUserText === 'Look at @smoke-note.txt what does it say?'),
     modeToolSets: (() => {
       const sets = (e2e && e2e.modeTools) || {};
       const names = (value) => (typeof value === 'string' && value.startsWith('tools: ') ? value.slice(7).split(',') : []);
