@@ -59,27 +59,30 @@ ScaleMax IDE is an Electron + vanilla-JS desktop prototype (no build step, no ru
 
 ## Where we are now
 
+Updated 2026-10-16 (branch `upgrade/codex-claude`). This file is an early log; `HANDOFF.md` is the source of truth and has the detail.
+
 | Area | Status |
 |---|---|
 | App boots & renderer runs | ✅ Fixed (MODELS blocker gone) |
-| Provider connection (custom + ScaleMax preset) | ✅ Real, auto-detects endpoint |
-| Model list + enable/disable + active model | ✅ Working |
-| Chat → real AI provider | ✅ Working (fallback demo when unconfigured) |
+| Provider connection (custom + ScaleMax preset, several saved providers) | ✅ Real, auto-detects endpoint |
+| Model list + active model | ✅ Working (every model the key can use is available; per-model enabling was removed) |
+| Chat → real AI provider | ✅ Streamed, with tool calls, several tasks at once (labelled demo reply when unconfigured) |
 | Key security (safeStorage, no renderer access) | ✅ Working |
 | Resize-safe layout + 900×700 minimum | ✅ Working |
 | Blue focus ring, helper text, approval popup removed | ✅ Done |
 | Unified composer (one container) | ✅ Done |
-| Open folder / file tree / editor save / attach | ✅ Working |
-| Git status/diff | ✅ Working |
-| Permissions expanded | ✅ Done |
-| Unit + smoke tests | ✅ 15 unit + end-to-end smoke |
-| Distributable | ✅ dmg + zip rebuilt |
+| Open folder / file tree / editor save / attach | ✅ Working; the editor is CodeMirror 6 with inline review of a reply's edits (unit-tested, not yet clicked through in the app) |
+| Git | ✅ Status/diff; commit, push, pull requests and per-task worktrees (unit-tested, not yet run in the app) |
+| Permissions | ✅ Plan / Manual / Basic / Bypass, sandboxed model commands |
+| Scheduled automations | ✅ Fired by the main process, also with the window closed (unit-tested, not yet run in the app) |
+| Connectors / MCP | ✅ Real: tokens, OAuth, one-click sign-in for 14 connectors, MCP tools, resources and prompts |
+| Unit + smoke tests | ✅ 675 unit tests pass (2026-10-16); smoke check has 103 checks, last run 99/99 on 2026-10-01, not yet run on this branch |
+| Distributable | ✅ dmg + zip (last rebuilt after session 3) |
 
-**Still not built (known gaps, out of scope so far):**
-- Scheduled automations still don't actually run (they're saved only).
-- Skills/connectors are still local toggles (no real install/connect).
-- No code signing / notarization.
-- No git repo / CI yet (the folder isn't under version control).
+**Still not built (known gaps):**
+- The features added on 2026-10-16 (subagents, Git flow, worktrees, editor, slash commands, hooks, main-process automations) have not been run in the real Electron app yet.
+- Connector live data is GitHub-only.
+- No code signing / notarization; no CI.
 
 ---
 
