@@ -612,3 +612,10 @@ test('plan is a real permission mode and a read-only legacy value becomes it', (
   assert.match(prompt, /Plan permission: read-only/);
   assert.match(prompt, /Run this plan/);
 });
+
+test('normalizeSettings keeps a model per kind of subagent, and nothing else under it', () => {
+  assert.equal('subagentModels' in normalizeSettings({}), false, 'by default subagents use the reply\'s model');
+  assert.deepEqual(normalizeSettings({ subagentModels: { explore: 'deepseek-v4-flash', general: 'bad\nid', admin: 'x' } }).subagentModels, { explore: 'deepseek-v4-flash' });
+  assert.equal('subagentModels' in normalizeSettings({ subagentModels: { explore: 42 } }), false);
+  assert.equal('subagentModels' in normalizeSettings({ subagentModels: 'deepseek' }), false);
+});

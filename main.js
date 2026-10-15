@@ -277,6 +277,9 @@ function requestToolApproval(request, { signal } = {}) {
       kind: request.serverId === workspaceTools.SERVER_ID ? 'workspace'
         : request.serverId === webTools.SERVER_ID ? 'web'
           : request.serverId === computerTools.SERVER_ID ? 'computer' : 'mcp',
+      // Handing work to a subagent (asked about in Manual), and a call a subagent makes.
+      ...(request.serverId === SUBAGENT_SERVER_ID ? { kind: 'agents' } : {}),
+      ...(typeof request.subagent === 'string' && request.subagent ? { subagent: request.subagent.slice(0, 120) } : {}),
       toolName: request.toolName,
       readOnly: request.readOnly,
       // The server labels the tool read-only, but the user has not chosen to trust its labels.
@@ -379,6 +382,33 @@ const toolLoop = createToolLoop({
   restorer: replyRestorer,
   // Coding work takes many steps (read, edit, run the tests, fix); Stop cancels at any point.
   maxRounds: 25
+});
+
+// --- Subagents ---
+// agent_task (lib/subagents.cjs, offered in both modes): the model hands a self-contained piece of
+// work to a subagent, which runs a tool loop of its own inside the reply and reports back. It
+// works through the reply's own tools (openChatSession), so the reply's permission, prompts
+// ("Subagent: <description>"), egress rule, sandbox and changes card cover it; its tokens and cost
+// count in the reply's totals, and Stop ends it with the reply. By default it uses the reply's
+// model; settings.subagentModels may name another chat model of the same provider per kind
+// ({ explore: '<model id>', general: '<model id>' }).
+const { createSubagents, SERVER_ID: SUBAGENT_SERVER_ID } = require('./lib/subagents.cjs');
+const subagents = createSubagents({
+  provider,
+  approve: requestToolApproval,
+  restorer: replyRestorer,
+  restoreStream: (sources, folderName) => {
+    const names = collectNames(sources, folderName ? [folderName] : []);
+    return names.length ? replyNameRepair(names) : null;
+  },
+  modelFor: (kind) => {
+    try {
+      const models = (stateStore.get('settings') || {}).subagentModels;
+      return models && typeof models === 'object' && typeof models[kind] === 'string' ? models[kind] : '';
+    } catch {
+      return '';
+    }
+  },
 });
 
 /**
@@ -584,6 +614,8 @@ async function openChatSession(input) {
     // Specs are project files, so they are recorded with the reply's changes like any other edit.
     specs: createSpecTools({ getWorkspace: getSession, onChange }),
     todos,
+    // Subagents work through this reply's tools (see "--- Subagents ---" above).
+    agents: subagents,
   };
   return Object.assign(chat, {
     tools,

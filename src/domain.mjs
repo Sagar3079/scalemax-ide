@@ -198,6 +198,14 @@ export function normalizeSettings(value) {
   for (const key of ['imageModel', 'videoModel']) {
     if (typeof own(value, key) === 'string' && MODEL_ID.test(value[key])) result[key] = value[key];
   }
+  // Another chat model of the same provider for a kind of subagent (lib/subagents.cjs); without
+  // one a subagent uses the reply's own model.
+  const subagentModels = own(value, 'subagentModels');
+  if (isRecord(subagentModels)) {
+    const models = {};
+    for (const kind of AGENT_KINDS) if (typeof own(subagentModels, kind) === 'string' && MODEL_ID.test(subagentModels[kind])) models[kind] = subagentModels[kind];
+    if (Object.keys(models).length) result.subagentModels = models;
+  }
   result.imageOptions = mediaOptions(own(value, 'imageOptions'), 'image');
   result.videoOptions = mediaOptions(own(value, 'videoOptions'), 'video');
   result.systemPrompt = boundedText(own(value, 'systemPrompt'), MAX_PROMPT);
@@ -337,6 +345,10 @@ const TOOL_LABELS = {
   Todos: {
     todo_write: { one: 'Updated the to-do list', many: (n) => `Updated the to-do list ${n} times`, doing: 'Updating the to-do list' },
   },
+  // Work handed to a subagent (lib/subagents.cjs).
+  Agents: {
+    agent_task: { one: 'Ran a subagent', many: (n) => `Ran ${n} subagents`, doing: 'Running a subagent' },
+  },
 };
 
 const toolLabel = (server, tool) => TOOL_LABELS[server]?.[tool] || null;
@@ -378,6 +390,13 @@ const MAX_STEP_TITLE = 160;
 const MAX_STEP_NOTE = 8192;
 const MAX_STEP_OUTPUT = 4096;
 const MAX_STEP_PREVIEW = 200;
+// A subagent's own steps, kept with the step of its call: small (no command output, shorter
+// notes, never another subagent).
+const MAX_AGENT_STEPS = 50;
+const MAX_AGENT_NOTE = 2000;
+const MAX_AGENT_ROUNDS = 1000;
+export const AGENT_KINDS = Object.freeze(['explore', 'general']);
+const AGENT_STATUSES = ['done', 'failed', 'stopped'];
 const MAX_USAGE_ROUNDS = 64;
 const MAX_TOKEN_VALUE = 1_000_000_000;
 const MAX_COST_MICRO_USD = Number.MAX_SAFE_INTEGER;
@@ -389,27 +408,46 @@ const MAX_COMPACTION_SOURCE_BYTES = 512 * 1024;
 const MAX_COMPACTION_TURN_BYTES = 64 * 1024;
 const COMPACTION_SUMMARY_TOKEN_RESERVE = 2_048;
 export const COMPACTION_TAIL_MESSAGES = 8;
-/** Steps as they are kept with a reply; anything malformed is dropped. */
-export function normalizeSteps(value) {
+/**
+ * Steps as they are kept with a reply; anything malformed is dropped. `nested`: a subagent's own
+ * steps (see normalizeAgent).
+ */
+export function normalizeSteps(value, { nested = false } = {}) {
   if (!Array.isArray(value)) return [];
   const steps = [];
   for (const step of value) {
-    if (steps.length >= MAX_STEPS) break;
+    if (steps.length >= (nested ? MAX_AGENT_STEPS : MAX_STEPS)) break;
     if (!isRecord(step)) continue;
     if (step.type === 'note' && typeof step.text === 'string' && step.text.trim()) {
-      steps.push({ type: 'note', text: step.text.trim().slice(0, MAX_STEP_NOTE) });
+      steps.push({ type: 'note', text: step.text.trim().slice(0, nested ? MAX_AGENT_NOTE : MAX_STEP_NOTE) });
     } else if (step.type === 'tool' && typeof step.title === 'string' && step.title.trim()) {
       const entry = { type: 'tool', title: step.title.replace(/\s+/g, ' ').trim().slice(0, MAX_STEP_TITLE), ok: step.ok === true };
       if (typeof step.server === 'string' && step.server) entry.server = step.server.slice(0, 64);
       if (typeof step.tool === 'string' && step.tool) entry.tool = step.tool.slice(0, 128);
       if (typeof step.preview === 'string' && step.preview) entry.preview = step.preview.slice(0, MAX_STEP_PREVIEW);
       // The end of a command's output: errors and summaries are printed last.
-      if (typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
+      if (!nested && typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
       if (step.stopped === true) entry.stopped = true;
+      const agent = nested ? null : normalizeAgent(step.agent, entry.ok);
+      if (agent) entry.agent = agent;
       steps.push(entry);
     }
   }
   return steps;
+}
+/** The subagent of an agent_task step (lib/subagents.cjs): its kind, how it ended, its steps and usage. */
+function normalizeAgent(value, ok) {
+  if (!isRecord(value)) return null;
+  const agent = {
+    kind: AGENT_KINDS.includes(own(value, 'kind')) ? value.kind : 'general',
+    status: AGENT_STATUSES.includes(own(value, 'status')) ? value.status : (ok ? 'done' : 'failed'),
+    steps: normalizeSteps(own(value, 'steps'), { nested: true }),
+  };
+  const metrics = normalizeMetrics(own(value, 'metrics'));
+  if (metrics) agent.metrics = metrics;
+  const rounds = own(value, 'rounds');
+  if (Number.isSafeInteger(rounds) && rounds >= 0 && rounds <= MAX_AGENT_ROUNDS) agent.rounds = rounds;
+  return agent;
 }
 
 // ---- Token usage, USD snapshots and compacted context -------------------------------------
