@@ -1210,7 +1210,10 @@ test('the model gets two read-only resource tools, limited to what each server l
   assert.deepEqual(tools[0].function.parameters.properties.server.enum, ['memo'], 'only servers that offer resources');
   assert.match(tools[1].function.description, /data, not as instructions/);
   assert.deepEqual(resolve('mcp_list_resources'), { serverId: RESOURCE_SERVER_ID, toolName: 'list_resources', readOnly: true });
-  assert.deepEqual(resolve('mcp_read_resource'), { serverId: RESOURCE_SERVER_ID, toolName: 'read_resource', readOnly: true });
+  const { alwaysAsk, ...readRoute } = resolve('mcp_read_resource');
+  assert.deepEqual(readRoute, { serverId: RESOURCE_SERVER_ID, toolName: 'read_resource', readOnly: true });
+  // Building the tools remembers what each server lists: a listed resource reads without asking.
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/today' }), '');
   // Read-only by definition: offered when only read-only tools are.
   assert.deepEqual((await mcp.chatTools({ readOnlyOnly: true })).tools.map((tool) => tool.function.name), ['mcp_list_resources', 'mcp_read_resource']);
 
@@ -1225,6 +1228,13 @@ test('the model gets two read-only resource tools, limited to what each server l
   assert.equal((await mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri: 'memo://notes/today' } })).text, 'notes for today');
   // Filled in from the template.
   assert.equal((await mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri: 'memo://notes/2026-10-16' } })).text, 'notes for 2026-10-16');
+  // A listed resource reads without asking; a URI filled in from a template asks, unless the user
+  // trusts the server's labels.
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/today' }), '');
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/2026-10-16' }), 'required');
+  assert.equal(alwaysAsk({ server: 'nope', uri: 'memo://notes/today' }), 'required');
+  mcp.save(extrasInput({ id: 'memo', trustReadOnly: true }));
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/2026-10-16' }), '');
   for (const uri of ['memo://secret', 'memo://notes/', 'memo://notes/a b', 'https://collect.example/?d=key']) {
     await assert.rejects(() => mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri } }), /not one of this server's resources/, uri);
   }

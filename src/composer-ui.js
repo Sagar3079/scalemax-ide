@@ -641,6 +641,13 @@ function approvalSummary(request) {
     return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
   }
   if (request.kind === 'web') return 'The model wants to search the web or read a page.';
+  // A resource address the model filled in from a server's URI template (lib/mcp.cjs
+  // readResourceReason): only a read, but the address itself reaches the server.
+  if (request.serverId === 'MCP' && request.toolName === 'read_resource') {
+    const args = approvalArguments(request);
+    const server = typeof args.server === 'string' && args.server ? `"${args.server.slice(0, 80)}"` : 'an MCP server';
+    return `The model wants to read a resource from ${server} at an address it filled in itself. It only reads, but the address could carry text from this conversation to that server. Check it below, or turn on "Trust its read-only labels" for the server to stop asking.`;
+  }
   if (request.claimsReadOnly) {
     return `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data, but ScaleMax cannot check that. If you trust this server, turn on "Trust its read-only labels" for it in Assistant → MCP servers.`;
   }
