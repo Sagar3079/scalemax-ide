@@ -33,7 +33,7 @@ import {
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
   bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
-  activeTabContent, updateGutter, showPanel, setGitDecorations, reloadTabs, refreshedTree,
+  activeTabContent, showPanel, setGitDecorations, reloadTabs, refreshedTree,
 } from './workspace-ui.js';
 
 const DEFAULTS = { ...DEFAULT_SETTINGS };
@@ -1197,11 +1197,12 @@ const app = {
 
   // A reply worked in the folder that is open: the tree and Git status reload, and open editor
   // tabs of the files it changed are read again from disk (every open tab after a command, which
-  // can change any file without it being recorded). Tabs with unsaved edits keep them
-  // (reloadTabs), so saving one still reports the conflict.
+  // can change any file without it being recorded) and show its changes for review. Tabs with
+  // unsaved edits keep them (reloadTabs), so saving one still reports the conflict.
   showReplyChanges(folder, { changes = null, steps = [], notes = false } = {}) {
     if (!folder || folder !== this.workspace.root) return;
-    const changed = (normalizeChanges(changes)?.files || []).map((file) => file.path);
+    const review = normalizeChanges(changes);
+    const changed = (review?.files || []).map((file) => file.path);
     const workspaceSteps = (Array.isArray(steps) ? steps : []).filter((step) => step?.server === 'Workspace');
     const wrote = workspaceSteps.some((step) => ['write_file', 'edit_file'].includes(step.tool));
     const ran = workspaceSteps.some((step) => step.tool === 'run_command');
@@ -1209,7 +1210,7 @@ const app = {
     void this.refreshWorkspace();
     const tabs = ran || (wrote && !changed.length) ? (this.workspace.tabs || []).map((tab) => tab.path) : [];
     const paths = [...new Set([...changed, ...tabs])];
-    if (paths.length) void reloadTabs(this, paths);
+    if (paths.length) void reloadTabs(this, paths, { review });
   },
 
   applyWorkspace(data) {
@@ -1268,10 +1269,6 @@ const app = {
     }
     this.workspace.expanded.add(path);
     this.renderFileTree();
-  },
-
-  updateEditorGutter() {
-    updateGutter();
   },
 
   // Opens the file in a tab (or focuses its tab); unsaved edits in other tabs are kept.
