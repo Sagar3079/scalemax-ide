@@ -67,3 +67,14 @@ test('the preview stands in for automations and MCP listings without running any
   for (const method of ['resources', 'prompts', 'getPrompt']) assert.equal((await api.mcp[method]({ id: 'x' })).error.code, 'UNAVAILABLE', method);
   assert.equal(api.mcp.list, undefined, 'the MCP view still says it needs the desktop app');
 });
+
+test('the preview stands in for Git, worktrees and transcripts without pretending to run them', async () => {
+  assert.deepEqual((await api.git.status({ folder: '/preview/demo-project' })).data, { isRepo: false });
+  for (const method of ['branches', 'suggestMessage', 'commit', 'push', 'pull', 'switchBranch', 'createPr']) {
+    assert.equal((await api.git[method]({ folder: '/preview/demo-project' })).error.code, 'UNAVAILABLE', method);
+  }
+  for (const method of ['create', 'info', 'merge', 'remove', 'reveal']) {
+    assert.equal((await api.worktrees[method]({ folder: '/preview/demo-project' })).error.code, 'UNAVAILABLE', method);
+  }
+  assert.equal((await api.sessions.exportTranscript({ title: 'x', markdown: '# x' })).error.code, 'UNAVAILABLE');
+});

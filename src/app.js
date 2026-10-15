@@ -15,6 +15,9 @@ import { bindComposerContext, takeComposerContext, renderMessageImages, mentionB
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
+import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
+import { bindSessionsUi, renderMessageActions } from './sessions-ui.js';
+import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -245,6 +248,8 @@ const app = {
     bindChangesUi(this);
     bindJobsUi(this);
     bindSpecsUi(this);
+    bindGitFlowUi(this);
+    bindSessionsUi(this);
     bindComposerContext(this);
     // Quitting, closing or reloading with unsaved editor tabs, or while a reply (or the compaction
     // before one) is still working, is held back; main then asks whether to discard them
@@ -401,6 +406,11 @@ const app = {
       ...(() => {
         const compaction = normalizeCompaction(task.compaction);
         return compaction && compaction.through < (Array.isArray(task.messages) ? task.messages.length : 0) ? { compaction } : {};
+      })(),
+      // The separate worktree the task works in (src/gitflow-ui.js).
+      ...(() => {
+        const worktree = normalizeWorktree(task.worktree);
+        return worktree ? { worktree } : {};
       })(),
     })) : [];
     const rawSettings = isRecord(settings) ? settings : {};
@@ -615,6 +625,7 @@ const app = {
     this.renderTaskFolderNotice();
     renderJobsBar(this);
     void renderSpecsChip(this);
+    renderGitFlow(this);
     this.updateSendEnabled();
     if ($('#folder-menu')?.matches(':popover-open')) renderFolderMenu(this);
   },
@@ -1276,6 +1287,8 @@ const app = {
     const bridge = this.workspaceBridge();
     if (!bridge || !this.workspace.root) { if (!quiet) this.showToast('Open a folder first'); return; }
     const root = this.workspace.root;
+    // The branch and ahead / behind in the Workspace header (src/gitflow-ui.js).
+    void refreshGitHeader(this);
     const status = await bridge.gitStatus();
     if (this.workspace.root !== root) return;
     if (!status?.ok) {
@@ -1690,7 +1703,7 @@ const app = {
     const fromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const keepAt = !toBottom && sameTask && fromBottom > 48 ? container.scrollTop : null;
     this.renderedTaskId = this.currentTaskId;
-    container.replaceChildren(...messages.map((message) => {
+    container.replaceChildren(...messages.map((message, index) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
       if (message.steps?.length) {
@@ -1772,6 +1785,9 @@ const app = {
       } else {
         bubble.append(element('span', 'msg-time', clock(message.time)));
       }
+      // Rewind to / fork from one of the user's messages (src/sessions-ui.js).
+      const actions = message.role === 'user' ? renderMessageActions(this, task, index) : null;
+      if (actions) bubble.append(actions);
       return bubble;
     }));
     const reply = this.currentReply();
@@ -2024,6 +2040,8 @@ const app = {
     // Taken before any wait: "/init" from the folder menu swaps the draft and the attachment
     // around this call (src/composer-ui.js).
     const attachment = internal ? null : this.attachment;
+    // A task that asked for a worktree of its own gets it before its first message (src/gitflow-ui.js).
+    if (wantsWorktree(task) && !(await prepareWorktree(this, task, text))) return false;
     // No chat without a folder, and a task only sends from its own folder.
     if (taskFolderStatus(task, this.workspace.root) === 'none') {
       this.showToast('Choose a project folder first.');
@@ -2255,7 +2273,8 @@ const app = {
 
   /** A deleted task's recorded changes are forgotten with it (the files stay as they are). */
   forgetTaskChanges(task) {
-    const ids = (task?.messages || []).map((message) => message.changes?.id).filter((id) => typeof id === 'string');
+    // A fork shows the same replies' changes: those stay while it does (src/sessions.mjs).
+    const ids = unsharedChangeIds(this.tasks, task, task?.messages || []);
     if (ids.length) void window.scalemaxAPI?.checkpoints?.remove?.({ ids });
   },
 

@@ -516,6 +516,56 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     }
   },
 
+  // --- Git flow, worktrees and sessions ---
+  /**
+   * The user's own Git actions (lib/git-flow.cjs), with their Git identity, settings, credentials
+   * and hooks; never tools the model can call. `folder` is a folder opened in ScaleMax (or a
+   * task's worktree); paths must be among the changes Git lists.
+   */
+  git: {
+    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {isRepo: boolean, branch?: string|null, detached?: boolean, upstream?: string|null, ahead?: number, behind?: number, files?: Array<{path: string, from?: string, index: string, worktree: string, kind: string, secret: boolean}>, conflicts?: number, operation?: string|null, identity?: {name: string, email: string}, remotes?: string[], worktree?: {linked: boolean, main: string|null}}}>} */
+    status: (input) => ipcRenderer.invoke('git:status', input),
+    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {current: string|null, detached: boolean, dirty: boolean, branches: Array<{name: string, upstream: string|null, usable: boolean}>}}>} */
+    branches: (input) => ipcRenderer.invoke('git:branches', input),
+    /**
+     * A one-line conventional commit subject for the chosen files, from the current provider
+     * (cancel with provider.cancel(requestId)), or from the file list without one.
+     * @param {{folder: string, paths: string[], requestId?: string}} input
+     * @returns {Promise<{ok: boolean, data?: {message: string, source: 'provider'|'files', model?: string, note?: string}}>}
+     */
+    suggestMessage: (input) => ipcRenderer.invoke('git:suggest-message', input),
+    /** @param {{folder: string, paths: string[], message: string, branch?: string|null, skipHooks?: boolean}} input branch: a new branch to create first */
+    commit: (input) => ipcRenderer.invoke('git:commit', input),
+    /** @param {{folder: string}} input pushes the current branch (sets its upstream the first time; never forced) */
+    push: (input) => ipcRenderer.invoke('git:push', input),
+    /** @param {{folder: string}} input fast-forward only */
+    pull: (input) => ipcRenderer.invoke('git:pull', input),
+    /** @param {{folder: string, branch: string, stash?: boolean}} input refused with uncommitted changes unless stash */
+    switchBranch: (input) => ipcRenderer.invoke('git:switch', input),
+    /** @param {{folder: string, title: string, body?: string, base?: string|null, draft?: boolean}} input @returns {Promise<{ok: boolean, data?: {url: string, branch: string, pushed: boolean}}>} */
+    createPr: (input) => ipcRenderer.invoke('git:pr-create', input)
+  },
+
+  /** A separate checkout per task in ScaleMax's data folder (git worktree), and what it can do. */
+  worktrees: {
+    /** @param {{folder: string, taskId: string, title: string}} input @returns {Promise<{ok: boolean, data?: {path: string, name: string, branch: string, base: string|null, mainRoot: string, mainName: string}}>} */
+    create: (input) => ipcRenderer.invoke('worktree:create', input),
+    /** @param {{folder: string, base?: string}} input @returns {Promise<{ok: boolean, data?: {branch: string, dirty: boolean, changed: number, unmerged: number|null}}>} */
+    info: (input) => ipcRenderer.invoke('worktree:info', input),
+    /** @param {{folder: string, base: string, into: string}} input merges the worktree's branch into base in the checkout it came from */
+    merge: (input) => ipcRenderer.invoke('worktree:merge', input),
+    /** @param {{folder: string, base?: string, force?: boolean}} input refused (WORKTREE_DIRTY / UNMERGED) until force; the branch is kept */
+    remove: (input) => ipcRenderer.invoke('worktree:remove', input),
+    /** @param {{folder: string}} input shows the worktree in the Finder */
+    reveal: (input) => ipcRenderer.invoke('worktree:reveal', input)
+  },
+
+  /** Conversations as files. */
+  sessions: {
+    /** @param {{title: string, markdown: string}} input @returns {Promise<{ok: boolean, data?: {saved: boolean, name?: string}}>} save dialog */
+    exportTranscript: (input) => ipcRenderer.invoke('session:export', input)
+  },
+
   /** @returns {string} e.g. 'darwin' | 'win32' | 'linux' */
   getPlatform: () => process.platform
 });

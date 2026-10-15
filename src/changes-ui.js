@@ -8,6 +8,7 @@
  */
 import { normalizeChanges, changesSummary } from './domain.mjs';
 import { reloadTabs } from './workspace-ui.js';
+import { openCommitDialog } from './gitflow-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 function element(tag, className, text) {
@@ -89,6 +90,16 @@ export function renderChangesCard(app, message, taskId) {
     keepAll.disabled = waiting;
     actions.append(keepAll);
     head.append(actions);
+  }
+  // Commit what the reply changed (src/gitflow-ui.js): the dialog ticks this reply's files.
+  if (window.scalemaxAPI?.git?.commit) {
+    const commitButton = actionButton('Commit\u2026', 'changes-action', 'Commit the files this reply changed', (event) => {
+      const { task } = findMessage(app, taskId, id);
+      void openCommitDialog(app, { folder: task?.folder?.path || '', taskId, paths: changes.files.map((file) => file.path), opener: event.currentTarget });
+    });
+    commitButton.dataset.action = 'commit';
+    const actions = head.querySelector('.changes-actions') || head.appendChild(element('div', 'changes-actions'));
+    actions.append(commitButton);
   }
   card.append(head);
   const list = element('ul', 'changes-list');

@@ -274,6 +274,33 @@
       }
     },
 
+    // Git flow, worktrees and sessions: main runs Git with the user's own settings and saves
+    // files, so the preview has none of it. Its in-memory folder is no repository.
+    git: {
+      status: async function () {
+        return { ok: true, data: { isRepo: false } };
+      },
+      branches: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      suggestMessage: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      commit: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      push: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      pull: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      switchBranch: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      createPr: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); }
+    },
+
+    worktrees: {
+      create: async function () { return failure('UNAVAILABLE', 'Worktrees require the desktop app.'); },
+      info: async function () { return failure('UNAVAILABLE', 'Worktrees require the desktop app.'); },
+      merge: async function () { return failure('UNAVAILABLE', 'Worktrees require the desktop app.'); },
+      remove: async function () { return failure('UNAVAILABLE', 'Worktrees require the desktop app.'); },
+      reveal: async function () { return failure('UNAVAILABLE', 'Worktrees require the desktop app.'); }
+    },
+
+    sessions: {
+      exportTranscript: async function () { return failure('UNAVAILABLE', 'Saving files requires the desktop app.'); }
+    },
+
     getPlatform: function () {
       return 'browser';
     }
