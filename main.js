@@ -440,6 +440,8 @@ function stopWindowWork() {
     // Automations run without a window (lib/automations.cjs): they keep working.
     if (automations.owns(requestId)) continue;
     tracked.stopped = true;
+    // A UserPromptSubmit hook still running (chatExtras) ends with it.
+    tracked.hooks?.abort();
     toolLoop.cancel(requestId);
   }
   mediaStudio.closeAll();
@@ -1012,13 +1014,23 @@ const providerChannels = {
       checkStopped();
       tracked.folderName = chat.folder?.name || '';
       tracked.folderPath = chat.folder?.path || '';
+      // Slash commands and hooks for this request (chatExtras, "Slash commands and hooks" below).
+      // A UserPromptSubmit hook's step goes to the window before the progress forwarder exists.
+      const extras = await chatExtras(input, chat, {
+        requestId,
+        tracked,
+        progress: (progress) => {
+          if (!event.sender.isDestroyed()) event.sender.send('provider:progress', { requestId, ...progress });
+        },
+      });
+      checkStopped();
       // Working or Coding: the mode decides the working agreement, which tools are offered and
       // how many tool rounds a reply may take.
-      const mode = normalizeMode(input?.mode);
+      const mode = normalizeMode(extras.mode || input?.mode);
       // Read once: the whole reply runs under the permission it started with, and Plan adds a
       // working agreement of its own (investigate, then propose) on top of the mode's.
-      const permission = chatPermission();
-      const prepared = await prepareChatRequest(input, {
+      const permission = extras.readOnly ? 'plan' : chatPermission();
+      const prepared = await prepareChatRequest(extras.input, {
         workspaceTools: chat.tools,
         projectNotes: chat.notes,
         // Plan changes nothing at all, so it does not create the project notes either, and /init
@@ -1028,6 +1040,7 @@ const providerChannels = {
         canChange: permission !== 'plan',
         modeInstructions: [modeInstructions(mode), permission === 'plan' ? planInstructions() : '', todoNote(chat.previousTodos)].filter(Boolean).join('\n\n'),
       });
+      prepared.input = extras.withContext(prepared.input);
       // Pictures the user attached (media ids) go to the model as image parts.
       prepared.input = { ...prepared.input, messages: withImages(prepared.input.messages) };
       const folderName = tracked.folderName;
@@ -1048,9 +1061,11 @@ const providerChannels = {
           permission,
           mode,
           maxRounds: modeMaxRounds(mode),
-          source: chat.source,
+          source: extras.source(chat.source),
           folderName,
           onProgress: forward.push,
+          hooks: extras.hooks,
+          model: extras.model,
           // The carried to-do list was written by the model: its addresses are not "given".
           modelWritten: Array.isArray(chat.previousTodos) ? chat.previousTodos.map((item) => item.content) : [],
         });
@@ -1069,9 +1084,11 @@ const providerChannels = {
       const carried = !result.todos && todoNote(chat.previousTodos) ? { todos: chat.previousTodos } : {};
       return {
         ...result,
+        // UserPromptSubmit hooks ran before the reply's own steps.
+        ...(extras.steps.length ? { steps: [...extras.steps, ...(Array.isArray(result.steps) ? result.steps : [])] } : {}),
         ...carried,
         // The window offers "Run this plan" under a reply that could only plan.
-        ...(permission === 'plan' ? { plan: true } : {}),
+        ...(permission === 'plan' && !extras.readOnly ? { plan: true } : {}),
         ...(metrics ? { metrics } : {}),
         ...(prepared.notes?.created ? { projectNotes: { created: true, path: prepared.notes.path } } : {}),
         ...(changes ? { changes } : {}),
@@ -1089,6 +1106,8 @@ const providerChannels = {
   'provider:cancel': (_event, id) => {
     const tracked = typeof id === 'string' ? chatRequests.get(id) : undefined;
     if (tracked) tracked.stopped = true;
+    // UserPromptSubmit hooks still running for it end too (chatExtras).
+    tracked?.hooks?.abort();
     return toolLoop.cancel(id) || Boolean(tracked);
   },
   // An app-owned no-tools call for exact `/compact`: text is validated, bounded and separated
@@ -1307,6 +1326,221 @@ const specChannels = {
 for (const [channel, run] of Object.entries(specChannels)) {
   ipcMain.handle(channel, wrap(run, SPEC_FALLBACK));
 }
+
+// ---------------------------------------------------------------------------
+// --- Slash commands and hooks ---
+// Custom slash commands (lib/slash-commands.cjs: Markdown files in .scalemax/commands, or
+// .claude/commands, of the task folder and of the home folder) and /review; @-mentions of folders,
+// web pages and background commands (src/context-ui.js); hooks (lib/hooks.cjs: commands the user
+// set up in .scalemax/settings.json, run around tool calls, before a message and after a reply).
+// Files are read through workspace sessions, so the folder guards apply. The window gets command
+// names and descriptions, the prompt to send, and what the hooks are; a project's hooks run only
+// once the user approved exactly that set of them (hookApprovals, main-only state).
+// ---------------------------------------------------------------------------
+const slashCommands = require('./lib/slash-commands.cjs');
+const hooksLib = require('./lib/hooks.cjs');
+const { folderListing } = require('./lib/file-find.cjs');
+
+// Approved project hooks (by folder, the hash of exactly the approved hooks) and hooks switched
+// off, under the main-only state key `hookSettings` (lib/state.cjs never hands it to the window).
+const hookApprovals = hooksLib.createHookApprovals({
+  read: () => stateStore.readAll().hookSettings,
+  write: (value) => stateStore.update((draft) => { draft.hookSettings = value; }),
+});
+
+/**
+ * Runs `task({ project, user })` with workspace sessions on a task folder and on the home folder
+ * (each null when there is none or it cannot be opened; `home: false` skips the home folder), and
+ * ends them afterwards.
+ */
+async function withCommandRoots(folderPath, task, { home = true } = {}) {
+  const open = async (root) => {
+    if (!root) return null;
+    const session = createWorkspace({ approve: async () => true, getPermission: () => 'ask' });
+    chatSessions.add(session);
+    try {
+      await session.select(root);
+      return session;
+    } catch {
+      chatSessions.delete(session);
+      session.dispose();
+      return null;
+    }
+  };
+  const project = await open(folderPath);
+  const user = home ? await open(os.homedir()) : null;
+  try {
+    return await task({ project, user });
+  } finally {
+    for (const session of [project, user]) {
+      if (!session) continue;
+      chatSessions.delete(session);
+      session.dispose();
+    }
+  }
+}
+
+/** The task folder a window request names (one opened in ScaleMax), or '' for none. */
+async function requestFolder(input, what) {
+  const folder = input && typeof input === 'object' ? input.folder : undefined;
+  if (folder === undefined || folder === null || folder === '') return '';
+  await restoreFolder();
+  requireOpenedFolder(folder, what);
+  return folder;
+}
+
+/**
+ * What slash commands and hooks add to one chat request, once its folder session is open: the
+ * command the window expanded (its mode, model and allowed-tools, read again from its file),
+ * /review (read-only, with the folder's Git changes), and the hooks that may run. UserPromptSubmit
+ * hooks run here, before anything else is done for the message; one that blocks fails the request.
+ */
+async function chatExtras(input, chat, { requestId, tracked, progress }) {
+  const folderPath = chat.folder?.path || '';
+  const messages = Array.isArray(input?.messages) ? input.messages : [];
+  const last = messages[messages.length - 1];
+  const userText = last?.role === 'user' && typeof last.content === 'string' ? last.content : '';
+  const review = slashCommands.isReviewCommand(userText);
+  const name = slashCommands.validName(input?.command) ? input.command : '';
+  const loaded = await withCommandRoots(folderPath, async (roots) => ({
+    scopes: await hooksLib.loadScopes(roots),
+    command: name ? slashCommands.findCommand((await slashCommands.loadCommands(roots)).commands, name) : null,
+    changes: review ? await slashCommands.reviewChanges(roots.project) : null,
+  }));
+  const command = loaded.command;
+  const model = command?.model ? slashCommands.commandModel(command.model, provider.get()) : '';
+  const cwd = folderPath || os.homedir();
+  const hooks = hooksLib.createHookSet({
+    hooks: hookApprovals.active(loaded.scopes),
+    cwd,
+    env: hooksLib.hookEnvironment({ folder: folderPath }),
+    base: { cwd, folder: folderPath, task_id: hooksLib.taskIdOf(requestId), request_id: requestId },
+  });
+  const steps = [];
+  let context = '';
+  if (hooks.has('UserPromptSubmit')) {
+    // Stop ends these hooks too (provider:cancel).
+    const controller = new AbortController();
+    tracked.hooks = controller;
+    let calls = 0;
+    try {
+      const outcome = await hooks.run('UserPromptSubmit', { prompt: userText }, {
+        signal: controller.signal, report: progress, nextCallId: () => `prompt-${(calls += 1)}`,
+      });
+      steps.push(...outcome.steps);
+      if (outcome.block) throw bridgeError('HOOK_BLOCKED', `A UserPromptSubmit hook you set up stopped this message: ${outcome.reason}`);
+      context = outcome.context;
+    } finally {
+      tracked.hooks = null;
+    }
+  }
+  return {
+    // /review reads, never changes: the reply runs in Plan permission, without the "Run this plan" card.
+    readOnly: review,
+    mode: command?.mode || '',
+    model,
+    hooks: hooks.count ? hooks : null,
+    steps,
+    // The request as it goes on: /review becomes its instruction (before the project context is
+    // added, which looks for /init in the same place).
+    input: review ? slashCommands.withReview(input, loaded.changes) : input,
+    // What UserPromptSubmit hooks said follows the user's words, after the project context.
+    withContext: (prepared) => hooksLib.withPromptContext(prepared, context),
+    // allowed-tools only ever narrows the tools offered.
+    source: (source) => slashCommands.limitTools(source, command?.allowedTools),
+  };
+}
+
+// A @-mention of a folder, a web page or a background command (src/context-ui.js), as text.
+const MENTION_KINDS = new Set(['folder', 'url', 'job']);
+const MAX_MENTION_CHARS = 64 * 1024;
+async function resolveMention(input) {
+  const kind = input && typeof input === 'object' ? input.kind : undefined;
+  const value = input && typeof input === 'object' ? input.value : undefined;
+  if (!MENTION_KINDS.has(kind) || typeof value !== 'string' || value.length > 2048) {
+    throw bridgeError('INVALID_MENTION', 'Name a folder ("@src/"), a web address ("@https://…") or a background command ("@job:j2").');
+  }
+  const clip = (text) => (text.length > MAX_MENTION_CHARS ? `${text.slice(0, MAX_MENTION_CHARS)}\n[… the rest was left out]` : text);
+  if (kind === 'url') {
+    // The user typed the address: fetched like web_open, with all of its guards (public addresses
+    // only, every redirect checked again, text only, size and time limits).
+    const page = await webTools.call('open_page', { url: value });
+    return { kind, label: value, text: clip(page.text) };
+  }
+  const folder = await requestFolder(input, 'This message works in');
+  if (!folder) throw bridgeError('NO_WORKSPACE', 'Open a folder first.');
+  if (kind === 'job') {
+    if (!/^j\d{1,9}$/.test(value)) throw bridgeError('INVALID_JOB', 'Name a background command like "@job:j2".');
+    // Only a command of this folder (jobs.read refuses another folder's).
+    const read = jobs.read(value, { root: folder, from: 0, maxChars: 16 * 1024 });
+    const state = read.status === 'running' ? 'still running' : read.status === 'stopped' ? 'stopped'
+      : `ended (${read.exitCode !== null ? `exit code ${read.exitCode}` : read.signal || 'no exit code'})`;
+    const skipped = read.dropped ? `[${read.dropped} earlier characters left out]\n` : '';
+    return { kind, label: `job:${read.id}`, text: clip(`Background command ${read.id}: ${read.command} (${state})\n${skipped}${read.text.trim() || '(no output yet)'}`) };
+  }
+  const listing = await withCommandRoots(folder, ({ project }) => {
+    if (!project) throw bridgeError('NO_WORKSPACE', 'That folder could not be opened.');
+    return folderListing(project, value, { depth: 2, max: 300 });
+  }, { home: false });
+  const more = listing.complete ? '' : '\n[… more entries left out]';
+  return { kind, label: `${listing.path ? `${listing.path}/` : './'}`, text: clip(`${listing.lines.join('\n') || '(empty)'}${more}`) };
+}
+
+const SLASH_FALLBACK = { code: 'COMMAND_ERROR', message: 'The command could not be read.' };
+const HOOKS_FALLBACK = { code: 'HOOKS_ERROR', message: 'The hooks could not be read.' };
+const MENTION_FALLBACK = { code: 'MENTION_ERROR', message: 'That could not be attached.' };
+const MAX_COMMAND_ARGUMENTS = 64 * 1024;
+const slashChannels = {
+  // The custom commands of a task folder and of the user: { name, description, argumentHint,
+  // source } only. The app's own commands are the window's (src/slash-ui.js).
+  'slash:list': async (_event, input) => {
+    const folder = await requestFolder(input, 'These commands belong to');
+    const { commands } = await withCommandRoots(folder, (roots) => slashCommands.loadCommands(roots));
+    return { commands: commands.map(slashCommands.publicCommand) };
+  },
+  // A custom command as the prompt to send ({ folder, name, arguments }). Its front matter is
+  // applied by provider:send, which reads the command again (the window only names it).
+  'slash:expand': async (_event, input) => {
+    const folder = await requestFolder(input, 'This command belongs to');
+    const name = input && typeof input === 'object' ? input.name : undefined;
+    if (!slashCommands.validName(name)) throw bridgeError('INVALID_COMMAND', 'Name a command like "fix" or "frontend:component".');
+    const args = input.arguments === undefined ? '' : input.arguments;
+    if (typeof args !== 'string' || args.length > MAX_COMMAND_ARGUMENTS) throw bridgeError('INVALID_COMMAND', 'Command arguments must be text of at most 64 KB.');
+    const command = await withCommandRoots(folder, async (roots) => slashCommands.findCommand((await slashCommands.loadCommands(roots)).commands, name));
+    if (!command) throw bridgeError('NO_COMMAND', `There is no /${name} command in this folder or in ~/.scalemax/commands.`);
+    return { name: command.name, source: command.source, prompt: slashCommands.commandPrompt(command, args) };
+  },
+};
+const hookChannels = {
+  // The hooks of a task folder and of the user, per scope, with whether each may run.
+  'hooks:list': async (_event, input) => {
+    const folder = await requestFolder(input, 'These hooks belong to');
+    const scopes = await withCommandRoots(folder, (roots) => hooksLib.loadScopes(roots));
+    return { folder: folder ? { name: path.basename(folder) || folder, path: folder } : null, scopes: hookApprovals.view(scopes) };
+  },
+  // Allows a project's hooks exactly as the window showed them ({ folder, hash }): when the file
+  // changed since, the hash differs and nothing is allowed. { folder, revoke: true } takes it back.
+  'hooks:approve': async (_event, input) => {
+    const folder = await requestFolder(input, 'These hooks belong to');
+    if (!folder) throw bridgeError('INVALID_FOLDER', 'Choose the project folder whose hooks to allow.');
+    const scopes = await withCommandRoots(folder, (roots) => hooksLib.loadScopes(roots));
+    // Kept by the folder as the workspace service opened it, which is what a reply looks up.
+    const project = scopes.find((scope) => scope.scope === 'project');
+    if (input.revoke === true) {
+      hookApprovals.revoke(project?.root || folder);
+    } else {
+      if (!project?.hooks.length) throw bridgeError('NO_HOOKS', 'This folder has no hooks of its own.');
+      if (input.hash !== project.hash) throw bridgeError('HOOKS_CHANGED', 'These hooks changed since they were shown. Look at them again before allowing them.');
+      hookApprovals.approve(project.root, project.hash);
+    }
+    return { folder: { name: path.basename(folder) || folder, path: folder }, scopes: hookApprovals.view(scopes) };
+  },
+  // Switches one hook on or off ({ id, enabled }), in any scope.
+  'hooks:set-enabled': (_event, input) => hookApprovals.setEnabled(input?.id, input?.enabled === true),
+};
+for (const [channel, run] of Object.entries(slashChannels)) ipcMain.handle(channel, wrap(run, SLASH_FALLBACK));
+for (const [channel, run] of Object.entries(hookChannels)) ipcMain.handle(channel, wrap(run, HOOKS_FALLBACK));
+ipcMain.handle('mention:resolve', wrap((_event, input) => resolveMention(input), MENTION_FALLBACK));
 
 // ---------------------------------------------------------------------------
 // Dialog + workspace IPC (native pickers, project files, Git status)

@@ -422,6 +422,11 @@ async function run(win) {
         sessionMethods: ['exportTranscript'].filter((m) => typeof api.sessions?.[m] === 'function'),
         gitFlowControls: ['#commit-dialog', '#branch-dialog', '#rewind-dialog', '#sessions-dialog', '#worktree-bar', '#worktree-chip', '#workspace-branch', '#git-commit', '#git-pull', '#git-switch', '#sessions-btn', '#export-transcript-btn']
           .every((selector) => Boolean(document.querySelector(selector))),
+        // Slash commands, hooks and @-mentions of folders, pages and background commands.
+        slashMethods: ['list','expand'].filter((m) => typeof api.slash?.[m] === 'function'),
+        hookMethods: ['list','approve','setEnabled'].filter((m) => typeof api.hooks?.[m] === 'function'),
+        mentionMethods: ['resolve'].filter((m) => typeof api.mentions?.[m] === 'function'),
+        slashControls: ['#slash-menu[hidden]', '#hooks-dialog', '#hooks-panel', '#hooks-refresh'].every((selector) => Boolean(document.querySelector(selector))),
         // The specs chip stays hidden until a folder is open; Plan is the first permission offered.
         specsControls: ['#specs-dialog', '#specs-open[hidden]', '#specs-list', '#specs-tabs', '#specs-doc', '#specs-new', '#specs-work',
           '#permission-menu [data-permission="plan"]'].every((selector) => Boolean(document.querySelector(selector))),
@@ -1589,6 +1594,8 @@ async function run(win) {
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
     gitFlowApi: probe.gitMethods.length === 8 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,
+    slashApi: probe.slashMethods.length === 2 && probe.mentionMethods.length === 1 && probe.slashControls === true,
+    hooksApi: probe.hookMethods.length === 3,
     // An MCP server's own read-only label is a claim until the user trusts the server.
     mcpLabelsUntrusted: Boolean(e2e && e2e.untrustedAsked && /cannot check that/.test(e2e.untrustedSummary)
       && e2e.untrustedText === 'tool said: smoke-echo' && e2e.mcpTrustedFlag),
