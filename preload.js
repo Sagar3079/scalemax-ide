@@ -79,8 +79,10 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
 
     /**
      * What a reply in progress is doing: the model is thinking, a tool runs, or a tool call waits
-     * for approval. Events carry the requestId of the send they belong to.
-     * @param {(progress: {requestId: string, phase: 'thinking'|'tool'|'approval', serverId?: string, toolName?: string}) => void} callback
+     * for approval. Events carry the requestId of the send they belong to. A subagent (agent_task,
+     * lib/subagents.cjs) reports as { phase: 'subagent', callId, status, description, kind } and
+     * { phase: 'subagent', callId, event }, nested under the step of its call.
+     * @param {(progress: {requestId: string, phase: 'thinking'|'tool'|'approval'|'subagent', serverId?: string, toolName?: string}) => void} callback
      * @returns {() => void} unsubscribe
      */
     onProgress: (callback) => {
@@ -148,8 +150,9 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
 
   approvals: {
     /**
-     * Subscribes to tool calls that wait for the user's approval.
-     * @param {(request: {approvalId: string, requestId: string, serverId: string, serverName: string, toolName: string, readOnly: boolean, arguments: string}) => void} callback
+     * Subscribes to tool calls that wait for the user's approval (`subagent`: the description of
+     * the subagent that makes the call, when one does).
+     * @param {(request: {approvalId: string, requestId: string, serverId: string, serverName: string, toolName: string, readOnly: boolean, arguments: string, subagent?: string}) => void} callback
      * @returns {() => void} unsubscribe
      */
     onRequest: (callback) => {

@@ -613,6 +613,14 @@ const COMPUTER_SUMMARIES = {
   reveal: 'The model wants to show a file of your project in the Finder.',
 };
 function approvalSummary(request) {
+  // Handing work to a subagent (lib/subagents.cjs; it asks in Manual): its own calls ask too.
+  if (request.kind === 'agents') {
+    const args = approvalArguments(request);
+    const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
+    const what = typeof args.description === 'string' && args.description.trim() ? ` ("${args.description.trim().slice(0, 120)}")` : '';
+    return `The model wants to hand part of this work to a subagent${what}. It works in ${where} with a fresh context of its own and reports back; ${args.kind === 'general'
+      ? 'it may change files and run commands, and its own tool calls ask you as usual.' : 'it can only read and search.'}`;
+  }
   if (request.kind === 'workspace') {
     const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
     if (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input') {
@@ -656,6 +664,8 @@ function showNextApproval() {
   const task = reply && reply.taskId !== approvals.app.currentTaskId
     ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
   $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
+  // A call a subagent of that reply makes says which one.
+  if (request.subagent) $('#approval-eyebrow').textContent += ` · Subagent: ${request.subagent}`;
   // A call that always asks (a command outside the sandbox, the clipboard) is allowed one at a
   // time; an address the model made up can be allowed for its site, for the rest of this reply.
   const egress = request.reason === 'egress' && Boolean(request.host);
@@ -664,7 +674,8 @@ function showNextApproval() {
   $('#approval-title').textContent = request.reason === 'unsandboxed-input'
     ? 'Type into this command outside the sandbox?'
     : outside ? 'Run this command outside the sandbox?'
-      : egress ? `Open an address on ${request.host || 'this site'}?` : `Allow ${request.serverName} · ${request.toolName}?`;
+      : egress ? `Open an address on ${request.host || 'this site'}?`
+        : request.kind === 'agents' ? 'Hand this to a subagent?' : `Allow ${request.serverName} · ${request.toolName}?`;
   $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
   const all = $('#approval-all');
@@ -710,7 +721,9 @@ function bindApprovals(app) {
       approvalId: request.approvalId,
       requestId: String(request.requestId || ''),
       serverName: String(request.serverName || request.serverId || 'MCP server'),
-      kind: ['workspace', 'web', 'computer'].includes(request.kind) ? request.kind : 'mcp',
+      kind: ['workspace', 'web', 'computer', 'agents'].includes(request.kind) ? request.kind : 'mcp',
+      // The subagent making this call (its description), when one does.
+      subagent: typeof request.subagent === 'string' ? request.subagent.slice(0, 120) : '',
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
