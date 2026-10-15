@@ -327,7 +327,29 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     signIn: (input) => ipcRenderer.invoke('mcp:oauth-start', input),
 
     /** @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
-    cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel')
+    cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel'),
+
+    // --- MCP resources and prompts ---
+    /**
+     * The resources (documents, files, records) and URI templates a server offers.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {resources: Array<{uri: string, name: string, title?: string, description: string, mimeType: string}>, templates: Array<{uriTemplate: string, name: string, description: string, mimeType: string}>}, error?: object}>}
+     */
+    resources: (input) => ipcRenderer.invoke('mcp:resources', input),
+
+    /**
+     * The prompts a server offers, with the arguments each one takes.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: Array<{name: string, title: string, description: string, arguments: Array<{name: string, description: string, required: boolean}>}>, error?: object}>}
+     */
+    prompts: (input) => ipcRenderer.invoke('mcp:prompts', input),
+
+    /**
+     * One prompt filled in with its arguments, as text for the message box (nothing is sent).
+     * @param {{id: string, name: string, arguments?: {[name: string]: string}}} input
+     * @returns {Promise<{ok: boolean, data?: {name: string, description: string, text: string, messages: Array<{role: 'user'|'assistant', text: string}>}, error?: object}>}
+     */
+    getPrompt: (input) => ipcRenderer.invoke('mcp:prompt-get', input)
   },
 
   dialog: {
@@ -449,6 +471,48 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     /** @param {{ids: string[]}} input forgets the changes of these replies */
     remove: (input) => ipcRenderer.invoke('checkpoint:remove', input)
   },
+  // --- Automations (main-process scheduler) ---
+  /**
+   * Automations run in the main process (lib/automations.cjs), also while no window is open. The
+   * window edits them through the store; here it asks for Run now, sends the instructions runs
+   * use, and hears about every run (the run's messages for its task included).
+   */
+  automations: {
+    /**
+     * For a window that just opened: the ids running now, whether runs fire without a window, the
+     * saved automations, and the runs whose messages this window has not saved back yet.
+     * @returns {Promise<{ok: boolean, data?: {running: string[], background: boolean, automations: Array<object>, runs: Array<{runId: string, task: object, messages: Array<object>}>}, error?: object}>}
+     */
+    state: () => ipcRenderer.invoke('automations:state'),
+
+    /**
+     * Runs one automation now; resolves when the run ended. The schedule stays as it is.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {status: 'success'|'error'|'skipped', message?: string, code?: string}, error?: object}>}
+     */
+    runNow: (input) => ipcRenderer.invoke('automations:run-now', input),
+
+    /**
+     * The instructions runs are sent with: the system prompt for each mode, temperature, reasoning.
+     * @param {{systemPrompts: {working: string, coding: string}, temperature?: number, reasoning?: {thinking: boolean, effort: 'low'|'medium'|'high'}}} input
+     * @returns {Promise<{ok: boolean, data?: {saved: boolean}, error?: object}>}
+     */
+    setContext: (input) => ipcRenderer.invoke('automations:context', input),
+
+    /**
+     * What changed: the saved automations, the ids running now, and after a run how it went and
+     * the messages it added to its task.
+     * @param {(change: {automations: Array<object>, running: string[], run?: {runId: string, task: object, messages: Array<object>}, finished?: {id: string, name: string, status: string, message?: string, code?: string, manual: boolean}}) => void} callback
+     * @returns {() => void} unsubscribe
+     */
+    onChanged: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, change) => callback(change);
+      ipcRenderer.on('automations:changed', listener);
+      return () => ipcRenderer.removeListener('automations:changed', listener);
+    }
+  },
+
   /** @returns {string} e.g. 'darwin' | 'win32' | 'linux' */
   getPlatform: () => process.platform
 });

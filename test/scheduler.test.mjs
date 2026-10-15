@@ -1,49 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startScheduler } from '../src/scheduler.js';
+import { startScheduler, mergeAutomations, mergeRun, automationContext } from '../src/scheduler.js';
 import { normalizeAutomations } from '../src/domain.mjs';
 
-// Minimal stand-in for the renderer app object the scheduler drives.
-function fakeApp({ automations = [], send, settings = {} } = {}) {
-  const sent = [];
-  const app = {
-    automations,
-    tasks: [],
-    currentTaskId: null,
-    settings: { systemPrompt: '', temperature: 0.7, temperatureEnabled: false, ...settings },
-    provider: { configured: true },
-    persisted: [],
-    toasts: [],
-    sent,
-    getProviderBridge: () => ({
-      send: async (payload) => {
-        sent.push(payload);
-        return send ? send(payload) : { ok: true, data: { text: `reply ${sent.length}` } };
-      },
-    }),
-    persist(key) { this.persisted.push(key); return Promise.resolve(); },
-    renderAutomations() {},
-    renderTasks() {},
-    renderChat() {},
-    showToast(message) { this.toasts.push(message); },
-    makeTask(title) { return { id: `t-${this.tasks.length + 1}`, title, messages: [], createdAt: 0, updatedAt: 0 }; },
-    // Like src/app.js: a user message fixes a task without a folder to the open one, unless the
-    // caller says not to.
-    workspace: { root: '' },
-    appendMessage(role, text, taskId, extra = {}) {
-      const task = this.tasks.find((item) => item.id === taskId);
-      if (role === 'user' && !task.messages.some((m) => m.role === 'user')) task.title = text;
-      if (role === 'user' && !task.folder && this.workspace.root && extra.bindFolder !== false) {
-        task.folder = { name: this.workspace.root.split('/').pop(), path: this.workspace.root };
-      }
-      task.messages.push({ role, text, time: Date.now() });
-      return true;
-    },
-  };
-  return app;
-}
-
-const tick = () => new Promise((resolve) => setImmediate(resolve));
+// The window's side of automations: main fires them (lib/automations.cjs, tested in
+// test/automations.test.cjs); the window sends the instructions, asks for Run now and takes in
+// what main tells it.
 
 function automation(overrides = {}) {
   return {
@@ -55,219 +17,208 @@ function automation(overrides = {}) {
   };
 }
 
-test('run now sends once, records history and appends to the automation task', async (t) => {
-  const app = fakeApp({ automations: [automation()], settings: { systemPrompt: 'Be brief.', temperature: 0.3, temperatureEnabled: true } });
+// A stand-in for preload.js `automations` (main's answers are given or recorded).
+function fakeBridge({ runNow = { ok: true, data: { status: 'success' } }, running = [] } = {}) {
+  const calls = { runNow: [], setContext: [], listeners: [] };
+  return {
+    calls,
+    emit: (change) => calls.listeners.forEach((listener) => listener(change)),
+    api: {
+      state: async () => ({ ok: true, data: { running, background: true } }),
+      runNow: async (input) => { calls.runNow.push(input); return typeof runNow === 'function' ? runNow(input) : runNow; },
+      setContext: async (input) => { calls.setContext.push(structuredClone(input)); return { ok: true, data: { saved: true } }; },
+      onChanged: (listener) => {
+        calls.listeners.push(listener);
+        return () => { calls.listeners = calls.listeners.filter((item) => item !== listener); };
+      },
+    },
+  };
+}
+
+function fakeApp({ automations = [automation()], tasks = [], settings = {} } = {}) {
+  return {
+    automations,
+    tasks,
+    currentTaskId: null,
+    unreadTasks: new Set(),
+    settings: { mode: 'working', systemPrompt: '', temperature: 0.7, temperatureEnabled: false, permission: 'basic', ...settings },
+    provider: { configured: true },
+    saveQueue: Promise.resolve(),
+    persisted: [],
+    toasts: [],
+    rendered: 0,
+    persist(key) { this.persisted.push(key); return Promise.resolve(); },
+    renderAutomations() { this.rendered += 1; },
+    renderTasks() {},
+    renderChat() { this.chatRendered = true; },
+    showToast(message) { this.toasts.push(message); },
+  };
+}
+
+function withBridge(t, bridge) {
+  globalThis.window = { scalemaxAPI: { automations: bridge.api } };
+  t.after(() => { delete globalThis.window; });
+}
+
+test('the instructions for runs are the chat\'s, for both modes, without a temperature unless it is on', () => {
+  const app = fakeApp({ settings: { systemPrompt: 'Be brief.' } });
+  const context = automationContext(app);
+  assert.match(context.systemPrompts.working, /Working mode/);
+  assert.match(context.systemPrompts.coding, /Coding mode/);
+  assert.match(context.systemPrompts.coding, /User system instructions:\nBe brief\./);
+  assert.deepEqual(context.reasoning, { thinking: true, effort: 'medium' });
+  assert.equal(Object.hasOwn(context, 'temperature'), false);
+  app.settings.temperatureEnabled = true;
+  app.settings.temperature = 0.3;
+  assert.equal(automationContext(app).temperature, 0.3);
+  // The window's own builder (with the custom catalogs) is used when there is one.
+  app.buildSystemPrompt = (settings) => `custom ${settings.mode}`;
+  assert.deepEqual(automationContext(app).systemPrompts, { working: 'custom working', coding: 'custom coding' });
+});
+
+test('main\'s copy of an automation replaces the window\'s unless the window changed it since', () => {
+  const own = [
+    automation({ id: 'a1', editedAt: 10 }),
+    automation({ id: 'a2', editedAt: 50, name: 'Edited here' }),
+    automation({ id: 'a3', name: 'Just made here' }),
+  ];
+  const main = [
+    automation({ id: 'a1', editedAt: 10, lastStatus: 'success', history: [{ time: 5, status: 'success', preview: 'ok' }] }),
+    automation({ id: 'a2', editedAt: 20, lastStatus: 'error' }),
+    automation({ id: 'gone', name: 'Deleted here' }),
+  ];
+  const merged = mergeAutomations(own, main);
+  assert.deepEqual(merged.map((item) => item.id), ['a1', 'a2', 'a3'], 'one only main has was just deleted here');
+  assert.equal(merged[0].lastStatus, 'success');
+  assert.equal(merged[0].history.length, 1);
+  assert.equal(merged[1].name, 'Edited here', 'its save is still on the way to main');
+  assert.equal(merged[2].name, 'Just made here');
+});
+
+test('a run\'s messages are added to its task once, and its task is made when the window has none', () => {
+  const run = {
+    runId: 'automation-a1-1',
+    task: { id: 'task-1', title: 'Automation · Digest', createdAt: 1, updatedAt: 3, automationId: 'a1', folder: { name: 'reports', path: '/Users/you/reports' } },
+    messages: [
+      { role: 'user', text: 'Summarize', time: 1, run: 'automation-a1-1' },
+      { role: 'assistant', text: 'Done.', time: 3, run: 'automation-a1-1', tools: [{ server: 'Workspace', tool: 'read_file', ok: true, preview: 'x' }], steps: [{ type: 'tool', title: 'Read a.txt', ok: true }], junk: true },
+    ],
+  };
+  const tasks = [{ id: 'task-mine', title: 'Mine', messages: [], createdAt: 0, updatedAt: 0 }];
+  const task = mergeRun(tasks, run);
+  assert.equal(tasks[0], task, 'listed first, like a new task');
+  assert.deepEqual(task.folder, { name: 'reports', path: '/Users/you/reports' });
+  assert.equal(task.automationId, 'a1');
+  assert.deepEqual(task.messages.map((message) => [message.role, message.text, message.run]), [
+    ['user', 'Summarize', 'automation-a1-1'], ['assistant', 'Done.', 'automation-a1-1'],
+  ]);
+  assert.deepEqual(task.messages[1].tools, [{ server: 'Workspace', tool: 'read_file', ok: true }]);
+  assert.equal(task.messages[1].steps.length, 1);
+  assert.equal('junk' in task.messages[1], false);
+  mergeRun(tasks, run);
+  assert.equal(task.messages.length, 2, 'never twice');
+  assert.equal(mergeRun(tasks, { task: { id: 1 } }), null);
+});
+
+test('what main says after a run reaches the lists, the task and a toast', async (t) => {
+  const bridge = fakeBridge();
+  withBridge(t, bridge);
+  const app = fakeApp();
   const scheduler = startScheduler(app);
   t.after(() => scheduler.stop());
   await scheduler.ready;
-  const before = app.automations[0].nextRun;
+  assert.equal(bridge.calls.setContext.length, 1, 'the instructions go to main at once');
+  bridge.emit({ automations: [automation({ lastStatus: 'success', history: [{ time: 1, status: 'success', preview: 'Done.' }] })], running: ['a1'] });
+  assert.equal(app.automations[0].lastStatus, 'success');
+  bridge.emit({
+    automations: normalizeAutomations([automation({ lastStatus: 'success' })]),
+    running: [],
+    finished: { id: 'a1', name: 'Digest', status: 'success', manual: false },
+    run: { runId: 'automation-a1-1', task: { id: 'task-1', title: 'Automation · Digest', createdAt: 1, updatedAt: 2, automationId: 'a1' }, messages: [{ role: 'user', text: 'Summarize', time: 1, run: 'automation-a1-1' }] },
+  });
+  assert.equal(app.tasks[0].id, 'task-1');
+  assert.deepEqual(app.persisted, ['tasks'], 'saved at once, so main stops adding the run');
+  assert.equal(app.unreadTasks.has('task-1'), true);
+  assert.deepEqual(app.toasts, ['Automation finished: Digest']);
+  bridge.emit({ automations: [], running: [], finished: { id: 'a1', name: 'Digest', status: 'error', message: 'Rate limited', manual: false } });
+  assert.equal(app.toasts.at(-1), 'Automation failed: Digest — Rate limited');
+  bridge.emit({ running: [], finished: { id: 'a1', name: 'Digest', status: 'error', code: 'PROVIDER_NOT_CONFIGURED', manual: true } });
+  assert.equal(app.toasts.length, 2, 'Run now says that one itself');
+  assert.ok(app.rendered >= 3);
+});
+
+test('a window that opens takes in the runs it missed, once', async (t) => {
+  const run = {
+    runId: 'automation-a1-1',
+    task: { id: 'task-1', title: 'Automation · Digest', createdAt: 1, updatedAt: 2, automationId: 'a1' },
+    messages: [{ role: 'user', text: 'Summarize', time: 1, run: 'automation-a1-1' }, { role: 'assistant', text: 'Done.', time: 2, run: 'automation-a1-1' }],
+  };
+  const bridge = fakeBridge();
+  bridge.api.state = async () => ({ ok: true, data: { running: ['a1'], background: true, automations: [automation({ lastStatus: 'success' })], runs: [run, run] } });
+  withBridge(t, bridge);
+  const app = fakeApp();
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  assert.equal(app.automations[0].lastStatus, 'success');
+  assert.equal(app.tasks.length, 1);
+  assert.equal(app.tasks[0].messages.length, 2, 'never twice');
+  assert.deepEqual(app.toasts, [], 'no toast for what happened before');
+});
+
+test('run now goes through main, after the window\'s queued saves', async (t) => {
+  let saved = false;
+  const bridge = fakeBridge({ runNow: () => ({ ok: true, data: saved ? { status: 'success' } : { status: 'error' } }) });
+  withBridge(t, bridge);
+  const app = fakeApp();
+  app.saveQueue = new Promise((resolve) => setTimeout(() => { saved = true; resolve(); }, 20));
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
   assert.equal(await scheduler.runNow('a1'), 'success');
-  assert.equal(app.sent.length, 1);
-  assert.match(app.sent[0].systemPrompt, /User system instructions:\nBe brief\./);
-  assert.equal(app.sent[0].temperature, 0.3);
-  const [entry] = app.automations[0].history;
-  assert.equal(entry.status, 'success');
-  assert.equal(entry.preview, 'reply 1');
-  assert.equal(app.automations[0].nextRun, before, 'manual run leaves the schedule alone');
-  assert.equal(app.tasks[0].title, 'Automation · Digest');
-  assert.deepEqual(app.tasks[0].messages.map((m) => m.role), ['user', 'assistant']);
-});
-
-test('temperature is omitted when disabled', async (t) => {
-  const app = fakeApp({ automations: [automation()] });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await scheduler.runNow('a1');
-  assert.equal(Object.hasOwn(app.sent[0], 'temperature'), false);
-});
-
-test('a schedule missed many times while closed catches up exactly once', async (t) => {
-  const now = Date.now();
-  const restored = normalizeAutomations([automation({ nextRun: now - 10 * 86400000 })], now);
-  assert.equal(restored[0].pendingCatchUp, true);
-  const app = fakeApp({ automations: restored });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await scheduler.ready;
-  await scheduler.checkNow();
-  await scheduler.checkNow();
-  assert.equal(app.sent.length, 1);
-  assert.equal(app.automations[0].pendingCatchUp, false);
-  assert.ok(app.automations[0].nextRun > now);
-});
-
-test('overlapping checks and run-now never double-run the same automation', async (t) => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const app = fakeApp({
-    automations: [automation({ nextRun: Date.now() - 1000 })],
-    send: async () => { await gate; return { ok: true, data: { text: 'done' } }; },
-  });
-  const scheduler = startScheduler(app); // startup check claims the due run
-  t.after(() => scheduler.stop());
-  await new Promise((resolve) => setImmediate(resolve));
-  const overlapping = scheduler.checkNow();
-  const manual = await scheduler.runNow('a1');
-  assert.equal(manual, 'skipped');
-  release();
-  await overlapping;
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(app.sent.length, 1);
-  assert.equal(app.automations[0].history.length, 1);
-});
-
-test('a failed run records the error in status and history', async (t) => {
-  const app = fakeApp({
-    automations: [automation()],
-    send: async () => ({ ok: false, error: { message: 'Rate limited' } }),
-  });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
+  assert.deepEqual(bridge.calls.runNow, [{ id: 'a1' }]);
+  bridge.api.runNow = async () => ({ ok: true, data: { status: 'error', code: 'PROVIDER_NOT_CONFIGURED' } });
   assert.equal(await scheduler.runNow('a1'), 'error');
-  assert.equal(app.automations[0].lastStatus, 'error');
-  assert.equal(app.automations[0].lastError, 'Rate limited');
-  assert.equal(app.automations[0].history[0].status, 'error');
+  assert.equal(app.toasts.at(-1), 'Connect a provider in Assistant first');
+  bridge.api.runNow = async () => ({ ok: false, error: { message: 'That automation no longer exists.' } });
+  assert.equal(await scheduler.runNow('a1'), 'error');
+  assert.equal(app.toasts.at(-1), 'That automation no longer exists.');
 });
 
-test('a one-time schedule deactivates after it fires', async (t) => {
-  const app = fakeApp({ automations: [automation({ schedule: 'once', runAt: Date.now() - 1, nextRun: Date.now() - 1 })] });
+test('the instructions are sent again only when they change', async (t) => {
+  const bridge = fakeBridge();
+  withBridge(t, bridge);
+  const app = fakeApp();
   const scheduler = startScheduler(app);
   t.after(() => scheduler.stop());
-  await scheduler.checkNow();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(app.sent.length, 1);
-  assert.equal(app.automations[0].active, false);
-  assert.equal(app.automations[0].nextRun, null);
+  scheduler.pushContext();
+  assert.equal(bridge.calls.setContext.length, 1);
+  app.settings.systemPrompt = 'Answer in French.';
+  scheduler.pushContext();
+  assert.equal(bridge.calls.setContext.length, 2);
+  assert.match(bridge.calls.setContext[1].systemPrompts.working, /Answer in French\./);
 });
 
-test('a run works in the folder and mode the automation was made in, never in whatever is open', async (t) => {
-  const folder = { name: 'reports', path: '/Users/you/reports' };
-  const app = fakeApp({
-    automations: [automation({ folder, mode: 'coding' }), automation({ id: 'a2', name: 'Digest', folder: null, mode: null })],
-    settings: { mode: 'working' },
-  });
+test('without the desktop app Run now says so and nothing else runs', async (t) => {
+  globalThis.window = { scalemaxAPI: {} };
+  t.after(() => { delete globalThis.window; });
+  const app = fakeApp();
   const scheduler = startScheduler(app);
   t.after(() => scheduler.stop());
   await scheduler.ready;
-  await scheduler.runNow('a1');
-  await scheduler.runNow('a2');
-  assert.equal(app.sent[0].folder, '/Users/you/reports');
-  assert.equal(app.sent[0].mode, 'coding', 'its own mode, not the one on screen');
-  assert.match(app.sent[0].systemPrompt, /Coding/);
-  // Made without a folder: no file tools at all (null), not the folder open at the time.
-  assert.equal(app.sent[1].folder, null);
-  assert.equal(app.sent[1].mode, 'working');
-  // Two automations with the same name keep their own tasks, and the first sits in its project.
-  assert.equal(app.tasks.length, 2);
-  const first = app.tasks.find((task) => task.automationId === 'a1');
-  const second = app.tasks.find((task) => task.automationId === 'a2');
-  assert.ok(first && second && first !== second);
-  assert.deepEqual(first.folder, folder);
-  assert.equal(second.folder, undefined);
-  // The next run of a1 lands in the same task.
-  await scheduler.runNow('a1');
-  assert.equal(first.messages.length, 4);
+  assert.equal(await scheduler.runNow('a1'), 'error');
+  assert.deepEqual(app.toasts, ['Automations need the desktop app']);
 });
 
-test('the folder and mode survive a reload', () => {
-  const [saved] = normalizeAutomations([automation({ folder: { name: 'reports', path: '/Users/you/reports' }, mode: 'coding' })]);
+test('the folder, the mode and when it was last edited survive a reload', () => {
+  const [saved] = normalizeAutomations([automation({ folder: { name: 'reports', path: '/Users/you/reports' }, mode: 'coding', editedAt: 1234 })]);
   assert.deepEqual(saved.folder, { name: 'reports', path: '/Users/you/reports' });
   assert.equal(saved.mode, 'coding');
-  const [broken] = normalizeAutomations([automation({ folder: 'relative/nope', mode: 'plan' })]);
+  assert.equal(saved.editedAt, 1234);
+  const [broken] = normalizeAutomations([automation({ folder: 'relative/nope', mode: 'plan', editedAt: 'yesterday' })]);
   assert.equal(broken.folder, null);
   assert.equal(broken.mode, null);
+  assert.equal('editedAt' in broken, false);
   // Made before automations remembered their folder: nothing recorded, which is not "no folder".
   const [legacy] = normalizeAutomations([automation()]);
   assert.equal('folder' in legacy, false);
-});
-
-test('an automation from before folders were remembered keeps the open folder', async (t) => {
-  const app = fakeApp({ automations: [automation()] });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await scheduler.ready;
-  await scheduler.runNow('a1');
-  assert.equal('folder' in app.sent[0], false, 'no folder in the request: main uses the open one');
-});
-
-test('an interval schedule keeps its rhythm instead of drifting with the poll', async (t) => {
-  const now = Date.now();
-  const due = now - 1000;
-  const missed = now - 25 * 60000;
-  const app = fakeApp({
-    automations: [
-      automation({ schedule: 'interval', intervalMinutes: 10, nextRun: due }),
-      automation({ id: 'a2', schedule: 'interval', intervalMinutes: 10, nextRun: missed }),
-    ],
-  });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await scheduler.checkNow();
-  await tick();
-  // Stepped from the slot that came due, not from when the poll noticed it.
-  assert.equal(app.automations[0].nextRun, due + 10 * 60000);
-  // Slots that passed meanwhile are skipped (one run), and the next one stays on the grid.
-  assert.equal(app.automations[1].nextRun, missed + 30 * 60000);
-  assert.equal(app.sent.length, 2);
-});
-
-test('a run that comes due while another runs starts at once, never twice for the same automation', async (t) => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const app = fakeApp({
-    automations: [automation({ nextRun: Date.now() - 1000 }), automation({ id: 'a2', name: 'Other', nextRun: Date.now() + 3600000 })],
-    send: async (payload) => {
-      if (payload.requestId.startsWith('automation-a1-')) await gate;
-      return { ok: true, data: { text: 'done' } };
-    },
-  });
-  const scheduler = startScheduler(app); // the startup check starts a1, which keeps working
-  t.after(() => scheduler.stop());
-  await tick();
-  app.automations[1].nextRun = Date.now() - 1;
-  app.automations[0].nextRun = Date.now() - 1; // due again while its first run still works
-  await scheduler.checkNow();
-  assert.equal(app.automations[1].lastStatus, 'success', 'a2 ran while a1 was still working');
-  assert.deepEqual(app.sent.map((payload) => payload.requestId.split('-')[1]), ['a1', 'a2']);
-  release();
-  await tick();
-  await scheduler.checkNow();
-  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a1-')).length, 2,
-    'a1 runs again only once its first run ended');
-});
-
-test('start-up catch-up skips an automation check() already ran since start-up', async (t) => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const now = Date.now();
-  const app = fakeApp({
-    automations: [
-      automation({ pendingCatchUp: true, nextRun: now + 3600000 }),
-      // Its next slot is due while the first catch-up still works, so check() runs it.
-      automation({ id: 'a2', name: 'Other', pendingCatchUp: true, nextRun: now - 1 }),
-    ],
-    send: async (payload) => {
-      if (payload.requestId.startsWith('automation-a1-')) await gate;
-      return { ok: true, data: { text: 'done' } };
-    },
-  });
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await tick();
-  release();
-  await scheduler.ready;
-  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a2-')).length, 1);
-  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a1-')).length, 1);
-});
-
-test('the task of an automation made without a folder is not tied to the open folder', async (t) => {
-  const app = fakeApp({ automations: [automation({ folder: null }), automation({ id: 'a2', name: 'Legacy' })] });
-  app.workspace.root = '/Users/you/open';
-  const scheduler = startScheduler(app);
-  t.after(() => scheduler.stop());
-  await scheduler.runNow('a1');
-  await scheduler.runNow('a2');
-  assert.equal(app.tasks.find((task) => task.automationId === 'a1').folder, undefined);
-  // Made before automations remembered their folder: it ran in the open folder, as before.
-  assert.equal(app.tasks.find((task) => task.automationId === 'a2').folder.path, '/Users/you/open');
 });

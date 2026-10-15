@@ -295,6 +295,8 @@ const app = {
   },
 
   persist(key) {
+    // Automations run in main with the instructions these make (src/scheduler.js pushContext).
+    if (key === 'settings' || key === 'customExperts' || key === 'customSkills') window.scalemaxScheduler?.pushContext?.();
     const snapshot = JSON.parse(JSON.stringify(this[key]));
     const version = (this.saveVersions[key] = (this.saveVersions[key] || 0) + 1);
     // Queue snapshots so rapid edits cannot finish writing out of order.
@@ -386,12 +388,15 @@ const app = {
         if (typeof message.mediaRequest === 'string' && message.mediaRequest) normalized.mediaRequest = message.mediaRequest.slice(0, 300);
         // A note from ScaleMax under a reply (for example that project notes were created).
         if (typeof message.notice === 'string' && message.notice.trim()) normalized.notice = message.notice.trim().slice(0, 300);
+        // The automation run main appended it with (lib/automations.cjs): main stops adding the
+        // run to what this window saves once it sees this mark.
+        if (typeof message.run === 'string' && /^[A-Za-z0-9._:-]{1,160}$/.test(message.run)) normalized.run = message.run;
         return normalized;
       }) : [],
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : now,
       updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now,
       ...taskFolderField(task.folder),
-      // The automation whose runs this task collects (src/scheduler.js).
+      // The automation whose runs this task collects (lib/automations.cjs).
       ...(typeof task.automationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(task.automationId) ? { automationId: task.automationId } : {}),
       ...(() => {
         const compaction = normalizeCompaction(task.compaction);
@@ -2776,12 +2781,13 @@ const app = {
     const editId = $('#automation-edit-id')?.value || '';
     const existing = editId ? this.automations.find((item) => item.id === editId) : null;
     // A new schedule works in the folder and mode that are open now, whatever is open when it
-    // fires (src/scheduler.js); an edit keeps where it runs.
-    const automation = existing ? { ...existing, ...fields } : {
+    // fires (lib/automations.cjs); an edit keeps where it runs. `editedAt` tells main this copy is
+    // newer than the schedule state it keeps itself.
+    const automation = existing ? { ...existing, ...fields, editedAt: now } : {
       id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, ...fields,
       active: true, createdAt: now, schemaVersion: 2, nextRun: null, pendingCatchUp: false,
       lastRun: null, lastStatus: 'idle', lastError: '', history: [],
-      folder: this.rootFolder() || null, mode: this.settings.mode === 'coding' ? 'coding' : 'working',
+      folder: this.rootFolder() || null, mode: this.settings.mode === 'coding' ? 'coding' : 'working', editedAt: now,
     };
     try {
       automation.nextRun = nextRunAt(automation, now);
@@ -2795,7 +2801,7 @@ const app = {
       automation.mode = this.settings.mode === 'coding' ? 'coding' : 'working';
     }
     if (existing) {
-      // Mutate in place so an in-flight run keeps pointing at the same record.
+      // Mutated in place: the list may be drawn from it before the save reaches main.
       Object.assign(existing, automation, { active: true });
     } else {
       this.automations.push(automation);
@@ -2853,6 +2859,7 @@ const app = {
         }
       }
       automation.pendingCatchUp = false;
+      automation.editedAt = Date.now();
       this.showToast(automation.active ? 'Automation resumed' : (automation.lastError || 'Automation paused'));
     } else if (action === 'edit') {
       this.editAutomation(automation);

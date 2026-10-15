@@ -58,3 +58,12 @@ test('the preview folder can be edited, with the same conflict rule as a real sa
   assert.equal((await api.workspace.read('missing.md')).error.code, 'ENOENT');
   assert.equal((await api.workspace.run({ command: 'ls' })).ok, false, 'commands need the desktop app');
 });
+
+test('the preview stands in for automations and MCP listings without running anything', async () => {
+  assert.deepEqual(await api.automations.state(), { ok: true, data: { running: [], background: true } });
+  assert.equal((await api.automations.runNow({ id: 'a1' })).error.code, 'UNAVAILABLE');
+  assert.equal((await api.automations.setContext({})).ok, true);
+  assert.equal(typeof api.automations.onChanged(() => {}), 'function');
+  for (const method of ['resources', 'prompts', 'getPrompt']) assert.equal((await api.mcp[method]({ id: 'x' })).error.code, 'UNAVAILABLE', method);
+  assert.equal(api.mcp.list, undefined, 'the MCP view still says it needs the desktop app');
+});

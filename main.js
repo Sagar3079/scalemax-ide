@@ -252,7 +252,7 @@ function mcpServerName(serverId) {
 
 function requestToolApproval(request, { signal } = {}) {
   const target = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
-  if (!target) return Promise.resolve('deny');
+  if (!target) return Promise.resolve(noWindowDecision(request));
   return new Promise((resolve) => {
     const approvalId = randomUUID();
     let timer = null;
@@ -407,6 +407,8 @@ const chatRequests = new Map();
 function stopWindowWork() {
   denyAllApprovals();
   for (const [requestId, tracked] of chatRequests) {
+    // Automations run without a window (lib/automations.cjs): they keep working.
+    if (automations.owns(requestId)) continue;
     tracked.stopped = true;
     toolLoop.cancel(requestId);
   }
@@ -860,7 +862,10 @@ ipcMain.handle('store:get', async (event, key) => {
 ipcMain.handle('store:set', async (event, key, value) => {
   if (!trustedSender(event) || typeof key !== 'string' || RESERVED_STATE_KEYS.has(key)) return false;
   try {
-    stateStore.set(key, value);
+    // Main appends automation runs to `tasks` and fires the schedules in `automations`: what the
+    // window writes there is merged with that, never written over it (lib/automations.cjs).
+    if (automations.merges(key)) automations.fromWindow(key, value);
+    else stateStore.set(key, value);
     return true;
   } catch {
     return false;
@@ -1371,6 +1376,90 @@ ipcMain.handle('workspace:cancel', wrap(
   () => requireWorkspace().cancel(),
   WORKSPACE_FALLBACK
 ));
+
+// --- Automations (main-process scheduler) ---
+// Automations fire from here (lib/automations.cjs), also while no window is open: on macOS the
+// app keeps running without one (window-all-closed below), unless Preferences > Automations says
+// to wait for a window. A run goes through exactly the chat path (provider:send above: its folder
+// session, project context, permission, tool loop and change recording) with the automation's own
+// folder and mode. The window edits automations, asks for Run now, sends the instructions runs
+// use (it alone has the expert and skill catalogs) and hears about every run
+// (`automations:changed`), so its task list and transcript follow.
+const { createAutomations } = require('./lib/automations.cjs');
+const AUTOMATION_FALLBACK = { code: 'AUTOMATION_ERROR', message: 'The automation could not be run.' };
+// A run streams to nobody; its reply is saved in its task when it ends.
+const AUTOMATION_SENDER = { isDestroyed: () => true, send: () => {} };
+const automations = createAutomations({
+  store: stateAdapter,
+  send: (input) => providerChannels['provider:send']({ sender: AUTOMATION_SENDER }, input),
+  configured: () => {
+    try {
+      return provider.get().configured === true;
+    } catch {
+      return false;
+    }
+  },
+  windowOpen: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+  // An automation made before automations remembered their folder runs in the open one.
+  openFolder: () => workspaceTools.folder(),
+  notify: (change) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automations:changed', change);
+  },
+});
+/**
+ * The answer to a tool call that needs approval while no window is open to ask in: a call of an
+ * automation run is 'unattended' (denied at once, never left waiting, and named in a note under
+ * its reply); any other is denied as before.
+ */
+function noWindowDecision(request) {
+  const label = `${mcpServerName(request.serverId)} · ${request.toolName}`;
+  return automations.unattended(request.requestId, label) ? 'unattended' : 'deny';
+}
+const automationChannels = {
+  // For a window that just opened: what runs right now, whether automations fire without a
+  // window, and the runs it may have missed while it loaded.
+  'automations:state': () => automations.state(),
+  // Run now: resolves when the run ended ({ status: 'success' | 'error' | 'skipped', message? }).
+  'automations:run-now': (_event, input) => automations.runNow(input && typeof input === 'object' ? input.id : undefined),
+  // The system prompt for each mode, the temperature and the reasoning setting runs are sent with.
+  'automations:context': (_event, input) => automations.setContext(input),
+};
+for (const [channel, run] of Object.entries(automationChannels)) {
+  ipcMain.handle(channel, wrap(run, AUTOMATION_FALLBACK));
+}
+app.whenReady().then(() => {
+  automations.start();
+  // A Mac that slept through a slot runs it when it wakes, not up to 30 s later (powerMonitor is
+  // only used once the app is ready).
+  require('electron').powerMonitor.on('resume', () => { void automations.check(); });
+}).catch((error) => {
+  console.error('[ScaleMax] Automations could not start:', error?.message);
+});
+app.on('will-quit', () => automations.stop());
+
+// --- MCP resources and prompts ---
+// A server's resources and prompts for its detail panel in the MCP view, and one prompt rendered
+// for the message box (the window puts the text there; nothing is sent). The model reads
+// resources itself through the read-only mcp_list_resources / mcp_read_resource tools, and gets
+// a server's tools only once it is ready: a server that hangs is left out of a reply after a few
+// seconds instead of holding it up (lib/mcp.cjs chatTools).
+const mcpExtraChannels = {
+  'mcp:resources': (_event, input) => mcp.resources(input),
+  'mcp:prompts': (_event, input) => mcp.prompts(input),
+  'mcp:prompt-get': (_event, input) => mcp.getPrompt(input),
+};
+for (const [channel, run] of Object.entries(mcpExtraChannels)) {
+  ipcMain.handle(channel, wrap(run, MCP_FALLBACK));
+}
+// Servers switched on for chat start in the background soon after launch, so the first chat
+// finds their tools ready.
+const MCP_WARM_DELAY_MS = 3_000;
+app.whenReady().then(() => {
+  setTimeout(() => {
+    // The smoke check starts its own servers when it needs them.
+    if (!quitting && process.env.SCALEMAX_SMOKE !== '1') mcp.warm();
+  }, MCP_WARM_DELAY_MS).unref?.();
+}).catch(() => {});
 
 // ---------------------------------------------------------------------------
 // App lifecycle
