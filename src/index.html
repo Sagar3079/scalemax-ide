@@ -316,10 +316,9 @@
                     </div>
                     <button id="editor-save" class="button secondary compact" type="button" aria-describedby="editor-status" title="Save (⌘S)">Save</button>
                   </div>
+                  <div id="editor-review" class="ws-review" role="group" aria-label="Changes from the reply" hidden></div>
                   <div class="ws-editor-body">
-                    <pre id="editor-gutter" class="ws-gutter" aria-hidden="true">1</pre>
-                    <div class="ws-code">
-                      <pre id="editor-highlight" class="ws-highlight" aria-hidden="true"></pre>
+                    <div id="editor-view" class="ws-code">
                       <textarea id="editor-input" class="ws-input" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="File contents" aria-describedby="editor-status"></textarea>
                     </div>
                     <div id="workspace-empty" class="ws-empty">
@@ -327,7 +326,7 @@
                       <h3 id="workspace-empty-title">Open a project folder</h3>
                       <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this Mac.</p>
                       <button id="workspace-open-empty" class="button primary" type="button">Open folder</button>
-                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>Tab</kbd> indent · <kbd>⇧Tab</kbd> outdent</p>
+                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment</p>
                     </div>
                   </div>
                 </section>

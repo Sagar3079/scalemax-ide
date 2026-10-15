@@ -7,7 +7,7 @@
  * src/domain.mjs). DOM is built with createElement and textContent only (no HTML).
  */
 import { normalizeChanges, changesSummary } from './domain.mjs';
-import { reloadTabs } from './workspace-ui.js';
+import { reloadTabs, reviewReplyChanges } from './workspace-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 function element(tag, className, text) {
@@ -386,9 +386,11 @@ export function bindChangesUi(app) {
   $('#changes-keep')?.addEventListener('click', () => void keepFiles(app, review.taskId, review.id, [review.path]));
   $('#changes-open')?.addEventListener('click', async () => {
     const target = review.path;
+    const { message } = findMessage(app, review.taskId, review.id);
     dialog.close();
     app.switchView('workspace');
-    await app.openFile(target);
+    // The editor marks this reply's changes in the file, with Keep and Undo on each.
+    if (await app.openFile(target)) await reviewReplyChanges(app, normalizeChanges(message?.changes), [target]);
   });
   dialog.addEventListener('close', () => {
     review.token += 1;

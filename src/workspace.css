@@ -1,8 +1,10 @@
 /*
  * ScaleMax IDE — Workspace tab (IDE layout).
  *
- * Toolbar, resizable explorer, tabbed editor with gutter and syntax overlay,
- * resizable bottom panel (Terminal / Git changes / Diff) and a statusbar.
+ * Toolbar, resizable explorer, tabbed code editor (CodeMirror, set up in
+ * src/editor.js, coloured by the --ws-editor-*, --ws-diff-* and --tok-*
+ * variables below) with the review bar for a reply's changes, resizable
+ * bottom panel (Terminal / Git changes / Diff) and a statusbar.
  * Shell surfaces use the --sm-app-* aliases (see styles.css section 01).
  * Sizes that the splitters change live in --ws-explorer-width and
  * --ws-panel-height, set on .ws by workspace-ui.js.
@@ -20,7 +22,7 @@
   --ws-code-line: 20px;
   --ws-code-pad-y: 10px;
   --ws-code-pad-x: 14px;
-  --ws-scrollbar: 10px;
+  --ws-ui-font: Assistant, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --tok-keyword: #7c3aed;
   --tok-string: #0f7b4a;
   --tok-comment: #8a8f98;
@@ -28,6 +30,34 @@
   --tok-tag: #1d4ed8;
   --tok-attr: #0e7490;
   --tok-heading: #0f172a;
+  --tok-function: #795e26;
+  --tok-type: #267f99;
+  --tok-regexp: #b91c1c;
+  --tok-meta: #6b7280;
+  --tok-invalid: #dc2626;
+  --ws-editor-bg: var(--sm-app-surface);
+  --ws-editor-fg: var(--sm-text-strong);
+  --ws-editor-caret: var(--sm-text-strong);
+  --ws-editor-selection: rgba(59, 130, 246, 0.16);
+  --ws-editor-selection-focused: rgba(59, 130, 246, 0.28);
+  --ws-editor-selection-match: rgba(59, 130, 246, 0.1);
+  --ws-editor-active-line: rgba(0, 0, 0, 0.035);
+  --ws-editor-gutter-fg: var(--sm-text-weak);
+  --ws-editor-gutter-active-fg: var(--sm-text-strong);
+  --ws-editor-bracket: rgba(0, 194, 154, 0.16);
+  --ws-editor-bracket-border: rgba(0, 146, 115, 0.55);
+  --ws-editor-bracket-bad: rgba(246, 64, 65, 0.22);
+  --ws-editor-match: rgba(255, 184, 0, 0.26);
+  --ws-editor-match-border: rgba(192, 65, 0, 0.35);
+  --ws-editor-match-current: rgba(255, 120, 0, 0.4);
+  --ws-editor-completion: #2563eb;
+  --ws-editor-completion-fg: #ffffff;
+  --ws-diff-add-line: rgba(12, 191, 91, 0.1);
+  --ws-diff-add-text: rgba(12, 191, 91, 0.26);
+  --ws-diff-add-bar: #0cbf5b;
+  --ws-diff-del-line: rgba(246, 64, 65, 0.08);
+  --ws-diff-del-text: rgba(246, 64, 65, 0.24);
+  --ws-diff-del-bar: #f64041;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   flex: 1;
@@ -44,6 +74,28 @@
   --tok-tag: #7fb4ff;
   --tok-attr: #67d4e8;
   --tok-heading: #f1f5f9;
+  --tok-function: #dcdcaa;
+  --tok-type: #4ec9b0;
+  --tok-regexp: #f2898b;
+  --tok-meta: #9ca3af;
+  --tok-invalid: #f87171;
+  --ws-editor-selection: rgba(100, 150, 255, 0.22);
+  --ws-editor-selection-focused: rgba(100, 150, 255, 0.34);
+  --ws-editor-selection-match: rgba(100, 150, 255, 0.14);
+  --ws-editor-active-line: rgba(255, 255, 255, 0.04);
+  --ws-editor-bracket: rgba(76, 240, 206, 0.14);
+  --ws-editor-bracket-border: rgba(76, 240, 206, 0.5);
+  --ws-editor-bracket-bad: rgba(255, 110, 110, 0.25);
+  --ws-editor-match: rgba(255, 200, 80, 0.2);
+  --ws-editor-match-border: rgba(255, 200, 80, 0.45);
+  --ws-editor-match-current: rgba(255, 150, 50, 0.4);
+  --ws-editor-completion: #2f5fbf;
+  --ws-diff-add-line: rgba(76, 240, 160, 0.09);
+  --ws-diff-add-text: rgba(76, 240, 160, 0.24);
+  --ws-diff-add-bar: #3fcf7f;
+  --ws-diff-del-line: rgba(255, 100, 100, 0.09);
+  --ws-diff-del-text: rgba(255, 100, 100, 0.26);
+  --ws-diff-del-bar: #ff6b6b;
 }
 
 /* ---- Toolbar -------------------------------------------------------- */
@@ -601,78 +653,99 @@
   min-height: 0;
 }
 
-/* Gutter, overlay and textarea share one set of metrics so lines align.
-   The gutter carries one scrollbar's worth of extra bottom padding because
-   the textarea always reserves a horizontal scrollbar. */
-.ws-gutter {
+/* A reply's changes under review in the shown file: count and actions
+   (workspace-ui.js renderReview). */
+.ws-review {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-shrink: 0;
-  min-width: 48px;
-  margin: 0;
-  padding: var(--ws-code-pad-y) 10px calc(var(--ws-code-pad-y) + var(--ws-scrollbar)) 8px;
-  overflow: hidden;
-  border-right: 1px solid var(--sm-color-border-tertiary);
-  background: var(--sm-app-surface);
-  font-family: var(--ws-code-font);
-  font-size: var(--ws-code-size);
-  line-height: var(--ws-code-line);
-  font-variant-ligatures: none;
-  color: var(--sm-text-weak);
-  text-align: right;
-  user-select: none;
-  white-space: pre;
+  min-height: 30px;
+  padding: 3px 10px 3px 14px;
+  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  background: var(--sm-app-chrome);
 }
 
+.ws-review-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sm-text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-review-label::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--ws-diff-add-bar);
+  vertical-align: middle;
+}
+
+.ws-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.ws-review .button.compact {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+/* CodeMirror (src/editor.js) fills the code area; the textarea is the plain
+   editor shown only until it has loaded, or when it cannot. CodeMirror keeps
+   its root position: relative and display: flex (!important in its base
+   theme), so the area is a flex column it grows in. */
 .ws-code {
   position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
 }
 
-.ws-highlight,
+.ws-code > .cm-editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .ws-input {
   position: absolute;
   inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   margin: 0;
   padding: var(--ws-code-pad-y) var(--ws-code-pad-x);
   border: 0;
   border-radius: 0;
+  resize: none;
+  overflow: auto;
+  background: var(--ws-editor-bg);
+  color: var(--ws-editor-fg);
+  caret-color: var(--ws-editor-caret);
   font-family: var(--ws-code-font);
   font-size: var(--ws-code-size);
   line-height: var(--ws-code-line);
   font-weight: 400;
   font-variant-ligatures: none;
   letter-spacing: 0;
-  tab-size: 2;
+  tab-size: 4;
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
-  /* Both always reserve scrollbars so their scroll ranges match exactly. */
-  overflow: scroll;
-}
-
-.ws-highlight {
-  z-index: 0;
-  color: var(--sm-text-strong);
-  background: transparent;
-  pointer-events: none;
-}
-
-.ws-highlight::-webkit-scrollbar-thumb,
-.ws-highlight::-webkit-scrollbar-track,
-.ws-highlight::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.ws-input {
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  resize: none;
-  background: transparent;
-  color: var(--sm-text-strong);
-  caret-color: var(--sm-text-strong);
 }
 
 .ws-input:focus {
@@ -683,29 +756,6 @@
 .ws-input::-webkit-scrollbar-corner {
   background: transparent;
 }
-
-/* While a highlight overlay is shown the textarea text is invisible; the
-   overlay paints it, the textarea keeps the caret and the selection. */
-.ws-code.is-highlighted .ws-input {
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-}
-
-.ws-code.is-highlighted .ws-input::selection {
-  background: rgba(59, 130, 246, 0.28);
-}
-
-.ws-code:not(.is-highlighted) .ws-highlight {
-  display: none;
-}
-
-.tok-keyword { color: var(--tok-keyword); }
-.tok-string { color: var(--tok-string); }
-.tok-comment { color: var(--tok-comment); font-style: italic; }
-.tok-number { color: var(--tok-number); }
-.tok-tag { color: var(--tok-tag); }
-.tok-attr { color: var(--tok-attr); }
-.tok-heading { color: var(--tok-heading); font-weight: 600; }
 
 /* Empty states sit over the editor body. */
 .ws-empty {
