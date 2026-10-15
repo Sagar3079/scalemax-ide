@@ -243,6 +243,35 @@
       }
     },
 
+    // --- Slash commands and hooks ---
+    // The preview has no custom commands and no hooks (main reads them from disk): the app's own
+    // commands still work, and other "/…" text is sent as typed.
+    slash: {
+      list: async function () {
+        return { ok: true, data: { commands: [] } };
+      },
+      expand: async function (input) {
+        var name = input && typeof input.name === 'string' ? input.name : '';
+        return failure('NO_COMMAND', 'There is no /' + name + ' command in the browser preview.');
+      }
+    },
+    hooks: {
+      list: async function () {
+        return { ok: true, data: { folder: openRoot ? DEMO_FOLDER : null, scopes: [] } };
+      },
+      approve: async function () {
+        return failure('UNAVAILABLE', 'Hooks require the desktop app.');
+      },
+      setEnabled: async function () {
+        return failure('UNAVAILABLE', 'Hooks require the desktop app.');
+      }
+    },
+    mentions: {
+      resolve: async function () {
+        return failure('UNAVAILABLE', 'Folders, web pages and background commands go along in the desktop app.');
+      }
+    },
+
     getPlatform: function () {
       return 'browser';
     }

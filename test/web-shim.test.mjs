@@ -58,3 +58,14 @@ test('the preview folder can be edited, with the same conflict rule as a real sa
   assert.equal((await api.workspace.read('missing.md')).error.code, 'ENOENT');
   assert.equal((await api.workspace.run({ command: 'ls' })).ok, false, 'commands need the desktop app');
 });
+
+test('the preview has no custom commands, hooks or resolved mentions, and says so in preload.js shapes', async () => {
+  assert.deepEqual(await api.slash.list({}), { ok: true, data: { commands: [] } });
+  assert.equal((await api.slash.expand({ name: 'fix' })).error.code, 'NO_COMMAND', 'so "/fix" is sent as typed');
+  const hooks = await api.hooks.list({});
+  assert.equal(hooks.ok, true);
+  assert.deepEqual(hooks.data.scopes, []);
+  assert.equal((await api.hooks.approve({ folder: '/preview/demo-project', hash: 'x' })).ok, false);
+  assert.equal((await api.hooks.setEnabled({ id: 'x', enabled: false })).ok, false);
+  assert.equal((await api.mentions.resolve({ kind: 'url', value: 'https://example.com' })).error.code, 'UNAVAILABLE');
+});

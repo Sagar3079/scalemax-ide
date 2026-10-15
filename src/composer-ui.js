@@ -619,6 +619,10 @@ function approvalSummary(request) {
       const action = request.reason === 'unsandboxed-input' ? 'type into a command' : 'run a command';
       return `The model wants to ${action} in ${where} outside the sandbox. There it can change any of your files, read credential folders such as ~/.ssh and use the network. ScaleMax asks about this every time, whatever the permission mode.`;
     }
+    // The hooks settings: commands that run on this Mac outside the sandbox (lib/hooks.cjs).
+    if (request.reason === 'hooks-config') {
+      return `The model wants to change .scalemax/settings.json in ${where}, where hooks are set up: commands ScaleMax runs on your Mac, outside the sandbox. ScaleMax asks about this every time, whatever the permission mode, and changed project hooks wait for your approval before they run.`;
+    }
     const summary = WORKSPACE_SUMMARIES[request.toolName];
     if (!summary) return `The model wants to read files in ${where}.`;
     return summary(where, approvalArguments(request)) + (request.toolName === 'run_command' ? SANDBOX_NOTES[request.sandbox] || '' : '');
@@ -717,7 +721,7 @@ function bindApprovals(app) {
       folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
       // Why it always asks ('unsandboxed', 'egress', or another reason main gives), and how a command runs.
       reason: typeof request.reason === 'string' && request.reason
-        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private'].includes(request.reason) ? request.reason : 'required') : '',
+        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private', 'hooks-config'].includes(request.reason) ? request.reason : 'required') : '',
       host: typeof request.host === 'string' ? request.host.slice(0, 255) : '',
       claimsReadOnly: request.claimsReadOnly === true,
       sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',

@@ -51,7 +51,10 @@ test('an open folder offers six tools; reads are read-only, writes and commands 
     assert.ok(definition.function.description.length <= 1024);
   }
   assert.deepEqual(tools.resolve('workspace_read'), { serverId: SERVER_ID, toolName: 'read_file', readOnly: true });
-  assert.deepEqual(tools.resolve('workspace_write'), { serverId: SERVER_ID, toolName: 'write_file', readOnly: false });
+  const { alwaysAsk, ...write } = tools.resolve('workspace_write');
+  assert.deepEqual(write, { serverId: SERVER_ID, toolName: 'write_file', readOnly: false });
+  // Only the hooks settings always ask (test/hooks.test.cjs); other files follow the permission.
+  assert.equal(alwaysAsk({ path: 'notes.md' }), '');
   assert.equal(tools.resolve('workspace_run').readOnly, false);
   assert.equal(tools.resolve('mcp_other_tool'), null);
   // The model learns the folder name, never the full path on disk.

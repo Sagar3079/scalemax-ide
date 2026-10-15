@@ -1218,3 +1218,124 @@ test('a user message may carry picture parts', async () => {
   assert.equal(result.text, 'A red square.');
   assert.deepEqual(provider.calls.complete[0].messages.at(-1).content, [{ type: 'text', text: 'What is this?' }, picture]);
 });
+
+// ---- Hooks (lib/hooks.cjs) at the loop's insertion points ----------------------------------
+// A stand-in for main's hook set: `handlers[event](details, context)` decides, each run reports a
+// step the way lib/hooks.cjs does.
+function fakeHooks(handlers = {}) {
+  const runs = [];
+  return {
+    runs,
+    has: (event) => typeof handlers[event] === 'function',
+    async run(event, details, context = {}) {
+      runs.push({ event, details: structuredClone(details), signal: context.signal instanceof AbortSignal });
+      const callId = typeof context.nextCallId === 'function' ? context.nextCallId() : 'hook';
+      context.report?.({ phase: 'tool', callId, title: `${event} hook`, serverId: 'Hooks', toolName: event });
+      const decided = await handlers[event](details, context);
+      context.report?.({ phase: 'tool-done', callId, ok: !decided?.block });
+      return {
+        block: false, allow: false, reason: '', note: '', context: '',
+        steps: [{ type: 'tool', title: `${event} hook`, server: 'Hooks', tool: event, ok: !decided?.block }],
+        ...decided,
+      };
+    },
+  };
+}
+
+test('hooks: a PreToolUse hook blocks a call before it runs, and the model is told why', async () => {
+  const provider = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_add', '{"a":1}')]), textReply('ok')]);
+  const mcp = fakeMcp();
+  const hooks = fakeHooks({ PreToolUse: () => ({ block: true, reason: 'Adding is frozen today.' }) });
+  const events = [];
+  const result = await createToolLoop({ provider, mcp }).send({ ...INPUT }, { ...BYPASS, hooks, onProgress: (event) => events.push(event) });
+  assert.equal(mcp.calls.callTool.length, 0, 'the call never ran');
+  assert.deepEqual(hooks.runs.map((run) => [run.event, run.signal]), [['PreToolUse', true]]);
+  assert.deepEqual(hooks.runs[0].details, { name: 'mcp_fake_add', serverId: 'fake', toolName: 'add', input: { a: 1 } });
+  assert.match(toolMessages(provider.calls.complete[1])[0].content, /^Error: a PreToolUse hook the user set up blocked this call: Adding is frozen today\./);
+  assert.deepEqual(result.steps.map((step) => [step.server, step.ok]), [['Hooks', false], ['fake', false]]);
+  // Live: the hook's step comes first, with ids of the reply's own sequence.
+  assert.deepEqual(events.filter((event) => event.serverId === 'Hooks').map((event) => [event.phase, event.callId]), [['tool', 'step-2']]);
+});
+
+test('hooks: "allow" skips the usual prompt, but never Plan nor a call that must always ask', async () => {
+  const asked = [];
+  const approve = async (request) => { asked.push(request.toolName); return 'deny'; };
+  const allow = () => fakeHooks({ PreToolUse: () => ({ allow: true }) });
+  // Basic: a changing tool runs without the prompt.
+  let mcp = fakeMcp();
+  await createToolLoop({ provider: fakeProvider([toolReply([toolCall('c1', 'mcp_fake_add', '{}')]), textReply('ok')]), mcp, approve })
+    .send({ ...INPUT }, { permission: 'basic', hooks: allow() });
+  assert.deepEqual(asked, []);
+  assert.deepEqual(mcp.calls.callTool.map((call) => call.name), ['add']);
+  // Plan refuses first: the hook is not even asked.
+  mcp = fakeMcp();
+  const planHooks = allow();
+  const plan = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_add', '{}')]), textReply('plan')]);
+  await createToolLoop({ provider: plan, mcp, approve }).send({ ...INPUT }, { permission: 'plan', hooks: planHooks });
+  assert.equal(planHooks.runs.length, 0);
+  assert.equal(mcp.calls.callTool.length, 0);
+  assert.match(toolMessages(plan.calls.complete[1])[0].content, /Plan permission/);
+  // A call that must always ask still asks, in Bypass too.
+  mcp = fakeMcp();
+  const chatTools = mcp.chatTools;
+  mcp.chatTools = async (options) => {
+    const catalog = await chatTools(options);
+    return { ...catalog, resolve: (name) => ({ ...catalog.resolve(name), alwaysAsk: () => 'unsandboxed' }) };
+  };
+  await createToolLoop({ provider: fakeProvider([toolReply([toolCall('c1', 'mcp_fake_add', '{}')]), textReply('ok')]), mcp, approve })
+    .send({ ...INPUT }, { permission: 'bypass', hooks: allow() });
+  assert.deepEqual(asked, ['add']);
+  assert.equal(mcp.calls.callTool.length, 0, 'denied');
+});
+
+test('hooks: a PostToolUse note joins the tool result, and its step follows the call', async () => {
+  const provider = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_echo', '{"text":"x"}')]), textReply('done')]);
+  const hooks = fakeHooks({ PostToolUse: () => ({ note: 'Lint: 2 warnings' }) });
+  const result = await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, { ...BYPASS, hooks });
+  assert.equal(toolMessages(provider.calls.complete[1])[0].content, 'ok:echo\n\n[Note from a PostToolUse hook the user set up: Lint: 2 warnings]');
+  assert.deepEqual(hooks.runs[0].details, { name: 'mcp_fake_echo', serverId: 'fake', toolName: 'echo', input: { text: 'x' }, ok: true, output: 'ok:echo' });
+  assert.deepEqual(result.steps.map((step) => step.server), ['fake', 'Hooks']);
+  assert.equal(result.toolCalls[0].preview, 'ok:echo', 'the summary shows the tool\'s own result');
+});
+
+test('hooks: Stop runs once the reply finished, with its answer; Stop pressed then ends the hooks', async () => {
+  const events = [];
+  const hooks = fakeHooks({ Stop: () => ({}) });
+  const result = await createToolLoop({ provider: fakeProvider([textReply('All done.')]), mcp: fakeMcp() })
+    .send({ ...INPUT }, { ...BYPASS, hooks, onProgress: (event) => events.push(event) });
+  assert.equal(result.text, 'All done.');
+  assert.deepEqual(hooks.runs.map((run) => [run.event, run.details.text]), [['Stop', 'All done.']]);
+  assert.deepEqual(result.steps, [{ type: 'tool', title: 'Stop hook', server: 'Hooks', tool: 'Stop', ok: true }]);
+  assert.deepEqual(events.filter((event) => event.serverId === 'Hooks').map((event) => [event.requestId, event.callId]), [['r1', 'stop-1']]);
+
+  // A failed reply has no Stop.
+  const failing = fakeHooks({ Stop: () => ({}) });
+  const broken = fakeProvider([]);
+  broken.complete = async () => { throw Object.assign(new Error('down'), { code: 'PROVIDER_ERROR' }); };
+  await assert.rejects(createToolLoop({ provider: broken, mcp: fakeMcp() }).send({ ...INPUT }, { ...BYPASS, hooks: failing }), /down/);
+  assert.equal(failing.runs.length, 0);
+
+  // Stop pressed while Stop hooks run: they end, and the finished reply stays.
+  const waiting = fakeHooks({ Stop: (_details, context) => new Promise((resolve) => context.signal.addEventListener('abort', () => resolve({}), { once: true })) });
+  const loop = createToolLoop({ provider: fakeProvider([textReply('Finished.')]), mcp: fakeMcp() });
+  const pending = loop.send({ ...INPUT, requestId: 'r-stop' }, { ...BYPASS, hooks: waiting });
+  while (!waiting.runs.length) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(loop.cancel('r-stop'), true);
+  assert.equal((await pending).text, 'Finished.');
+});
+
+test('a slash command chooses the model for every round of its reply', async () => {
+  const seen = [];
+  const provider = fakeProvider([toolReply([toolCall('c1', 'mcp_fake_echo', '{}')]), textReply('ok')]);
+  const complete = provider.complete;
+  provider.snapshot = () => ({ model: 'everyday-model', models: [] });
+  provider.complete = async (request, options = {}) => {
+    seen.push(options.snapshot?.model);
+    return complete(request);
+  };
+  await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT }, { ...BYPASS, model: 'command-model' });
+  assert.deepEqual(seen, ['command-model', 'command-model']);
+  seen.length = 0;
+  await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT, requestId: 'r2' }, { ...BYPASS });
+  assert.deepEqual(seen, ['everyday-model'], 'without a command the active model answers');
+});

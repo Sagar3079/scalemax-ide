@@ -449,6 +449,36 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     /** @param {{ids: string[]}} input forgets the changes of these replies */
     remove: (input) => ipcRenderer.invoke('checkpoint:remove', input)
   },
+
+  // --- Slash commands and hooks ---
+  /**
+   * Custom slash commands of a task folder and of the user (lib/slash-commands.cjs). The window
+   * lists them and asks main for the prompt a command becomes; it never reads the files itself.
+   */
+  slash: {
+    /** @param {{folder?: string}} input @returns {Promise<{ok: boolean, data?: {commands: Array<{name: string, description: string, argumentHint: string, source: 'project'|'user'}>}}>} */
+    list: (input) => ipcRenderer.invoke('slash:list', input),
+    /** @param {{folder?: string, name: string, arguments?: string}} input @returns {Promise<{ok: boolean, data?: {name: string, source: string, prompt: string}}>} */
+    expand: (input) => ipcRenderer.invoke('slash:expand', input)
+  },
+  /**
+   * Hooks (lib/hooks.cjs) of a task folder and of the user: list them per scope, allow a project's
+   * hooks exactly as shown (by their hash) or take that back, switch one on or off.
+   */
+  hooks: {
+    /** @param {{folder?: string}} input @returns {Promise<{ok: boolean, data?: {folder: object|null, scopes: Array<object>}}>} */
+    list: (input) => ipcRenderer.invoke('hooks:list', input),
+    /** @param {{folder: string, hash?: string, revoke?: boolean}} input */
+    approve: (input) => ipcRenderer.invoke('hooks:approve', input),
+    /** @param {{id: string, enabled: boolean}} input */
+    setEnabled: (input) => ipcRenderer.invoke('hooks:set-enabled', input)
+  },
+  /** @-mentions of a folder ("@src/"), a web page ("@https://…") or a background command ("@job:j2"), as text. */
+  mentions: {
+    /** @param {{folder?: string, kind: 'folder'|'url'|'job', value: string}} input @returns {Promise<{ok: boolean, data?: {kind: string, label: string, text: string}}>} */
+    resolve: (input) => ipcRenderer.invoke('mention:resolve', input)
+  },
+
   /** @returns {string} e.g. 'darwin' | 'win32' | 'linux' */
   getPlatform: () => process.platform
 });

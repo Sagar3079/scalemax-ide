@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="changes.css" />
   <link rel="stylesheet" href="jobs.css" />
   <link rel="stylesheet" href="specs.css" />
+  <link rel="stylesheet" href="slash.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -155,6 +156,8 @@
                 <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step… (@ names a file, and you can paste a picture)" aria-label="Message"></textarea>
                 <!-- Files of the open folder while typing "@name" (src/context-ui.js). -->
                 <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files in this folder" hidden></div>
+                <!-- Commands while typing "/" at the start of a message (src/slash-ui.js). -->
+                <div id="slash-menu" class="mention-menu slash-menu" role="listbox" aria-label="Commands" hidden></div>
                 <!-- Pictures that go with the next message (src/context-ui.js). -->
                 <div id="image-row" class="image-row" aria-label="Pictures for this message" hidden></div>
                 <div id="attachment-row" class="attachment-row" hidden>
@@ -586,6 +589,13 @@
               </div>
               <p id="sandbox-unavailable" class="status-text" hidden>The sandbox needs macOS. Here the model's commands run without it.</p>
             </section>
+            <!-- Hooks of the folder on screen and the user's own (src/hooks-ui.js; main runs them, lib/hooks.cjs). -->
+            <section id="hooks-card" class="settings-card" aria-labelledby="hooks-title">
+              <h2 id="hooks-title">Hooks</h2>
+              <p class="status-text">Commands you set up in .scalemax/settings.json to run before or after the assistant's tool calls (PreToolUse, PostToolUse), before a message goes out (UserPromptSubmit) and when a reply finishes (Stop). They run on your Mac, outside the sandbox. A project's own hooks run only after you allow them, and a changed set is asked about again.</p>
+              <div id="hooks-panel" class="hooks-panel"></div>
+              <div class="button-row"><button id="hooks-refresh" class="button secondary" type="button">Refresh</button></div>
+            </section>
             <section class="settings-card" aria-labelledby="data-title">
               <h2 id="data-title">Your data stays yours</h2>
               <p class="body-copy">There is no cloud sign-in. Task history and settings are stored as plain local data on this device, not as encrypted records. Keep exports somewhere you trust.</p>
@@ -883,6 +893,20 @@
       <span id="jobs-where" class="jobs-where"></span>
       <span class="jobs-spacer"></span>
       <button id="jobs-stop" class="button danger" type="button">Stop</button>
+    </div>
+  </dialog>
+  <!-- A project's own hooks wait for the user's approval (src/hooks-ui.js; lib/hooks.cjs runs them). -->
+  <dialog id="hooks-dialog" class="consent-dialog" aria-labelledby="hooks-dialog-title" aria-describedby="hooks-dialog-description">
+    <div class="dialog-header">
+      <div><span id="hooks-dialog-folder" class="eyebrow">Hooks</span><h2 id="hooks-dialog-title">Allow this project's hooks?</h2></div>
+    </div>
+    <div class="dialog-body">
+      <p id="hooks-dialog-description" class="body-copy">This folder's .scalemax/settings.json asks ScaleMax to run these commands on your Mac, outside the sandbox, around the assistant's tool calls and replies. Allow them only if you trust this project. They are asked about again whenever they change.</p>
+      <ul id="hooks-dialog-list" class="hooks-list"></ul>
+      <div class="button-row consent-actions">
+        <button id="hooks-dialog-deny" class="button secondary" type="button">Not now</button>
+        <button id="hooks-dialog-allow" class="button danger" type="button">Allow these hooks</button>
+      </div>
     </div>
   </dialog>
 
