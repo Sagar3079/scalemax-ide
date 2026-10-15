@@ -321,8 +321,9 @@ export async function generateFromComposer(app, text, taskId) {
     result = { ok: false, error: { message: error?.message || 'unknown error' } };
   }
   app.endReply(taskId, input.requestId, { quiet: true });
-  // The task was deleted meanwhile (its generation was stopped then).
-  if (!app.tasks.some((item) => item.id === taskId)) return true;
+  // The task was deleted meanwhile (its generation was stopped then), or the window is going away
+  // and already noted that this generation did not finish (app.keepRunningReplies).
+  if (!app.tasks.some((item) => item.id === taskId) || app.leaving) return true;
   if (!result?.ok) {
     const message = result?.error?.message || 'Generation failed';
     if (result?.error?.code === 'CANCELLED' && taskId === app.currentTaskId) app.showToast('Generation cancelled');

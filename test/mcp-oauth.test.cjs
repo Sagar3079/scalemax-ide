@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const net = require('node:net');
+const oauth = require('../lib/oauth.cjs');
 const { createMcpOAuth, parseChallenge, oauthConfig } = require('../lib/mcp-oauth.cjs');
 
 const SERVER = 'https://mcp.example.com/mcp';
@@ -264,6 +265,24 @@ test('a resource from another origin is ignored in favour of the server URL', as
   }));
   const found = await createMcpOAuth({ fetchImpl: stub.fetchImpl }).discover(SERVER);
   assert.equal(found.resource, SERVER);
+});
+
+test('an MCP sign-in takes over the callback port from a connector sign-in that is still waiting', async () => {
+  const port = await freePort();
+  // A connector OAuth flow (lib/connectors.cjs) waiting on the same loopback port.
+  let connectorOpened = false;
+  const connector = oauth.authorize({
+    authorizeUrl: 'https://provider.example.com/authorize', tokenUrl: 'https://provider.example.com/token', pkce: true,
+  }, {
+    clientId: 'connector-client', port, fetchImpl: async () => json(500, {}), openExternal: async () => { connectorOpened = true; },
+  });
+  connector.catch(() => {});
+  while (!connectorOpened) await new Promise((resolve) => setImmediate(resolve));
+  const stub = fakeNet(standardRoutes());
+  const browser = fakeBrowser();
+  const result = await createMcpOAuth({ fetchImpl: stub.fetchImpl, port }).signIn({ serverUrl: SERVER, openExternal: browser.openExternal });
+  assert.equal(result.secrets.accessToken, ACCESS);
+  await assert.rejects(connector, (error) => error.code === 'CANCELLED');
 });
 
 test('cancelling while the browser is open stops the sign-in and frees the port', async () => {

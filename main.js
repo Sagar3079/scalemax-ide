@@ -143,8 +143,8 @@ function createWindow() {
 
   mainWindow.loadFile(APP_PAGE);
 
-  // Leaving with unsaved editor tabs asks first (the page cancels its unload while any tab has
-  // changes; Electron then asks here instead of silently refusing to close).
+  // Leaving with unsaved editor tabs or a reply still running asks first (the page cancels its
+  // unload in either case; Electron then asks here instead of silently refusing to close).
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (process.env.SCALEMAX_SMOKE === '1') {
       event.preventDefault();
@@ -152,11 +152,11 @@ function createWindow() {
     }
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'warning',
-      buttons: ['Discard changes', 'Cancel'],
+      buttons: ['Leave anyway', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
-      message: 'Some files in the editor have unsaved changes.',
-      detail: 'Discard them and continue? Cancel to go back and save them.',
+      message: 'Unsaved changes or a reply is still running.',
+      detail: 'Leaving discards unsaved editor changes and stops any running reply (what it wrote so far is kept). Cancel to go back.',
     });
     // preventDefault here lets the unload go ahead.
     if (choice === 0) event.preventDefault();
@@ -178,12 +178,13 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // A reload or a crashed renderer can never answer a pending approval.
-  mainWindow.webContents.on('did-start-loading', () => denyAllApprovals());
-  mainWindow.webContents.on('render-process-gone', () => denyAllApprovals());
+  // A reload or a crashed renderer can never answer a pending approval, nor show, stop or review
+  // the replies it started: they stop too (stopWindowWork).
+  mainWindow.webContents.on('did-start-loading', () => stopWindowWork());
+  mainWindow.webContents.on('render-process-gone', () => stopWindowWork());
 
   mainWindow.on('closed', () => {
-    denyAllApprovals();
+    stopWindowWork();
     mainWindow = null;
   });
 }
@@ -314,7 +315,7 @@ const jobs = createJobManager({
   // What the model's foreground commands get too (lib/workspace.cjs environment()).
   environment: () => {
     const env = { HOME: os.homedir(), PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin' };
-    for (const key of ['LANG', 'TMPDIR']) if (typeof process.env[key] === 'string') env[key] = process.env[key];
+    for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR']) if (typeof process.env[key] === 'string') env[key] = process.env[key];
     return env;
   },
   onUpdate: notifyJobs,
@@ -356,9 +357,13 @@ function replyNameRepair(names, model) {
   const replacements = modelNames({ modelId: config.model, displayName: entry?.displayName, responseModel: model });
   return (text) => restoreNames(text, { names, replacements });
 }
-function restoreReplyText(text, sources, { model, folderName } = {}) {
+// One repair per finished reply (lib/tool-loop.cjs `restorer`): the request is read for names
+// once, and only when it has some is the model's name looked up (provider.get() reads the state
+// file); the same repair then serves the text, the thinking and every step title.
+function replyRestorer(sources, { model, folderName } = {}) {
   const folder = folderName || workspaceTools.folder()?.name;
-  return replyNameRepair(collectNames(sources, folder ? [folder] : []), model)(text);
+  const names = collectNames(sources, folder ? [folder] : []);
+  return names.length ? replyNameRepair(names, model) : null;
 }
 // The same repair for text while it streams in (lib/progress.cjs), from what the request says.
 function streamingRepair(input, folderName) {
@@ -371,7 +376,7 @@ const toolLoop = createToolLoop({
   provider,
   mcp: combineToolSources({ builtins: builtinsFor, mcp, serverName: mcpServerName }),
   approve: requestToolApproval,
-  restoreText: restoreReplyText,
+  restorer: replyRestorer,
   // Coding work takes many steps (read, edit, run the tests, fix); Stop cancels at any point.
   maxRounds: 25
 });
@@ -392,6 +397,21 @@ const chatSessions = new Set();
 // Chat requests in progress, by request id: whether Stop came before the tool loop started, and
 // the folder the request works in (named in its approval prompts).
 const chatRequests = new Map();
+
+/**
+ * The window that started the replies reloaded, crashed or closed: nobody is left to watch them,
+ * answer their approvals or press Stop, so every reply stops as if Stop was pressed (its tools
+ * too: a running command is ended with the reply's folder session), and so does every image or
+ * video generation, whose result the new page could not show.
+ */
+function stopWindowWork() {
+  denyAllApprovals();
+  for (const [requestId, tracked] of chatRequests) {
+    tracked.stopped = true;
+    toolLoop.cancel(requestId);
+  }
+  mediaStudio.closeAll();
+}
 
 /** The previous reply's to-do list, for the instructions, when something on it is still open. */
 function todoNote(todos) {
@@ -876,6 +896,22 @@ const MAX_COMPACT_MESSAGES = 400;
 const MAX_COMPACT_MESSAGE_BYTES = 64 * 1024;
 const MAX_COMPACT_BYTES = 512 * 1024;
 const MAX_COMPACT_SUMMARY = 8_000;
+const SUMMARY_CUT_NOTE = '\n\n[Summary shortened to 8,000 characters; the rest was left out.]';
+/**
+ * A summary over the limit is shortened, not refused: it was billed, and refusing it would leave
+ * automatic compaction unable to make room, so the task could never send again. It is cut at the
+ * end of a line (or else between words) and says so.
+ */
+function fitSummary(summary) {
+  if (summary.length <= MAX_COMPACT_SUMMARY) return summary;
+  const room = MAX_COMPACT_SUMMARY - SUMMARY_CUT_NOTE.length;
+  const head = summary.slice(0, room);
+  const line = head.lastIndexOf('\n');
+  const word = head.search(/\s\S*$/);
+  const cut = line >= room / 2 ? line : (word >= room / 2 ? word : room);
+  // Never half of a character written as two UTF-16 units.
+  return `${head.slice(0, cut).replace(/[\uD800-\uDBFF]$/, '').trimEnd()}${SUMMARY_CUT_NOTE}`;
+}
 function compactInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw bridgeError('INVALID_COMPACTION', 'A conversation is required to compact it.');
   const requestId = input.requestId;
@@ -1021,11 +1057,14 @@ const providerChannels = {
     const { requestId, messages } = compactInput(input);
     await shellPathReady;
     const result = await provider.send({ requestId, messages, systemPrompt: COMPACT_SYSTEM_PROMPT });
-    const summary = typeof result.text === 'string' ? result.text.trim() : '';
-    if (!summary || summary.length > MAX_COMPACT_SUMMARY) {
-      throw bridgeError('COMPACTION_FAILED', 'The provider did not return a short enough conversation summary.');
-    }
+    // Billed whatever the summary is like: a failure carries what it cost too (wrap()).
     const metrics = createMetrics(result);
+    const summary = fitSummary(typeof result.text === 'string' ? result.text.trim() : '');
+    if (!summary) {
+      const error = bridgeError('COMPACTION_FAILED', 'The provider did not return a conversation summary.');
+      if (metrics) error.publicMetrics = metrics;
+      throw error;
+    }
     return { summary, model: result.model, ...(metrics ? { metrics } : {}) };
   },
   'provider:set-model': (_event, input) => provider.setModel(input),
@@ -1455,7 +1494,8 @@ app.whenReady().then(() => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // Not while the app is shutting down (will-quit waits for the MCP servers).
+    if (!quitting && BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 }).catch((error) => {
   console.error('[ScaleMax] Startup failed:', error);
@@ -1465,16 +1505,32 @@ app.whenReady().then(() => {
 // MCP stdio servers run in their own process groups; stop them with the app. `will-quit` comes
 // after every window agreed to close: a quit the user cancels (unsaved editor tabs) must leave
 // the workspace, replies, commands and servers exactly as they were.
-app.on('will-quit', () => {
+// Closing MCP servers takes time (a stdio server gets SIGTERM, then SIGKILL after 2 s; an HTTP
+// session gets its DELETE), so the first will-quit holds the quit until they are closed, at most
+// MCP_CLOSE_WAIT_MS, and then quits again; the second will-quit lets it through.
+const MCP_CLOSE_WAIT_MS = 3_500;
+let quitting = false;
+app.on('will-quit', (event) => {
+  if (quitting) return;
+  quitting = true;
+  event.preventDefault();
   cliConnect.closeAll();
   mediaStudio.closeAll();
-  void mcp.closeAll();
+  const closing = mcp.closeAll().catch((error) => {
+    console.error('[ScaleMax] MCP servers could not all be closed:', error?.message);
+  });
   // Commands run in their own process group and would outlive the app: end them, and the
   // background commands too.
   for (const session of [...chatSessions]) session.dispose();
   chatSessions.clear();
   workspace?.dispose();
   jobs.stopAll();
+  let timer = null;
+  void Promise.race([closing, new Promise((resolve) => { timer = setTimeout(resolve, MCP_CLOSE_WAIT_MS); })])
+    .finally(() => {
+      clearTimeout(timer);
+      app.quit();
+    });
 });
 
 app.on('window-all-closed', () => {

@@ -13,7 +13,8 @@ let started = null;
 const inFlight = new WeakSet();
 
 // A one-shot schedule is exhausted once it fires; every other schedule rolls
-// forward to its next occurrence.
+// forward to its next occurrence (an interval from the slot that came due, so
+// it keeps its rhythm instead of drifting with the poll).
 function advance(automation, afterMs) {
   if (automation.schedule === 'once') {
     automation.active = false;
@@ -21,7 +22,7 @@ function advance(automation, afterMs) {
     return;
   }
   try {
-    automation.nextRun = nextRunAt(automation, afterMs);
+    automation.nextRun = nextRunAt(automation, afterMs, { from: automation.nextRun });
   } catch (error) {
     // A schedule that cannot produce a future occurrence is paused, not retried forever.
     automation.active = false;
@@ -89,7 +90,10 @@ function outputTask(app, automation) {
 
 function appendOutput(app, automation, data) {
   const { task, title } = outputTask(app, automation);
-  app.appendMessage('user', automation.prompt, task.id);
+  // Made without a folder, it ran with no folder at all: its task is not tied to whichever folder
+  // happens to be open (appendMessage would otherwise fix it there).
+  const unbound = 'folder' in automation && !automation.folder;
+  app.appendMessage('user', automation.prompt, task.id, unbound ? { bindFolder: false } : {});
   // What the run did on the way and what it changed, like any reply (steps and the changes card).
   app.appendMessage('assistant', String(data?.text ?? ''), task.id, {
     tools: data?.toolCalls, steps: data?.steps, changes: data?.changes, metrics: data?.metrics,
@@ -169,7 +173,6 @@ async function runAutomation(app, automation, { manual = false } = {}) {
 
 export function startScheduler(app) {
   if (started) return started;
-  let running = false;
   let timer = null;
   const win = typeof window === 'undefined' ? null : window;
   const doc = typeof document === 'undefined' ? null : document;
@@ -188,19 +191,21 @@ export function startScheduler(app) {
     return claimed;
   }
 
+  // Every check claims what is due and starts it at once, also while earlier
+  // runs are still working: a slow run must not hold back the others. One that
+  // is still in flight is never claimed again (claimDue), so the same
+  // automation never runs twice at a time.
   async function check() {
-    if (running) return;
-    running = true;
-    try {
-      for (const automation of claimDue(Date.now())) {
-        try {
-          await runAutomation(app, automation);
-        } catch (error) {
-          console.warn('[scheduler] Automation run failed:', error);
-        }
+    const runs = claimDue(Date.now()).map(async (automation) => {
+      try {
+        await runAutomation(app, automation);
+      } catch (error) {
+        console.warn('[scheduler] Automation run failed:', error);
       }
+    });
+    try {
+      await Promise.all(runs);
     } finally {
-      running = false;
       updateStatus(app);
     }
   }
@@ -220,6 +225,9 @@ export function startScheduler(app) {
     void app.persist('automations');
     catchUpDone = (async () => {
       for (const automation of missed) {
+        // Already run since start-up (its next slot came due while an earlier
+        // catch-up was still working, and check() ran it): that was its run.
+        if (Number.isFinite(automation.lastRun) && automation.lastRun >= start) continue;
         try {
           await runAutomation(app, automation);
         } catch (error) {

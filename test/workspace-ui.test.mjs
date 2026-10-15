@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  extOf, languageFor, languageLabel, tokenize, cursorPosition, indentLines, visibleTreeRows,
+  extOf, languageFor, languageLabel, tokenize, cursorPosition, indentLines, visibleTreeRows, refreshedTree,
 } from '../src/workspace-ui.js';
 
 const LANGUAGES = ['javascript', 'typescript', 'json', 'css', 'html', 'markdown', 'python', 'shell', 'yaml', 'toml', 'plain'];
@@ -124,4 +124,19 @@ test('visible tree rows follow expansion and filtering', () => {
   assert.deepEqual(paths(visibleTreeRows(files, { tree, query: 'APP' })), ['0:src', '1:src/app.js']);
   assert.deepEqual(paths(visibleTreeRows(files, { tree, query: 'readme' })), ['0:README.md']);
   assert.deepEqual(visibleTreeRows(files, { tree, query: 'zzz' }), []);
+});
+
+test('a refresh keeps the open folders open, closes the ones that are gone', () => {
+  const fresh = [{ name: 'new.js', path: 'src/new.js', type: 'file' }];
+  const loaded = [{ name: 'later.js', path: 'lib/later.js', type: 'file' }];
+  const { expanded, tree } = refreshedTree(
+    new Set(['src', 'gone', 'lib', 'never-loaded']),
+    new Map([['src', fresh], ['gone', null]]),
+    { src: [{ name: 'old.js', path: 'src/old.js', type: 'file' }], gone: [], lib: loaded, closed: [] },
+  );
+  // src read again; gone closed; lib opened while the listings were read keeps what it loaded;
+  // a closed folder's cached listing is dropped.
+  assert.deepEqual([...expanded], ['src', 'lib']);
+  assert.deepEqual(tree, { src: fresh, lib: loaded });
+  assert.deepEqual(refreshedTree(new Set(), new Map(), { src: [] }), { expanded: new Set(), tree: {} });
 });

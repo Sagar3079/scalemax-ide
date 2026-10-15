@@ -272,6 +272,36 @@ test('interval adds N minutes and validates the range', () => {
   assert.throws(() => nextRunAt({ schedule: 'interval', intervalMinutes: 0 }, 1), RangeError);
 });
 
+test('an interval steps from the slot that came due, skipping the ones that passed', () => {
+  const every15 = { schedule: 'interval', intervalMinutes: 15 };
+  const slot = 10_000_000;
+  // Noticed 20 s late by the poll: the next run is still one interval after the slot.
+  assert.equal(nextRunAt(every15, slot + 20_000, { from: slot }), slot + 15 * 60000);
+  // Exactly on time, and 40 minutes late (two slots passed): the next slot on the same grid.
+  assert.equal(nextRunAt(every15, slot, { from: slot }), slot + 15 * 60000);
+  assert.equal(nextRunAt(every15, slot + 40 * 60000, { from: slot }), slot + 45 * 60000);
+  assert.equal(nextRunAt(every15, slot + 45 * 60000, { from: slot }), slot + 60 * 60000);
+  // No usable slot (missing, or in the future): from the time given, as before.
+  assert.equal(nextRunAt(every15, slot, { from: null }), slot + 15 * 60000);
+  assert.equal(nextRunAt(every15, slot, { from: slot + 1 }), slot + 15 * 60000);
+  // Other schedules ignore it.
+  assert.equal(nextRunAt({ schedule: 'once', runAt: 5000, time: '09:00' }, 1000, { from: 10 }), 5000);
+});
+
+test('a reply cut off by the window closing reaches the model with its own note', async () => {
+  const { historyMessages, INTERRUPTIONS } = await import('../src/domain.mjs');
+  assert.ok(INTERRUPTIONS.includes('closed'));
+  const turns = historyMessages([
+    { role: 'user', text: 'Write the report.' },
+    { role: 'assistant', text: 'The report starts', interrupted: 'closed', steps: [{ type: 'tool', title: 'Read notes.md', ok: true }] },
+  ]);
+  assert.deepEqual(turns, [
+    { role: 'user', content: 'Write the report.' },
+    { role: 'assistant', content: 'The report starts' },
+    { role: 'user', content: '[Note from ScaleMax, the app: the app window was closed or reloaded while you were writing your previous reply, so it ends where the window went away. It had already done this: Read notes.md.]' },
+  ]);
+});
+
 test('once returns runAt in the future and rejects a past runAt', () => {
   assert.equal(nextRunAt({ schedule: 'once', runAt: 5000, time: '09:00' }, 1000), 5000);
   assert.throws(() => nextRunAt({ schedule: 'once', runAt: 500, time: '09:00' }, 1000), /already run/);

@@ -30,7 +30,7 @@ import {
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
   bindWorkspaceUi, renderTree, renderCrumb, resetCrawl, openFileInTab, saveActiveTab, resetTabs,
-  activeTabContent, updateGutter, showPanel, setGitDecorations,
+  activeTabContent, updateGutter, showPanel, setGitDecorations, reloadTabs, refreshedTree,
 } from './workspace-ui.js';
 
 const DEFAULTS = { ...DEFAULT_SETTINGS };
@@ -214,6 +214,12 @@ const app = {
 
   toastTimer: null,
   saveQueue: Promise.resolve(),
+  // Per store key: the newest snapshot taken (persist) and the one written at once (persistNow),
+  // so a queued older snapshot never lands after the one written while the window was going away.
+  saveVersions: {},
+  savedNow: {},
+  // Set once the window is going away (pagehide): replies still running were kept as cut off.
+  leaving: false,
 
   // scheduler.js calls app.buildSystemPrompt(settings); custom catalogs ride along.
   buildSystemPrompt(settings = this.settings) {
@@ -240,14 +246,19 @@ const app = {
     bindJobsUi(this);
     bindSpecsUi(this);
     bindComposerContext(this);
-    // Quitting, closing or reloading with unsaved editor tabs is held back; main then asks
-    // whether to discard them (will-prevent-unload in main.js).
+    // Quitting, closing or reloading with unsaved editor tabs, or while a reply (or the compaction
+    // before one) is still working, is held back; main then asks whether to discard them
+    // (will-prevent-unload in main.js).
     window.addEventListener('beforeunload', (event) => {
       const dirty = this.workspace?.dirty || (Array.isArray(this.workspace?.tabs) && this.workspace.tabs.some((tab) => tab.dirty));
-      if (!dirty) return;
+      if (!dirty && !this.replies.size && !this.compactingTasks.size) return;
       event.preventDefault();
       event.returnValue = '';
     });
+    // The window goes away after all: what running replies wrote and did stays in their tasks.
+    window.addEventListener('pagehide', () => this.keepRunningReplies());
+    // A page brought back from the back/forward cache can send again.
+    window.addEventListener('pageshow', (event) => { if (event.persisted) this.leaving = false; });
     this.bindProfiles();
     await this.restoreWorkspace();
     await this.settleStartFolder();
@@ -285,8 +296,11 @@ const app = {
 
   persist(key) {
     const snapshot = JSON.parse(JSON.stringify(this[key]));
+    const version = (this.saveVersions[key] = (this.saveVersions[key] || 0) + 1);
     // Queue snapshots so rapid edits cannot finish writing out of order.
     this.saveQueue = this.saveQueue.then(async () => {
+      // A newer snapshot of this key was already written at once (persistNow).
+      if (version <= (this.savedNow[key] || 0)) return;
       const bridge = window.scalemaxAPI;
       try {
         if (bridge?.store?.set) {
@@ -308,6 +322,20 @@ const app = {
       }
     });
     return this.saveQueue;
+  },
+
+  // Writes `key` straight away, outside the queue: the window is going away, and a queued save
+  // waiting for an earlier one may never get its turn. Older snapshots still queued are dropped.
+  persistNow(key) {
+    const version = (this.saveVersions[key] = (this.saveVersions[key] || 0) + 1);
+    this.savedNow[key] = version;
+    const snapshot = JSON.parse(JSON.stringify(this[key]));
+    try {
+      const pending = window.scalemaxAPI?.store?.set?.(key, snapshot);
+      if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+    } catch (error) {
+      console.warn(`[app] Could not save ${key}:`, error);
+    }
   },
 
   async loadState() {
@@ -1126,15 +1154,46 @@ const app = {
   async refreshWorkspace() {
     const bridge = this.workspaceBridge();
     if (!bridge || !this.workspace.root) return;
+    const root = this.workspace.root;
     const result = await bridge.list();
-    if (result?.ok) {
-      // Keep the open tabs; drop cached folder contents so the tree reloads.
-      this.workspace.tree = {};
-      if (this.workspace.expanded) this.workspace.expanded.clear();
-      resetCrawl();
-      this.applyWorkspace(result.data);
-      void this.refreshGit({ quiet: true });
-    }
+    if (!result?.ok) return;
+    // Keep the open tabs and the open folders: each open folder's contents are read again (one
+    // that is gone closes), the cached contents of closed ones are dropped.
+    const open = [...(this.workspace.expanded || [])];
+    const listings = new Map(await Promise.all(open.map(async (path) => {
+      let listing = null;
+      try {
+        listing = await bridge.list(path);
+      } catch {
+        listing = null;
+      }
+      return [path, listing?.ok && Array.isArray(listing.data?.files) ? listing.data.files : null];
+    })));
+    // Another folder opened meanwhile: its own listing is already on screen.
+    if (this.workspace.root !== root) return;
+    const { expanded, tree } = refreshedTree(this.workspace.expanded || new Set(), listings, this.workspace.tree);
+    this.workspace.expanded = expanded;
+    this.workspace.tree = tree;
+    resetCrawl();
+    this.applyWorkspace(result.data);
+    void this.refreshGit({ quiet: true });
+  },
+
+  // A reply worked in the folder that is open: the tree and Git status reload, and open editor
+  // tabs of the files it changed are read again from disk (every open tab after a command, which
+  // can change any file without it being recorded). Tabs with unsaved edits keep them
+  // (reloadTabs), so saving one still reports the conflict.
+  showReplyChanges(folder, { changes = null, steps = [], notes = false } = {}) {
+    if (!folder || folder !== this.workspace.root) return;
+    const changed = (normalizeChanges(changes)?.files || []).map((file) => file.path);
+    const workspaceSteps = (Array.isArray(steps) ? steps : []).filter((step) => step?.server === 'Workspace');
+    const wrote = workspaceSteps.some((step) => ['write_file', 'edit_file'].includes(step.tool));
+    const ran = workspaceSteps.some((step) => step.tool === 'run_command');
+    if (!changed.length && !wrote && !ran && !notes) return;
+    void this.refreshWorkspace();
+    const tabs = ran || (wrote && !changed.length) ? (this.workspace.tabs || []).map((tab) => tab.path) : [];
+    const paths = [...new Set([...changed, ...tabs])];
+    if (paths.length) void reloadTabs(this, paths);
   },
 
   applyWorkspace(data) {
@@ -1790,15 +1849,18 @@ const app = {
     this.renderTasks();
   },
 
+  // Returns true once the message is in the task, false when the task no longer exists.
   appendMessage(role, text, taskId = this.currentTaskId, extra = {}) {
     const task = this.tasks.find((item) => item.id === taskId);
-    if (!task) { this.showToast('That task no longer exists'); return; }
+    if (!task) { this.showToast('That task no longer exists'); return false; }
     if (role === 'user' && !task.messages.some((message) => message.role === 'user')) {
       task.title = text.length > 40 ? `${text.slice(0, 40)}…` : text;
     }
     // A message fixes the task to its folder: its draft, else the open one (a chat from before
     // tasks had folders is bound by its next message). Selecting the task later opens it again.
-    if (role === 'user' && !task.folder && this.workspace.root) task.folder = this.rootFolder();
+    // `bindFolder: false`: the run of an automation made without a folder (src/scheduler.js),
+    // which worked in no folder at all.
+    if (role === 'user' && !task.folder && this.workspace.root && extra.bindFolder !== false) task.folder = this.rootFolder();
     const message = { role, text, time: Date.now() };
     const tools = normalizeToolSummaries(extra.tools);
     if (tools.length) message.tools = tools;
@@ -1832,6 +1894,7 @@ const app = {
       // The first message locks the folder chip.
       this.renderFolder();
     }
+    return true;
   },
 
   // One app-owned, no-tools request summarizes old history. It is deliberately separate from
@@ -1937,33 +2000,39 @@ const app = {
     return false;
   },
 
-  async handleSend() {
+  // `internal`: a message the app writes itself ("/init" from the folder menu, "Run this plan").
+  // It is always a chat message, and the pictures and attachment waiting in the message box stay
+  // there for the user's own next message. Resolves to true when the message was added to the
+  // task (after the provider's reply ended), false when nothing was sent.
+  async handleSend({ internal = false } = {}) {
     const input = $('#chat-input');
     const text = input?.value.trim();
-    if (!text || this.activeRequestId || this.demoBusy || this.compactingTasks.has(this.currentTaskId)) return;
+    if (!text || this.activeRequestId || this.demoBusy || this.compactingTasks.has(this.currentTaskId)) return false;
     // A picture still being added goes with this message, not silently with the next one.
-    if (composerBusy()) {
+    if (!internal && composerBusy()) {
       this.showToast('The picture is still being added. Send again in a moment.');
-      return;
+      return false;
     }
     const taskId = this.currentTaskId;
     const task = this.tasks.find((item) => item.id === taskId);
-    if (!task) return;
+    if (!task) return false;
     // Taken before any wait: "/init" from the folder menu swaps the draft and the attachment
     // around this call (src/composer-ui.js).
-    const attachment = this.attachment;
+    const attachment = internal ? null : this.attachment;
     // No chat without a folder, and a task only sends from its own folder.
     if (taskFolderStatus(task, this.workspace.root) === 'none') {
       this.showToast('Choose a project folder first.');
       this.focusFolderChoice();
-      return;
+      return false;
     }
     if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
       const outcome = await this.openTaskFolder(task);
+      // Deleted while its folder opened: nothing is sent for a task that is gone.
+      if (!this.tasks.includes(task) || this.leaving) return false;
       if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.activeRequestId || this.demoBusy) {
         // The switch already said why when it was refused or failed.
         if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
-        return;
+        return false;
       }
     }
     // The reply works in this folder, through a session of its own in main, even if another
@@ -1974,31 +2043,34 @@ const app = {
       const compacted = await this.compactCurrentTask();
       if (compacted && input.value.trim() === text) input.value = '';
       this.updateSendEnabled();
-      return;
+      return false;
     }
     // Image / video mode: the text is the prompt for the selected generation model.
-    if (mediaMode(this)) {
+    if (!internal && mediaMode(this)) {
       if (input.value.trim() === text) input.value = '';
       this.updateSendEnabled();
       const sent = await generateFromComposer(this, text, taskId);
       if (!sent && !input.value.trim()) input.value = text;
       this.updateSendEnabled();
-      return;
+      return Boolean(sent);
     }
     const bridge = this.getProviderBridge();
     // Check automatic compaction against this pending user text before it is persisted/cleared.
     // If compaction fails, the exact draft remains in the composer and no hidden task turn exists.
-    if (bridge?.send && this.provider?.configured && !(await this.compactIfNeeded(task, text))) return;
+    if (bridge?.send && this.provider?.configured && !(await this.compactIfNeeded(task, text))) return false;
+    // Deleted while older context was compacted: a reply started now could neither be seen nor
+    // stopped, so nothing is sent and the draft stays in the message box.
+    if (!this.tasks.includes(task) || this.leaving) return false;
     // Pictures waiting in the message box go with this message (src/context-ui.js).
-    const context = takeComposerContext(this);
-    this.appendMessage('user', text, taskId, { images: context.images });
+    const context = internal ? { images: [] } : takeComposerContext(this);
+    if (!this.appendMessage('user', text, taskId, { images: context.images })) return false;
     // Only the sent text is cleared; "/init" puts the user's draft back itself.
     if (input.value.trim() === text) input.value = '';
     this.updateSendEnabled();
 
     if (!bridge?.send || !this.provider?.configured) {
       // No provider yet — keep the workspace demoable with a labelled reply.
-      if (this.demoBusy) return;
+      if (this.demoBusy) return true;
       this.demoBusy = true;
       this.updateSendEnabled();
       window.setTimeout(() => {
@@ -2006,7 +2078,7 @@ const app = {
         this.demoBusy = false;
         this.updateSendEnabled();
       }, 400);
-      return;
+      return true;
     }
 
     // The reply shows at once; the task can be left while it works (the sidebar shows a spinner).
@@ -2077,8 +2149,9 @@ const app = {
       result = { ok: false, error: { message: error?.message || 'Provider request failed' } };
     }
     const reply = this.endReply(taskId, requestId, { quiet: true }) || live;
-    // The task was deleted while it worked (its reply was stopped then): nothing to show.
-    if (!this.tasks.some((item) => item.id === taskId)) return;
+    // The task was deleted while it worked (its reply was stopped then): nothing to show. The
+    // window is going away: keepRunningReplies already kept this reply as far as it got.
+    if (!this.tasks.some((item) => item.id === taskId) || this.leaving) return true;
     if (!result?.ok) {
       // Stopped or failed part way: what was written and done so far stays in the task.
       const cancelled = result?.error?.code === 'CANCELLED';
@@ -2101,6 +2174,7 @@ const app = {
           if (partial) partial.changes = recorded.data || null;
         }
         if (partial && !partial.text && !partial.steps.length && !partial.reasoning && !partial.changes && !failureMetrics) partial = null;
+        if (!this.tasks.includes(task) || this.leaving) return true;
       }
       // A provider can have billed completed tool rounds even when the next round failed before
       // producing visible text. Keep an explicit partial reply with its incomplete accounting.
@@ -2119,11 +2193,9 @@ const app = {
         if (taskId === this.currentTaskId) this.renderChat();
         say(cancelled ? 'Response cancelled' : reason);
       }
-      if (folder === this.workspace.root && (partial?.changes || partial?.steps.some((step) => step.server === 'Workspace'
-        && ['write_file', 'edit_file', 'run_command'].includes(step.tool)))) {
-        void this.refreshWorkspace();
-      }
-      return;
+      // A stopped step may still have changed files, so every Workspace step counts here.
+      this.showReplyChanges(folder, { changes: partial?.changes, steps: partial?.steps });
+      return true;
     }
     // Model time only (tool runs and approvals excluded); plain sends report the whole wait.
     const thinkingMs = Number.isSafeInteger(result.data.thinkingMs) ? result.data.thinkingMs : Date.now() - startedAt;
@@ -2144,15 +2216,13 @@ const app = {
       } : {}),
     });
     // The model changed files or ran a command in the folder that is open (or main created the
-    // notes): reload the tree and Git status.
+    // notes): reload the tree, Git status and the open tabs of what changed.
     const calls = Array.isArray(result.data.toolCalls) ? result.data.toolCalls : [];
-    if (folder === this.workspace.root && (notes || calls.some((call) => call?.server === 'Workspace' && call.ok
-      && ['write_file', 'edit_file', 'run_command'].includes(call.tool)))) {
-      void this.refreshWorkspace();
-    }
+    this.showReplyChanges(folder, { changes: result.data.changes, steps: calls.filter((call) => call?.ok), notes: Boolean(notes) });
     // A broken MCP server never blocks the reply, but the user should know.
     const toolError = Array.isArray(result.data.toolErrors) ? result.data.toolErrors[0] : null;
     if (toolError?.message) say(`MCP${toolError.serverId ? ` ${toolError.serverId}` : ''}: ${toolError.message}`);
+    return true;
   },
 
   // Stop: ends the reply of the task on screen; replies of other tasks keep working.
@@ -2193,6 +2263,35 @@ const app = {
     else if (reply.sent) void this.getProviderBridge()?.cancel?.(reply.requestId);
     this.endReply(taskId, reply.requestId, { quiet: true });
     this.unreadTasks.delete(taskId);
+  },
+
+  /**
+   * The window is going away (closed, reloaded, quitting) while replies still run: main ends them
+   * with the window, so what each had written and done so far stays in its task, marked as cut off
+   * ('closed': the next request tells the model, the reply shows why). Written straight away,
+   * since a queued save would not get its turn.
+   */
+  keepRunningReplies() {
+    if (this.leaving) return;
+    this.leaving = true;
+    if (!this.replies.size) return;
+    for (const reply of [...this.replies.values()]) {
+      const { taskId } = reply;
+      this.endReply(taskId, reply.requestId, { quiet: true });
+      if (!this.tasks.some((item) => item.id === taskId)) continue;
+      if (reply.kind === 'media') {
+        this.appendMessage('assistant', 'Generation stopped: the window was closed or reloaded before it finished.', taskId);
+        continue;
+      }
+      const partial = partialReply(reply) || { text: '', steps: [], reasoning: '', changes: null, todos: [] };
+      this.appendMessage('assistant', partial.text, taskId, {
+        steps: partial.steps, reasoning: partial.reasoning, changes: partial.changes, todos: partial.todos,
+        interrupted: 'closed',
+        notice: partial.text ? 'The window was closed or reloaded before the reply was finished.'
+          : 'The window was closed or reloaded before an answer was written.',
+      });
+    }
+    this.persistNow('tasks');
   },
 
   // Pulls live repo data through a connected GitHub connector. Returns a

@@ -27,14 +27,23 @@ function fakeApp({ automations = [], send, settings = {} } = {}) {
     renderChat() {},
     showToast(message) { this.toasts.push(message); },
     makeTask(title) { return { id: `t-${this.tasks.length + 1}`, title, messages: [], createdAt: 0, updatedAt: 0 }; },
-    appendMessage(role, text, taskId) {
+    // Like src/app.js: a user message fixes a task without a folder to the open one, unless the
+    // caller says not to.
+    workspace: { root: '' },
+    appendMessage(role, text, taskId, extra = {}) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (role === 'user' && !task.messages.some((m) => m.role === 'user')) task.title = text;
+      if (role === 'user' && !task.folder && this.workspace.root && extra.bindFolder !== false) {
+        task.folder = { name: this.workspace.root.split('/').pop(), path: this.workspace.root };
+      }
       task.messages.push({ role, text, time: Date.now() });
+      return true;
     },
   };
   return app;
 }
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 function automation(overrides = {}) {
   return {
@@ -179,4 +188,86 @@ test('an automation from before folders were remembered keeps the open folder', 
   await scheduler.ready;
   await scheduler.runNow('a1');
   assert.equal('folder' in app.sent[0], false, 'no folder in the request: main uses the open one');
+});
+
+test('an interval schedule keeps its rhythm instead of drifting with the poll', async (t) => {
+  const now = Date.now();
+  const due = now - 1000;
+  const missed = now - 25 * 60000;
+  const app = fakeApp({
+    automations: [
+      automation({ schedule: 'interval', intervalMinutes: 10, nextRun: due }),
+      automation({ id: 'a2', schedule: 'interval', intervalMinutes: 10, nextRun: missed }),
+    ],
+  });
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.checkNow();
+  await tick();
+  // Stepped from the slot that came due, not from when the poll noticed it.
+  assert.equal(app.automations[0].nextRun, due + 10 * 60000);
+  // Slots that passed meanwhile are skipped (one run), and the next one stays on the grid.
+  assert.equal(app.automations[1].nextRun, missed + 30 * 60000);
+  assert.equal(app.sent.length, 2);
+});
+
+test('a run that comes due while another runs starts at once, never twice for the same automation', async (t) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const app = fakeApp({
+    automations: [automation({ nextRun: Date.now() - 1000 }), automation({ id: 'a2', name: 'Other', nextRun: Date.now() + 3600000 })],
+    send: async (payload) => {
+      if (payload.requestId.startsWith('automation-a1-')) await gate;
+      return { ok: true, data: { text: 'done' } };
+    },
+  });
+  const scheduler = startScheduler(app); // the startup check starts a1, which keeps working
+  t.after(() => scheduler.stop());
+  await tick();
+  app.automations[1].nextRun = Date.now() - 1;
+  app.automations[0].nextRun = Date.now() - 1; // due again while its first run still works
+  await scheduler.checkNow();
+  assert.equal(app.automations[1].lastStatus, 'success', 'a2 ran while a1 was still working');
+  assert.deepEqual(app.sent.map((payload) => payload.requestId.split('-')[1]), ['a1', 'a2']);
+  release();
+  await tick();
+  await scheduler.checkNow();
+  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a1-')).length, 2,
+    'a1 runs again only once its first run ended');
+});
+
+test('start-up catch-up skips an automation check() already ran since start-up', async (t) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const now = Date.now();
+  const app = fakeApp({
+    automations: [
+      automation({ pendingCatchUp: true, nextRun: now + 3600000 }),
+      // Its next slot is due while the first catch-up still works, so check() runs it.
+      automation({ id: 'a2', name: 'Other', pendingCatchUp: true, nextRun: now - 1 }),
+    ],
+    send: async (payload) => {
+      if (payload.requestId.startsWith('automation-a1-')) await gate;
+      return { ok: true, data: { text: 'done' } };
+    },
+  });
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await tick();
+  release();
+  await scheduler.ready;
+  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a2-')).length, 1);
+  assert.equal(app.sent.filter((payload) => payload.requestId.startsWith('automation-a1-')).length, 1);
+});
+
+test('the task of an automation made without a folder is not tied to the open folder', async (t) => {
+  const app = fakeApp({ automations: [automation({ folder: null }), automation({ id: 'a2', name: 'Legacy' })] });
+  app.workspace.root = '/Users/you/open';
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.runNow('a1');
+  await scheduler.runNow('a2');
+  assert.equal(app.tasks.find((task) => task.automationId === 'a1').folder, undefined);
+  // Made before automations remembered their folder: it ran in the open folder, as before.
+  assert.equal(app.tasks.find((task) => task.automationId === 'a2').folder.path, '/Users/you/open');
 });

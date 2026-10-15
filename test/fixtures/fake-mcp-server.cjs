@@ -7,7 +7,10 @@
 //   FAKE_MCP_CRASH=1        write 'boom' (plus FAKE_MCP_LEAK when set) to stderr and exit(3)
 //   FAKE_MCP_PAGINATE=1     return the two tools on two tools/list pages via nextCursor
 //   FAKE_MCP_ECHO_PREFIX=x  prefix echo output (proves configured env reaches the child)
-//   FAKE_MCP_HUGE_LINE=1    write an unterminated stdout line larger than 4 MiB
+//   FAKE_MCP_HUGE_LINE=1    write a stdout line larger than 4 MiB at startup; echo of "huge"
+//                           (id first) or "huge-last" (id last, like the TypeScript SDK)
+//                           answers with a line larger than 4 MiB
+//   FAKE_MCP_STUBBORN=1     ignore SIGTERM and the end of stdin (only SIGKILL stops it)
 
 if (process.env.FAKE_MCP_CRASH === '1') {
   const leak = process.env.FAKE_MCP_LEAK ? ` ${process.env.FAKE_MCP_LEAK}` : '';
@@ -62,6 +65,12 @@ function listTools(id, params) {
 function callTool(id, params) {
   const name = params && params.name;
   const args = (params && params.arguments) || {};
+  if (name === 'echo' && process.env.FAKE_MCP_HUGE_LINE === '1' && (args.text === 'huge' || args.text === 'huge-last')) {
+    const content = [{ type: 'text', text: 'y'.repeat(5 * 1024 * 1024) }];
+    if (args.text === 'huge') result(id, { content });
+    else process.stdout.write(`${JSON.stringify({ result: { content }, jsonrpc: '2.0', id })}\n`);
+    return;
+  }
   if (name === 'echo') {
     const prefix = process.env.FAKE_MCP_ECHO_PREFIX || '';
     result(id, { content: [{ type: 'text', text: `${prefix}${String(args.text ?? '')}` }] });
@@ -122,12 +131,17 @@ process.stdin.on('data', (chunk) => {
     index = buffer.indexOf('\n');
   }
 });
-process.stdin.on('end', () => process.exit(0));
+if (process.env.FAKE_MCP_STUBBORN === '1') {
+  process.on('SIGTERM', () => {});
+  setInterval(() => {}, 1000);
+} else {
+  process.stdin.on('end', () => process.exit(0));
+}
 
 // Startup noise that a client must tolerate: a non-JSON stdout line and a
 // diagnostic stderr line.
 process.stdout.write('fake-mcp starting up (this line is not JSON)\n');
 process.stderr.write('fake-mcp: log line on stderr\n');
 if (process.env.FAKE_MCP_HUGE_LINE === '1') {
-  process.stdout.write('x'.repeat(5 * 1024 * 1024));
+  process.stdout.write(`${'x'.repeat(5 * 1024 * 1024)}\n`);
 }

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { createJobManager } = require('../lib/jobs.cjs');
-const { commandLine, cleanOutput, shellArgv } = require('../lib/commands.cjs');
+const { commandLine, cleanOutput, shellArgv, watchTerminalGroup } = require('../lib/commands.cjs');
 const sandbox = require('../lib/sandbox.cjs');
 const { createWorkspace } = require('../lib/workspace.cjs');
 const { createWorkspaceTools } = require('../lib/workspace-tools.cjs');
@@ -28,6 +28,16 @@ async function until(test, ms = 5000) {
   const started = Date.now();
   while (!test() && Date.now() - started < ms) await sleep(25);
   return test();
+}
+// Processes whose command line starts with `prefix` (a sleep with a duration no other test uses).
+function processes(prefix) {
+  return spawnSync('/bin/ps', ['-A', '-o', 'pid=,command=']).stdout.toString().split('\n')
+    .map((line) => line.trim()).filter((line) => line.replace(/^\d+\s+/, '').startsWith(prefix));
+}
+function killAll(prefix) {
+  for (const line of processes(prefix)) {
+    try { process.kill(Number(line.split(/\s+/)[0]), 'SIGKILL'); } catch { /* already ended */ }
+  }
 }
 
 test('terminal output is cleaned for the model: colours, CRLF, redrawn lines', () => {
@@ -66,9 +76,13 @@ test('the sandbox profile: paths only as parameters, network rules only when off
   for (const service of sandbox.DESKTOP_SERVICES) assert.match(online, new RegExp(`\\(global-name "${service.replace(/\./g, '\\.')}"\\)`));
   assert.match(offline, /mDNSResponder/);
   assert.match(online, /osascript/);
-  assert.match(online, /\(deny signal\)/);
+  assert.match(online, /\(deny signal\)\n\(allow signal \(target same-sandbox\)\)/, 'a command may signal only its own processes');
   assert.equal(/\/Users\//.test(online), false, 'no home path written into the rules');
   assert.match(online, /\.git\/hooks/);
+  // commondir points git at another folder's config and hooks; config.worktree is config.
+  assert.match(online, /"\/\.git\/commondir"/);
+  assert.match(online, /"\/\.git\/config\.worktree"/);
+  assert.match(online, /\(hooks\(\/\.\*\)\?\|config\|config\\\.worktree\|commondir\)\$/);
   assert.equal(sandbox.available({ platform: 'linux' }), false);
   assert.match(sandbox.refusalHint('zsh: operation not permitted: /etc/x'), /sandbox: false/);
   assert.equal(sandbox.refusalHint('all fine'), '');
@@ -126,6 +140,60 @@ test('inside the sandbox: the project changes, the rest of the disk and .git/hoo
   assert.ok(outside);
 });
 
+test('inside the sandbox: Git cannot be sent to other config or hooks (commondir, config.worktree)', macSandbox, async (t) => {
+  const project = folder(t, 'sm-sbx-git-');
+  const appData = folder(t, 'sm-sbx-git-appdata-');
+  for (const folderName of ['.git/hooks', '.git/modules/sub', '.git/worktrees/wt', 'vendor/lib/.git']) fs.mkdirSync(path.join(project, folderName), { recursive: true });
+  const run = (command) => {
+    const { file, args } = commandLine(command, { box: { project, network: true, appData } });
+    return spawnSync(file, args, { cwd: project, encoding: 'utf8' });
+  };
+  for (const target of ['.git/commondir', '.git/config.worktree', '.git/modules/sub/commondir', '.git/modules/sub/config.worktree',
+    '.git/worktrees/wt/commondir', 'vendor/lib/.git/commondir']) {
+    const refused = run(`echo /private/tmp/elsewhere > ${target}`);
+    assert.notEqual(refused.status, 0, target);
+    assert.match(refused.stderr, /operation not permitted/i, target);
+    assert.equal(fs.existsSync(path.join(project, target)), false, target);
+  }
+  // Under another spelling too: moved or linked into place.
+  assert.notEqual(run('echo /private/tmp/elsewhere > c.txt && mv c.txt .git/commondir').status, 0);
+  assert.notEqual(run('ln -s /private/tmp/elsewhere .git/commondir').status, 0);
+  // Ordinary files of those names elsewhere in the project stay writable.
+  assert.equal(run('echo fine > commondir').status, 0);
+
+  // Git outside the sandbox (the window's status and diff) refuses a .git folder with a commondir
+  // (made here by hand, as the sandbox no longer can).
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  await workspace.select(project);
+  fs.writeFileSync(path.join(project, '.git', 'commondir'), '/private/tmp/elsewhere\n');
+  await assert.rejects(workspace.gitStatus(), { code: 'GIT_UNSAFE' });
+  await assert.rejects(workspace.gitDiff(), { code: 'GIT_UNSAFE' });
+});
+
+test('inside the sandbox: a command can signal what it started, and nothing else', macSandbox, (t) => {
+  const project = folder(t, 'sm-sbx-signal-');
+  const appData = folder(t, 'sm-sbx-signal-appdata-');
+  const run = (command) => {
+    const { file, args } = commandLine(command, { box: { project, network: true, appData } });
+    return spawnSync(file, args, { cwd: project, encoding: 'utf8' });
+  };
+  const own = run('sleep 5 & kill $!; echo "kill=$?"; wait');
+  assert.match(own.stdout, /kill=0/, own.stderr);
+  const node = run(`node -e "const c = require('child_process').spawn('sleep', ['5']); c.on('exit', (code, signal) => console.log('ended by', signal)); c.kill()"`);
+  assert.match(node.stdout, /ended by SIGTERM/, node.stderr);
+  // Another sandboxed command (same rules, another sandbox) and anything outside stay out of reach.
+  const victim = spawn('/bin/sleep', ['10']);
+  const boxed = commandLine('exec /bin/sleep 10', { box: { project, network: true, appData } });
+  const neighbour = spawn(boxed.file, boxed.args);
+  t.after(() => { for (const child of [victim, neighbour]) { try { child.kill('SIGKILL'); } catch { /* already ended */ } } });
+  for (const pid of [victim.pid, neighbour.pid]) {
+    const refused = run(`kill ${pid}`);
+    assert.match(refused.stderr, /operation not permitted/i);
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  }
+});
+
 test('a background job runs, is read from offsets, waits, and ends with its code', async (t) => {
   const root = folder(t);
   const jobs = manager(t);
@@ -171,6 +239,45 @@ test('a job in a terminal gets a tty and answers prompts', { skip: !mac && 'uses
   assert.match(text, /tty-yes/);
   assert.match(text, /got yes/);
   assert.equal(status, 'exited');
+});
+
+test('stopping a command in a terminal ends it even when it ignores the hangup', { skip: !mac && 'uses script(1)' }, async (t) => {
+  // script(1) runs the command in a session of its own: signalling the wrapper's group used to leave
+  // a program that ignores SIGHUP (nohup, gunicorn) running after Stop, quitting and time limits.
+  t.after(() => { killAll('sleep 41.37'); killAll('sleep 41.38'); killAll('sleep 41.39'); });
+  const root = folder(t);
+  const jobs = manager(t);
+  const stopped = jobs.start({ root, command: "trap '' HUP; echo ready; sleep 41.37", tty: true });
+  await until(() => jobs.read(stopped.id).text.includes('ready') && processes('sleep 41.37').length > 0);
+  assert.equal((await jobs.stop(stopped.id, { graceMs: 500 })).status, 'stopped');
+  assert.ok(await until(() => processes('sleep 41.37').length === 0, 3000), 'Stop reached the command');
+  const quit = jobs.start({ root, command: "trap '' HUP TERM; echo ready; sleep 41.38", tty: true });
+  await until(() => jobs.read(quit.id).text.includes('ready') && processes('sleep 41.38').length > 0);
+  jobs.stopAll();
+  assert.ok(await until(() => processes('sleep 41.38').length === 0, 3000), 'quitting reached the command');
+  // A foreground command in a terminal past its time limit, too.
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  await workspace.select(root);
+  await assert.rejects(workspace.run({ command: "trap '' HUP; sleep 41.39", tty: true, timeoutMs: 1000 }), { code: 'COMMAND_TIMEOUT' });
+  assert.ok(await until(() => processes('sleep 41.39').length === 0, 3000), 'the time limit reached the command');
+});
+
+test('a terminal command reports its process group once, before the command runs', () => {
+  const { EventEmitter } = require('node:events');
+  const report = (...chunks) => {
+    const stream = Object.assign(new EventEmitter(), { destroyed: false, destroy() { this.destroyed = true; } });
+    const groups = [];
+    watchTerminalGroup({ stdio: [null, null, null, stream] }, (pid) => groups.push(pid));
+    for (const chunk of chunks) stream.emit('data', Buffer.from(chunk));
+    return { groups, destroyed: stream.destroyed };
+  };
+  assert.deepEqual(report('123', '45\n', '999\n'), { groups: [12345], destroyed: true });
+  assert.deepEqual(report('not a pid at all\n'), { groups: [], destroyed: true });
+  assert.deepEqual(report('1\n'), { groups: [], destroyed: true }, 'never init');
+  assert.doesNotThrow(() => watchTerminalGroup({}, () => assert.fail('no descriptor, no report')));
+  // The wrapper writes the report to descriptor 3 and closes it before `eval`.
+  assert.match(shellArgv('x', { platform: 'darwin', tty: true })[3], /print -r -- \$\$ >&3; \} 2>\/dev\/null; exec 3>&-; .*eval "\$1"/);
 });
 
 test('a job ends when its command ends, even if it left a program behind', async (t) => {
@@ -231,8 +338,28 @@ test('a line still being written is read again from its start; a half-written te
   jobs.write(job.id, 'q');
   assert.deepEqual(children[0].stdin.written, ['q']);
   children[0].emit('exit', 0, null);
+  children[0].emit('close', 0, null);
   assert.equal(jobs.get(job.id).status, 'exited');
   assert.equal(children[0].stdin.destroyed, true);
+});
+
+test('output that arrives after the command exited is kept; a job without "close" ends soon after "exit"', async () => {
+  const { spawnImpl, children } = fakeSpawn();
+  const jobs = createJobManager({ spawnImpl, platform: 'darwin' });
+  // An instantly failing command: its error message is read only after 'exit'.
+  const failing = jobs.start({ root: '/p', command: 'missing-program' });
+  children[0].emit('exit', 127, null);
+  assert.equal(jobs.get(failing.id).status, 'running', 'not over before its output is read');
+  children[0].stderr.emit('data', Buffer.from('zsh:1: command not found: missing-program\n'));
+  children[0].emit('close', 127, null);
+  const read = jobs.read(failing.id);
+  assert.equal(read.status, 'failed');
+  assert.equal(read.text, 'zsh:1: command not found: missing-program\n');
+  // A program left in the background keeps the output open ('close' never comes).
+  const left = jobs.start({ root: '/p', command: 'server &' });
+  children[1].emit('exit', 0, null);
+  await jobs.wait(left.id, { ms: 3000, untilEnd: true });
+  assert.equal(jobs.get(left.id).status, 'exited');
 });
 
 // ---- The model's tools --------------------------------------------------------------------

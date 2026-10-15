@@ -483,12 +483,35 @@ test('a missing command or working directory fails with a clean error', async (t
   await assert.rejects(() => mcp.listTools({ id: 'fake' }), /Working directory not found/);
 });
 
-test('a stdout line over 4 MiB fails the connection', async (t) => {
-  const { mcp, pids } = makeManager();
+test('a stdout line over 4 MiB is dropped: only the request it answered fails, the server keeps running', async (t) => {
+  const { mcp, pids, spawnCalls } = makeManager();
   t.after(() => mcp.closeAll());
   mcp.save(stdioInput({ env: { FAKE_MCP_HUGE_LINE: '1' } }));
-  await assert.rejects(() => mcp.test({ id: 'fake' }), /larger than the 4 MB limit/);
-  await waitFor(() => !isAlive(pids[0]));
+  // The oversized startup line answers nothing; initialize still works.
+  assert.equal((await mcp.test({ id: 'fake' })).ok, true);
+  for (const text of ['huge', 'huge-last']) {
+    await assert.rejects(
+      () => mcp.callTool({ id: 'fake', name: 'echo', arguments: { text } }),
+      (error) => error instanceof McpError && /larger than the 4 MB limit/.test(error.message),
+    );
+    assert.equal((await mcp.callTool({ id: 'fake', name: 'echo', arguments: { text: 'still here' } })).text, 'still here');
+  }
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(isAlive(pids[0]), true);
+  assert.equal(mcp.list()[0].connected, true);
+});
+
+test('closeAll waits for servers that were already evicted, through SIGTERM then SIGKILL', async () => {
+  const { mcp, pids } = makeManager();
+  mcp.save(stdioInput({ env: { FAKE_MCP_STUBBORN: '1' } }));
+  await mcp.listTools({ id: 'fake' });
+  // Saving again evicts the live client without waiting; the process ignores SIGTERM.
+  mcp.save(stdioInput({ id: 'fake', name: 'Renamed', env: { FAKE_MCP_STUBBORN: '1' } }));
+  assert.equal(isAlive(pids[0]), true);
+  const closing = mcp.closeAll();
+  assert.ok(closing instanceof Promise);
+  await closing;
+  assert.throws(() => process.kill(pids[0], 0), { code: 'ESRCH' });
 });
 
 test('closeAll terminates the server process', async () => {
@@ -872,7 +895,7 @@ function fakeOAuthClient({ result = signedInResult(), refreshTo = { accessToken:
   };
 }
 
-async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStore(), oauth = fakeOAuthClient(), clock } = {}) {
+async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStore(), oauth = fakeOAuthClient(), clock, onFetch } = {}) {
   const handler = protectedHandler();
   const server = await startHttpServer(handler.handle);
   t.after(() => server.close());
@@ -884,7 +907,10 @@ async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStor
     now: clock || (() => current),
     oauthClient: oauth.client,
     // The directory's https URL is served by the local fake server.
-    fetchImpl: (url, init) => fetch(String(url).replace(NOTION_URL, server.url), init),
+    fetchImpl: async (url, init) => {
+      await onFetch?.(url, init);
+      return fetch(String(url).replace(NOTION_URL, server.url), init);
+    },
   });
   t.after(() => mcp.closeAll());
   return {
@@ -983,6 +1009,47 @@ test('tokens are refreshed shortly before they expire', async (t) => {
   assert.equal(oauth.calls.refresh.length, 1);
   // Refreshed before the request: the server never saw the old token after the clock moved.
   assert.equal(handler.state.rejected, 0);
+});
+
+test('a late refresh of an old sign-in never replaces the tokens of a newer one', async (t) => {
+  const TOKEN_3 = 'oauth-access-token-three-0003';
+  const REFRESH_3 = 'oauth-refresh-token-three-0003';
+  let signedIn = signedInResult();
+  const oauth = fakeOAuthClient({ result: () => signedIn });
+  const refresh = oauth.client.refresh;
+  let finishOldRefresh = null;
+  // The first refresh hangs until the old client is evicted (its session DELETE) by the new sign-in.
+  oauth.client.refresh = async (auth, secrets) => {
+    if (!finishOldRefresh) await new Promise((resolve) => { finishOldRefresh = resolve; });
+    return refresh(auth, secrets);
+  };
+  const setup = await signInSetup(t, {
+    oauth,
+    onFetch: async (_url, init) => {
+      if (init.method !== 'DELETE' || !finishOldRefresh) return;
+      finishOldRefresh();
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+  const { mcp, store, handler } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  // The first sign-in's token is revoked: a call starts a refresh that is still running...
+  handler.state.token = 'revoked-token';
+  const call = mcp.callTool({ id: 'notion', name: 'echo', arguments: { text: 'hi' } });
+  call.catch(() => {});
+  await waitFor(() => finishOldRefresh !== null);
+  // ...when the user signs in again and gets new tokens.
+  signedIn = signedInResult({ secrets: { accessToken: TOKEN_3, refreshToken: REFRESH_3 } });
+  handler.state.token = TOKEN_3;
+  setup.setNow(1_700_000_001_000);
+  const entry = await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.equal(entry.lastStatus, 'ok');
+  assert.equal(entry.auth.signedInAt, 1_700_000_001_000);
+  assert.equal(oauth.calls.refresh.length, 1, 'only the old sign-in was refreshed');
+  assert.equal(handler.state.seen.includes(`Bearer ${TOKEN_2}`), false, 'the old refresh result was never sent');
+  assert.match((await mcp.callTool({ id: 'notion', name: 'echo', arguments: { text: 'again' } })).text, /^echo:again/);
+  const stored = JSON.parse(Buffer.from(store.snapshot().mcpServers.notion.encryptedAuth, 'base64').toString().replace(/^enc:/, ''));
+  assert.deepEqual(stored, { clientSecret: '', accessToken: TOKEN_3, refreshToken: REFRESH_3 });
 });
 
 test('renaming keeps the sign-in, changing the URL or removing the server drops it', async (t) => {

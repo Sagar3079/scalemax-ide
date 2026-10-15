@@ -699,8 +699,9 @@ export function taskMetricsLabel(task) {
     : totals.unavailablePrice ? 'Price unavailable' : '';
   return [tokens, price].filter(Boolean).join(' · ');
 }
-// A reply that ended before it was finished: 'stopped' by the user, or 'failed' on an error.
-export const INTERRUPTIONS = Object.freeze(['stopped', 'failed']);
+// A reply that ended before it was finished: 'stopped' by the user, 'failed' on an error, or
+// 'closed' when the window was closed or reloaded while it worked (src/app.js keepRunningReplies).
+export const INTERRUPTIONS = Object.freeze(['stopped', 'failed', 'closed']);
 const MAX_NOTE_STEPS = 20;
 /**
  * The conversation as the model gets it, one { role, content } per message. A reply that was
@@ -741,7 +742,9 @@ export function historyMessages(messages, { images = false, pictureNote = false 
         ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
       notes.push(message.interrupted === 'stopped'
         ? `the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.${steps}`
-        : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
+        : message.interrupted === 'closed'
+          ? `the app window was closed or reloaded while you were writing your previous reply, so it ends where the window went away.${steps}`
+          : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
     }
     if (undone.length) {
       const names = undone.slice(0, MAX_NOTE_STEPS).join(', ') + (undone.length > MAX_NOTE_STEPS ? ', …' : '');
@@ -882,7 +885,10 @@ export function normalizeTasks(value, now = Date.now()) {
   return result;
 }
 
-export function nextRunAt(automation, afterMs = Date.now()) {
+// `from`: the slot that just came due (src/scheduler.js). An interval schedule steps from it rather
+// than from when the due run was noticed, so a run found by the 30 s poll does not push every later
+// run back; slots that passed meanwhile are skipped, never queued. Other schedules ignore it.
+export function nextRunAt(automation, afterMs = Date.now(), { from = null } = {}) {
   if (!isRecord(automation) || !SCHEDULES.includes(own(automation, 'schedule'))) {
     throw new RangeError(`Schedule must be one of ${SCHEDULES.join(', ')}.`);
   }
@@ -894,7 +900,9 @@ export function nextRunAt(automation, afterMs = Date.now()) {
     if (!integerIn(own(automation, 'intervalMinutes'), MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)) {
       throw new RangeError(`Interval schedules require intervalMinutes from ${MIN_INTERVAL_MINUTES} through ${MAX_INTERVAL_MINUTES}.`);
     }
-    return afterMs + automation.intervalMinutes * 60000;
+    const step = automation.intervalMinutes * 60000;
+    if (validTimestamp(from) && from <= afterMs) return from + (Math.floor((afterMs - from) / step) + 1) * step;
+    return afterMs + step;
   }
   if (schedule === 'once') {
     const runAt = own(automation, 'runAt');

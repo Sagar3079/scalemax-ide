@@ -261,6 +261,26 @@ export function visibleTreeRows(files, { expanded = new Set(), tree = {}, query 
   return rows;
 }
 
+/**
+ * The open folders after a refresh (src/app.js refreshWorkspace): each one stays open with its
+ * listing read again (`listings`: path → entries, or null when it is gone or unreadable, which
+ * closes it). A folder opened while the listings were read keeps the one it loaded then. Closed
+ * folders lose their cached listing, so they load fresh when opened.
+ * @returns {{ expanded: Set<string>, tree: Record<string, object[]> }}
+ */
+export function refreshedTree(expanded, listings, tree = {}) {
+  const open = new Set();
+  const next = {};
+  for (const path of expanded instanceof Set ? expanded : []) {
+    const fresh = listings instanceof Map && listings.has(path) ? listings.get(path) : undefined;
+    if (Array.isArray(fresh)) next[path] = fresh;
+    else if (fresh === undefined && Array.isArray(tree?.[path])) next[path] = tree[path];
+    else continue;
+    open.add(path);
+  }
+  return { expanded: open, tree: next };
+}
+
 // ---------------------------------------------------------------------------
 // DOM layer
 // ---------------------------------------------------------------------------
@@ -675,9 +695,13 @@ function activate(app, path) {
 export async function openFileInTab(app, path) {
   const bridge = window.scalemaxAPI?.workspace;
   if (!bridge || !path) return false;
-  if (state.tabs.some((tab) => tab.path === path)) {
+  const open = state.tabs.find((tab) => tab.path === path);
+  if (open) {
     activate(app, path);
     $('#editor-input')?.focus();
+    // A clean tab shows the file as it is on disk now: a reply or a command may have changed it
+    // since it was loaded. Unsaved edits are never replaced (reloadTabs).
+    if (!open.dirty) void reloadTabs(app, [path]);
     return true;
   }
   if (state.tabs.length >= MAX_TABS) {
@@ -708,8 +732,9 @@ export async function openFileInTab(app, path) {
 }
 
 /**
- * Loads open tabs of `paths` again from disk after something else changed them there (an undo
- * of a reply's changes). Tabs with unsaved edits are left alone; a file that is gone closes.
+ * Loads open tabs of `paths` again from disk after something else changed them there (a reply,
+ * an undo of a reply's changes, a ticked spec task). Tabs with unsaved edits are left alone; a
+ * file that is gone closes.
  */
 export async function reloadTabs(app, paths) {
   const bridge = window.scalemaxAPI?.workspace;
@@ -774,9 +799,10 @@ export async function saveActiveTab(app) {
     return false;
   }
   tab.revision = result.data.revision;
-  // Edits typed while the write was in flight keep the tab dirty.
+  // Edits typed while the write was in flight keep the tab dirty, also when the user switched to
+  // another tab meanwhile (its edits were captured into tab.content then).
   const input = $('#editor-input');
-  tab.dirty = state.active === tab.path && input ? input.value !== content : false;
+  tab.dirty = (state.active === tab.path && input ? input.value : tab.content) !== content;
   renderTabs(app);
   setText('#editor-status', 'Saved.');
   app.showToast('File saved');

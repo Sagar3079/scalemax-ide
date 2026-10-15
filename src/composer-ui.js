@@ -847,8 +847,9 @@ function writeProjectNotes(app) {
   input.value = '/init';
   // Main only recognises a message that is exactly "/init", so no attachment rides along.
   app.attachment = null;
-  // handleSend takes the text and the attachment before its first await.
-  void app.handleSend();
+  // handleSend takes the text before its first await; as an internal message it leaves the
+  // pictures waiting in the message box for the user's own next message.
+  void app.handleSend({ internal: true });
   app.attachment = attachment;
   input.value = draft;
   app.updateSendEnabled();
