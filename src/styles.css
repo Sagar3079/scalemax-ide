@@ -3279,6 +3279,45 @@ input[type="range"] {
   line-height: 1.5;
 }
 
+/* Resources and prompts of an expanded server (src/mcp-ui.js renderExtras) */
+.mcp-extras-title {
+  margin: 8px 10px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sm-text-medium);
+}
+
+.mcp-extras-note {
+  margin: 6px 10px 0;
+}
+
+.mcp-resource-uri {
+  font-family: var(--sm-font-code-family);
+  font-size: 11px;
+  color: var(--sm-text-medium);
+  overflow-wrap: anywhere;
+}
+
+.mcp-prompt-args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.mcp-prompt-arg {
+  display: flex;
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--sm-text-weak);
+}
+
+.mcp-prompts .button {
+  margin-top: 4px;
+}
+
 .mcp-dialog-actions {
   margin-top: 14px;
 }

@@ -517,8 +517,8 @@
         <section id="view-automation" class="view" aria-labelledby="automation-title">
           <div class="page">
             <header class="page-header"><div><span class="eyebrow">A rhythm for recurring work</span><h1 id="automation-title" class="page-title">Put your prompts on a schedule.</h1><p class="page-sub">Create recurring AI tasks with clear, explicit consent.</p></div></header>
-            <div class="notice warning-notice" id="automation-consent"><strong>Runs only while this window is open.</strong> Schedules send prompts to your configured provider and may incur charges. Creating a schedule consents to these recurring requests. Existing schedules from earlier versions remain paused until you explicitly enable them.</div>
-            <p id="scheduler-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Keep this window open for enabled schedules to run.</p>
+            <div class="notice warning-notice" id="automation-consent"><strong>Runs in the background.</strong> Schedules fire on time while ScaleMax is running, also with its window closed (Preferences → Automations). They send prompts to your configured provider and may incur charges. A tool call that needs your approval while no window is open is denied, and the run says so. Creating a schedule consents to these recurring requests. Existing schedules from earlier versions remain paused until you explicitly enable them.</div>
+            <p id="scheduler-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Schedules run while ScaleMax is running, also with this window closed.</p>
             <form id="automation-form" class="settings-card" aria-labelledby="automation-form-title" aria-describedby="automation-consent">
               <div class="card-heading"><span class="section-number" aria-hidden="true">+</span><div><h2 id="automation-form-title">New schedule</h2></div></div>
               <div class="form-group"><label for="automation-name">Schedule name</label><input id="automation-name" type="text" placeholder="Give this recurring task a name" required /></div>
@@ -565,6 +565,17 @@
                   <p id="auto-compact-desc" class="status-text">When the selected model publishes a context limit, ScaleMax summarizes older turns before they crowd out the current work. Type <code>/compact</code> or use Compact in chat at any time; original messages stay visible here.</p>
                 </div>
                 <button id="auto-compact-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="auto-compact-label" aria-describedby="auto-compact-desc"><span class="switch-thumb"></span></button>
+              </div>
+            </section>
+            <!-- When automations fire (src/scheduler.js renderBackgroundToggle; main reads the setting before each check). -->
+            <section class="settings-card" aria-labelledby="automations-pref-title">
+              <h2 id="automations-pref-title">Automations</h2>
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="automations-background-label" for="automations-background-toggle">Run automations when the window is closed</label>
+                  <p id="automations-background-desc" class="status-text">ScaleMax keeps running in the Dock after you close its window and runs your schedules on time. Off: a schedule that comes due while no window is open waits, and runs once when you open ScaleMax again.</p>
+                </div>
+                <button id="automations-background-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="automations-background-label" aria-describedby="automations-background-desc"><span class="switch-thumb"></span></button>
               </div>
             </section>
             <!-- How the model's commands run (src/jobs-ui.js renderCommandSettings; main reads the settings before each command). -->

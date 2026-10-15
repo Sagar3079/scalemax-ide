@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sandboxNetwork: true,
   // When a model publishes a context window, summarize old turns before they crowd it out.
   autoCompact: true,
+  // Automations fire while no window is open too (lib/automations.cjs; Preferences > Automations).
+  automationsInBackground: true,
   // The permission to return to after a plan is run (Plan is read-only, so it cannot carry it out).
   prePlanPermission: 'basic',
   // What the composer sends: chat, or an image / video generation with the chosen model.
@@ -188,7 +190,7 @@ export function normalizeSettings(value) {
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
   if (typeof own(value, 'projectNotes') === 'boolean') result.projectNotes = value.projectNotes;
-  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact']) {
+  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact', 'automationsInBackground']) {
     if (typeof own(value, key) === 'boolean') result[key] = value[key];
   }
   // Where "Run this plan" puts the permission back; never Plan itself, never unconsented Bypass.
@@ -348,6 +350,11 @@ const TOOL_LABELS = {
   // Work handed to a subagent (lib/subagents.cjs).
   Agents: {
     agent_task: { one: 'Ran a subagent', many: (n) => `Ran ${n} subagents`, doing: 'Running a subagent' },
+  },
+  // The resources MCP servers offer (lib/mcp.cjs: mcp_list_resources, mcp_read_resource).
+  MCP: {
+    list_resources: { one: 'Listed MCP resources', many: (n) => `Listed MCP resources ${n} times`, doing: 'Listing MCP resources' },
+    read_resource: { one: 'Read an MCP resource', many: (n) => `Read ${n} MCP resources`, doing: 'Reading an MCP resource' },
   },
 };
 
@@ -914,7 +921,7 @@ export function normalizeTasks(value, now = Date.now()) {
       updatedAt: Math.max(createdAt, latestMessage, timestamp(own(task, 'updatedAt'), fallbackTime)),
       ...(folder ? { folder } : {}),
       ...(compaction && compaction.through < messages.length ? { compaction } : {}),
-      // The automation whose runs this task collects (src/scheduler.js).
+      // The automation whose runs this task collects (lib/automations.cjs).
       ...(validId(own(task, 'automationId')) ? { automationId: task.automationId } : {}),
     });
     ids.add(task.id);
@@ -923,7 +930,9 @@ export function normalizeTasks(value, now = Date.now()) {
   return result;
 }
 
-// `from`: the slot that just came due (src/scheduler.js). An interval schedule steps from it rather
+// The main process fires automations with a copy of this function (lib/automations.cjs), and
+// test/automations.test.cjs requires both to give identical results: change one, change the other.
+// `from`: the slot that just came due (lib/automations.cjs). An interval schedule steps from it rather
 // than from when the due run was noticed, so a run found by the 30 s poll does not push every later
 // run back; slots that passed meanwhile are skipped, never queued. Other schedules ignore it.
 export function nextRunAt(automation, afterMs = Date.now(), { from = null } = {}) {
@@ -1085,6 +1094,9 @@ export function normalizeAutomations(value, now = Date.now()) {
       // remembered their folder; it runs in the open folder until it is edited (src/app.js).
       ...(own(automation, 'folder') !== undefined ? { folder: normalizeTaskFolder(own(automation, 'folder')) } : {}),
       mode: MODE_IDS.includes(own(automation, 'mode')) ? automation.mode : null,
+      // When the user last made, edited, paused or resumed it: main keeps its own schedule state
+      // over an older copy from the window (lib/automations.cjs mergeAutomations).
+      ...(validTimestamp(own(automation, 'editedAt')) ? { editedAt: automation.editedAt } : {}),
       schemaVersion: 2,
     };
     if (interrupted && !normalized.lastError) {

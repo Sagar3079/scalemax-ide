@@ -243,6 +243,37 @@
       }
     },
 
+    // Automations run in the desktop app's main process: the preview lists and edits them but
+    // never runs one (src/scheduler.js reads these answers).
+    automations: {
+      state: async function () {
+        return { ok: true, data: { running: [], background: true } };
+      },
+      runNow: async function () {
+        return failure('UNAVAILABLE', 'Automations run in the desktop app.');
+      },
+      setContext: async function () {
+        return { ok: true, data: { saved: false } };
+      },
+      onChanged: function () {
+        return function () {};
+      }
+    },
+
+    // MCP servers need the desktop app; the MCP view checks for each method it uses, so only the
+    // resource and prompt listings are stood in for.
+    mcp: {
+      resources: async function () {
+        return failure('UNAVAILABLE', 'MCP servers require the desktop app.');
+      },
+      prompts: async function () {
+        return failure('UNAVAILABLE', 'MCP servers require the desktop app.');
+      },
+      getPrompt: async function () {
+        return failure('UNAVAILABLE', 'MCP servers require the desktop app.');
+      }
+    },
+
     getPlatform: function () {
       return 'browser';
     }

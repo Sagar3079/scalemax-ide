@@ -1,270 +1,229 @@
-/** ScaleMax IDE: runs enabled automations while this window is open. */
-import { nextRunAt, buildSystemPrompt, requestTemperature, requestReasoning } from './domain.mjs';
+/**
+ * ScaleMax IDE: the window's side of automations. The main process fires them
+ * (lib/automations.cjs), also while no window is open; this window edits them (src/app.js),
+ * asks for Run now, sends the instructions runs use, and takes in what main tells it after every
+ * run: the automations' status and history, and the run's messages for its task.
+ */
+import {
+  isRecord, normalizeAutomations, buildSystemPrompt, requestTemperature, requestReasoning,
+  normalizeSteps, normalizeChanges, normalizeMetrics, normalizeTaskFolder,
+} from './domain.mjs';
 
-const POLL_MS = 30000;
-const MAX_HISTORY = 10;
-const PREVIEW_CHARS = 200;
+const RUN_MARKER = /^[A-Za-z0-9._:-]{1,160}$/;
+const MAX_TEXT = 100000;
 
 let started = null;
 
-// Runs in flight, tracked outside the automation record so a concurrent check
-// can never start the same schedule twice and a marker never reaches the
-// persisted state file.
-const inFlight = new WeakSet();
-
-// A one-shot schedule is exhausted once it fires; every other schedule rolls
-// forward to its next occurrence (an interval from the slot that came due, so
-// it keeps its rhythm instead of drifting with the poll).
-function advance(automation, afterMs) {
-  if (automation.schedule === 'once') {
-    automation.active = false;
-    automation.nextRun = null;
-    return;
-  }
-  try {
-    automation.nextRun = nextRunAt(automation, afterMs, { from: automation.nextRun });
-  } catch (error) {
-    // A schedule that cannot produce a future occurrence is paused, not retried forever.
-    automation.active = false;
-    automation.lastError = error instanceof Error ? error.message : 'No future occurrence is representable as a Date.';
-  }
+function bridge() {
+  return globalThis.window?.scalemaxAPI?.automations || null;
 }
 
-function record(automation, status, preview) {
-  automation.history = Array.isArray(automation.history) ? automation.history : [];
-  automation.history.unshift({
-    time: Date.now(),
-    status,
-    preview: String(preview || '').slice(0, PREVIEW_CHARS),
+/**
+ * What runs are sent with: the system prompt for each mode (built here, where the expert, skill
+ * and custom catalogs are), the temperature and the reasoning setting, the same as chat uses.
+ */
+export function automationContext(app) {
+  const settings = app.settings;
+  const prompt = (mode) => (typeof app.buildSystemPrompt === 'function'
+    ? app.buildSystemPrompt({ ...settings, mode })
+    : buildSystemPrompt({ ...settings, mode }));
+  const context = { systemPrompts: { working: prompt('working'), coding: prompt('coding') }, reasoning: requestReasoning(settings) };
+  const temperature = requestTemperature(settings);
+  if (temperature !== undefined) context.temperature = temperature;
+  return context;
+}
+
+/**
+ * Main's automations taken into the window's list: a record main has is replaced by main's copy
+ * unless the window changed it since (a newer `editedAt`, its save still on the way); one only
+ * the window has was just made here, and one only main has was just deleted here.
+ */
+export function mergeAutomations(own, incoming) {
+  const fresh = new Map(normalizeAutomations(incoming).map((record) => [record.id, record]));
+  return (Array.isArray(own) ? own : []).map((record) => {
+    const main = fresh.get(record.id);
+    if (!main) return record;
+    return (main.editedAt || 0) >= (record.editedAt || 0) ? main : record;
   });
-  automation.history = automation.history.slice(0, MAX_HISTORY);
 }
 
-function updateStatus(app) {
-  if (typeof document === 'undefined') return;
-  const node = document.querySelector('#scheduler-status');
-  if (!node) return;
-  const bridge = app.getProviderBridge?.();
-  if (!app.provider?.configured || !bridge?.send) {
-    node.textContent = 'Connect a provider in Assistant to run schedules.';
-    return;
-  }
-  const next = (Array.isArray(app.automations) ? app.automations : [])
-    .filter((automation) => automation.active && Number.isFinite(automation.nextRun))
-    .reduce((soonest, automation) => (!soonest || automation.nextRun < soonest.nextRun ? automation : soonest), null);
-  node.textContent = next
-    ? `Next run: ${next.name} at ${new Date(next.nextRun).toLocaleString()}`
-    : 'No schedules enabled.';
+function toolSummaries(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => isRecord(item) && typeof item.tool === 'string').slice(0, 32).map((item) => ({
+    server: typeof item.server === 'string' ? item.server.slice(0, 64) : '',
+    tool: item.tool.slice(0, 128),
+    ok: item.ok === true,
+  }));
 }
 
-function syncAutomationViews(app) {
-  if (typeof app.renderAutomations === 'function') app.renderAutomations();
-  updateStatus(app);
+// One message of a run as the window keeps it (the same checks src/app.js loadState makes).
+function runMessage(value) {
+  if (!isRecord(value) || !['user', 'assistant'].includes(value.role) || typeof value.text !== 'string'
+    || typeof value.run !== 'string' || !RUN_MARKER.test(value.run)) return null;
+  const message = { role: value.role, text: value.text.slice(0, MAX_TEXT), time: Number.isFinite(value.time) ? value.time : Date.now(), run: value.run };
+  if (value.role !== 'assistant') return message;
+  const tools = toolSummaries(value.tools);
+  if (tools.length) message.tools = tools;
+  const steps = normalizeSteps(value.steps);
+  if (steps.length) message.steps = steps;
+  const changes = normalizeChanges(value.changes);
+  if (changes) message.changes = changes;
+  const metrics = normalizeMetrics(value.metrics);
+  if (metrics) message.metrics = metrics;
+  return message;
 }
 
-function fail(app, automation, message) {
-  automation.lastStatus = 'error';
-  automation.lastError = message;
-  automation.lastRun = Date.now();
-  record(automation, 'error', message);
-  void app.persist('automations');
-  syncAutomationViews(app);
-  app.showToast(`Automation failed: ${automation.name} — ${message}`);
-}
-
-// The automation's own task, found by its id (a title is shared by automations with the same
-// name, and by any chat the user happens to call that). Older output tasks are adopted by title.
-function outputTask(app, automation) {
-  const title = `Automation · ${automation.name}`;
-  let task = app.tasks.find((item) => item.automationId === automation.id)
-    || app.tasks.find((item) => !item.automationId && item.title === title && item.messages.every((message) => message.role !== 'user' || message.text === automation.prompt));
+/**
+ * Adds the messages of a run main appended to its task (`run`: { task, messages }) to the
+ * window's tasks, creating the task when the window does not have it. A message the window
+ * already has (same run, same role) is never added twice. Returns the task, or null.
+ */
+export function mergeRun(tasks, run) {
+  const shell = isRecord(run) && isRecord(run.task) ? run.task : null;
+  if (!Array.isArray(tasks) || !shell || typeof shell.id !== 'string' || typeof shell.title !== 'string') return null;
+  const messages = (Array.isArray(run.messages) ? run.messages : []).map(runMessage).filter(Boolean);
+  let task = tasks.find((item) => item.id === shell.id);
   if (!task) {
-    task = app.makeTask(title);
-    app.tasks.unshift(task);
+    task = { id: shell.id, title: shell.title, messages: [], createdAt: Number.isFinite(shell.createdAt) ? shell.createdAt : Date.now(), updatedAt: Date.now() };
+    tasks.unshift(task);
   }
-  task.automationId = automation.id;
-  // Listed under its project, like any task in that folder.
-  if (automation.folder && !task.folder) task.folder = { ...automation.folder };
-  return { task, title };
-}
-
-function appendOutput(app, automation, data) {
-  const { task, title } = outputTask(app, automation);
-  // Made without a folder, it ran with no folder at all: its task is not tied to whichever folder
-  // happens to be open (appendMessage would otherwise fix it there).
-  const unbound = 'folder' in automation && !automation.folder;
-  app.appendMessage('user', automation.prompt, task.id, unbound ? { bindFolder: false } : {});
-  // What the run did on the way and what it changed, like any reply (steps and the changes card).
-  app.appendMessage('assistant', String(data?.text ?? ''), task.id, {
-    tools: data?.toolCalls, steps: data?.steps, changes: data?.changes, metrics: data?.metrics,
-  });
-  // appendMessage renames a task on its first user message, so restore the stable automation title.
-  task.title = title;
+  for (const message of messages) {
+    if (task.messages.some((item) => item.run === message.run && item.role === message.role)) continue;
+    task.messages.push(message);
+  }
+  task.title = shell.title;
+  if (typeof shell.automationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(shell.automationId)) task.automationId = shell.automationId;
+  const folder = normalizeTaskFolder(shell.folder);
+  if (folder && !task.folder) task.folder = folder;
+  task.updatedAt = Math.max(Number.isFinite(task.updatedAt) ? task.updatedAt : 0, Number.isFinite(shell.updatedAt) ? shell.updatedAt : 0);
   return task;
 }
 
-// Sends one run. Never touches nextRun: scheduled runs are advanced by
-// claimDue before sending, and a manual "Run now" leaves the schedule alone.
-// Returns 'success' | 'error' | 'skipped' (already in flight).
-async function runAutomation(app, automation, { manual = false } = {}) {
-  if (inFlight.has(automation)) return 'skipped';
-  const bridge = app.getProviderBridge?.();
-  const start = Date.now();
-  // Guard the whole run: the 30s poll, focus wake-up and Run now can overlap.
-  inFlight.add(automation);
-  try {
-    if (!app.provider?.configured || !bridge?.send) {
-      automation.lastStatus = 'error';
-      automation.lastError = 'Provider not configured; scheduled run skipped.';
-      automation.lastRun = start;
-      record(automation, 'error', automation.lastError);
-      void app.persist('automations');
-      syncAutomationViews(app);
-      if (manual) app.showToast('Connect a provider in Assistant first');
-      return 'error';
-    }
-    // It works in the folder and mode it was made in, never in whatever is open when it fires;
-    // made without a folder, it gets no file tools at all (`folder: null`). One made before
-    // automations remembered their folder has none recorded and keeps the open folder.
-    const settings = automation.mode ? { ...app.settings, mode: automation.mode } : app.settings;
-    const payload = {
-      requestId: `automation-${automation.id}-${start}`,
-      ...('folder' in automation ? { folder: automation.folder?.path || null } : {}),
-      messages: [{ role: 'user', content: automation.prompt }],
-      // Same system prompt and temperature rules as interactive chat.
-      mode: settings.mode,
-      systemPrompt: typeof app.buildSystemPrompt === 'function'
-        ? app.buildSystemPrompt(settings)
-        : buildSystemPrompt(settings),
-    };
-    const temperature = requestTemperature(app.settings);
-    if (temperature !== undefined) payload.temperature = temperature;
-    payload.reasoning = requestReasoning(app.settings);
-
-    let result;
-    try {
-      result = await bridge.send(payload);
-    } catch (error) {
-      fail(app, automation, error instanceof Error ? error.message : 'Provider request failed');
-      return 'error';
-    }
-    if (!result?.ok) {
-      fail(app, automation, result?.error?.message || 'Provider request failed');
-      return 'error';
-    }
-
-    automation.lastStatus = 'success';
-    automation.lastRun = Date.now();
-    automation.lastError = '';
-    const text = String(result.data?.text ?? '');
-    record(automation, 'success', text);
-    const task = appendOutput(app, automation, result.data);
-    void app.persist('tasks');
-    void app.persist('automations');
-    syncAutomationViews(app);
-    app.renderTasks();
-    if (app.currentTaskId === task.id) app.renderChat();
-    app.showToast(`Automation finished: ${automation.name}`);
-    return 'success';
-  } finally {
-    inFlight.delete(automation);
+function updateStatus(app, state) {
+  if (typeof document === 'undefined') return;
+  const node = document.querySelector('#scheduler-status');
+  if (!node) return;
+  if (!app.provider?.configured) {
+    node.textContent = 'Connect a provider in Assistant to run schedules.';
+    return;
   }
+  const automations = Array.isArray(app.automations) ? app.automations : [];
+  const running = automations.filter((automation) => state.running.has(automation.id));
+  const next = automations
+    .filter((automation) => automation.active && Number.isFinite(automation.nextRun))
+    .reduce((soonest, automation) => (!soonest || automation.nextRun < soonest.nextRun ? automation : soonest), null);
+  const parts = [];
+  if (running.length) parts.push(`Running: ${running.map((automation) => automation.name).join(', ')}…`);
+  parts.push(next ? `Next run: ${next.name} at ${new Date(next.nextRun).toLocaleString()}` : 'No schedules enabled.');
+  // Preferences > Automations off: nothing fires while the window is closed.
+  if (next && app.settings?.automationsInBackground === false) parts.push('Runs only while ScaleMax has a window open.');
+  node.textContent = parts.join(' · ');
+}
+
+// Preferences > Automations: whether main fires automations while no window is open.
+function renderBackgroundToggle(app) {
+  if (typeof document === 'undefined') return;
+  document.querySelector('#automations-background-toggle')
+    ?.setAttribute('aria-checked', String(app.settings?.automationsInBackground !== false));
 }
 
 export function startScheduler(app) {
   if (started) return started;
-  let timer = null;
-  const win = typeof window === 'undefined' ? null : window;
-  const doc = typeof document === 'undefined' ? null : document;
-
-  // Marks the automations that are due now and rolls their schedule forward
-  // before any request is sent, so an overlapping check cannot fire them twice.
-  function claimDue(now) {
-    const claimed = [];
-    for (const automation of Array.isArray(app.automations) ? app.automations : []) {
-      if (!automation.active || inFlight.has(automation)) continue;
-      if (!Number.isFinite(automation.nextRun) || automation.nextRun > now) continue;
-      advance(automation, now);
-      claimed.push(automation);
-    }
-    if (claimed.length) void app.persist('automations');
-    return claimed;
-  }
-
-  // Every check claims what is due and starts it at once, also while earlier
-  // runs are still working: a slow run must not hold back the others. One that
-  // is still in flight is never claimed again (claimDue), so the same
-  // automation never runs twice at a time.
-  async function check() {
-    const runs = claimDue(Date.now()).map(async (automation) => {
-      try {
-        await runAutomation(app, automation);
-      } catch (error) {
-        console.warn('[scheduler] Automation run failed:', error);
-      }
-    });
-    try {
-      await Promise.all(runs);
-    } finally {
-      updateStatus(app);
-    }
-  }
-
-  // Catch-up: a schedule that came due while the app was closed runs once at
-  // startup (never once per missed occurrence).
-  const start = Date.now();
-  const missed = (Array.isArray(app.automations) ? app.automations : [])
-    .filter((automation) => automation.active && automation.pendingCatchUp === true);
-  for (const automation of missed) {
-    automation.pendingCatchUp = false;
-    // A missed one-time schedule is consumed by its catch-up run.
-    if (automation.schedule === 'once') advance(automation, start);
-  }
-  let catchUpDone = Promise.resolve();
-  if (missed.length) {
-    void app.persist('automations');
-    catchUpDone = (async () => {
-      for (const automation of missed) {
-        // Already run since start-up (its next slot came due while an earlier
-        // catch-up was still working, and check() ran it): that was its run.
-        if (Number.isFinite(automation.lastRun) && automation.lastRun >= start) continue;
-        try {
-          await runAutomation(app, automation);
-        } catch (error) {
-          console.warn('[scheduler] Catch-up run failed:', error);
-        }
-      }
-    })();
-  }
-  // A slot that is due right now is left to the first check(): claimDue rolls
-  // it forward and runs it exactly once. Advancing it here would skip the run.
-  updateStatus(app);
-
-  const onWake = () => {
-    if (!doc || doc.visibilityState === 'visible') void check();
+  const api = bridge();
+  const state = { running: new Set(), pushed: '' };
+  const sync = () => {
+    if (typeof app.renderAutomations === 'function') app.renderAutomations();
+    updateStatus(app, state);
   };
-  if (win) {
-    timer = win.setInterval(() => { void check(); }, POLL_MS);
-    win.addEventListener('focus', onWake);
+
+  // Main gets the instructions again only when they changed (a setting, an expert, a skill).
+  function pushContext() {
+    if (!api?.setContext) return;
+    let context;
+    try {
+      context = automationContext(app);
+    } catch (error) {
+      console.warn('[scheduler] The instructions for automations could not be built:', error);
+      return;
+    }
+    const text = JSON.stringify(context);
+    if (text === state.pushed) return;
+    state.pushed = text;
+    void Promise.resolve(api.setContext(context)).then((result) => {
+      if (result?.ok === false && state.pushed === text) state.pushed = '';
+    }, () => {
+      if (state.pushed === text) state.pushed = '';
+    });
   }
-  if (doc) doc.addEventListener('visibilitychange', onWake);
-  void check();
+
+  // What main says after every change: the automations as it stored them, which run now, and
+  // after a run how it went and the messages it added to its task.
+  function applyChange(change) {
+    if (!isRecord(change)) return;
+    if (Array.isArray(change.automations)) app.automations = mergeAutomations(app.automations, change.automations);
+    if (Array.isArray(change.running)) state.running = new Set(change.running.filter((id) => typeof id === 'string'));
+    if (isRecord(change.run)) {
+      const task = mergeRun(app.tasks, change.run);
+      if (task) {
+        void app.persist('tasks');
+        if (typeof app.renderTasks === 'function') app.renderTasks();
+        if (app.currentTaskId === task.id) app.renderChat?.();
+        else app.unreadTasks?.add?.(task.id);
+      }
+    }
+    const finished = isRecord(change.finished) ? change.finished : null;
+    if (finished?.status === 'success') app.showToast(`Automation finished: ${finished.name}`);
+    else if (finished?.status === 'error' && finished.code !== 'PROVIDER_NOT_CONFIGURED') {
+      app.showToast(`Automation failed: ${finished.name} — ${finished.message || 'Provider request failed'}`);
+    }
+    sync();
+  }
+
+  const unsubscribe = api?.onChanged ? api.onChanged(applyChange) : () => {};
+  const doc = typeof document === 'undefined' ? null : document;
+  const onToggle = async () => {
+    app.settings.automationsInBackground = app.settings.automationsInBackground === false;
+    renderBackgroundToggle(app);
+    updateStatus(app, state);
+    await app.persist('settings');
+  };
+  doc?.querySelector('#automations-background-toggle')?.addEventListener('click', onToggle);
+  renderBackgroundToggle(app);
+  pushContext();
+  // What happened before this window listened: runs in progress, and runs saved after it read
+  // the state file (each is taken in once, like an announced run, without a toast).
+  const ready = api?.state
+    ? Promise.resolve(api.state()).then((result) => {
+      if (!result?.ok || !isRecord(result.data)) return;
+      const { running, automations, runs } = result.data;
+      applyChange({ running: Array.isArray(running) ? running : [], ...(Array.isArray(automations) ? { automations } : {}) });
+      for (const run of Array.isArray(runs) ? runs : []) applyChange({ run });
+    }).catch(() => {}).finally(sync)
+    : Promise.resolve(sync());
 
   started = {
-    checkNow: check,
+    applyChange,
+    pushContext,
     async runNow(automationId) {
-      const automation = (Array.isArray(app.automations) ? app.automations : [])
-        .find((item) => item.id === automationId);
-      if (!automation) throw new Error('Automation not found');
-      return runAutomation(app, automation, { manual: true });
+      if (!api?.runNow) {
+        app.showToast('Automations need the desktop app');
+        return 'error';
+      }
+      // A schedule made or edited a moment ago reaches main first: its save is queued before this.
+      await app.saveQueue;
+      const result = await api.runNow({ id: automationId });
+      if (!result?.ok) {
+        app.showToast(result?.error?.message || 'The automation could not be run');
+        return 'error';
+      }
+      if (result.data?.code === 'PROVIDER_NOT_CONFIGURED') app.showToast('Connect a provider in Assistant first');
+      return result.data?.status || 'error';
     },
-    // Resolves when startup catch-up runs have finished (used by tests).
-    ready: catchUpDone,
+    // Resolves once the window knows which runs are in progress (used by tests).
+    ready,
     stop() {
-      if (timer !== null && win) win.clearInterval(timer);
-      timer = null;
-      if (win) win.removeEventListener('focus', onWake);
-      if (doc) doc.removeEventListener('visibilitychange', onWake);
+      unsubscribe?.();
+      doc?.querySelector('#automations-background-toggle')?.removeEventListener('click', onToggle);
       started = null;
     },
   };
