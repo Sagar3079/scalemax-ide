@@ -417,6 +417,11 @@ async function run(win) {
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
         commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
         specMethods: ['list','read','setTask'].filter((m) => typeof api.specs?.[m] === 'function'),
+        gitMethods: ['status','branches','suggestMessage','commit','push','pull','switchBranch','createPr'].filter((m) => typeof api.git?.[m] === 'function'),
+        worktreeMethods: ['create','info','merge','remove','reveal'].filter((m) => typeof api.worktrees?.[m] === 'function'),
+        sessionMethods: ['exportTranscript'].filter((m) => typeof api.sessions?.[m] === 'function'),
+        gitFlowControls: ['#commit-dialog', '#branch-dialog', '#rewind-dialog', '#sessions-dialog', '#worktree-bar', '#worktree-chip', '#workspace-branch', '#git-commit', '#git-pull', '#git-switch', '#sessions-btn', '#export-transcript-btn']
+          .every((selector) => Boolean(document.querySelector(selector))),
         // The specs chip stays hidden until a folder is open; Plan is the first permission offered.
         specsControls: ['#specs-dialog', '#specs-open[hidden]', '#specs-list', '#specs-tabs', '#specs-doc', '#specs-new', '#specs-work',
           '#permission-menu [data-permission="plan"]'].every((selector) => Boolean(document.querySelector(selector))),
@@ -1579,6 +1584,7 @@ async function run(win) {
       && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
+    gitFlowApi: probe.gitMethods.length === 8 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,
     // An MCP server's own read-only label is a claim until the user trusts the server.
     mcpLabelsUntrusted: Boolean(e2e && e2e.untrustedAsked && /cannot check that/.test(e2e.untrustedSummary)
       && e2e.untrustedText === 'tool said: smoke-echo' && e2e.mcpTrustedFlag),

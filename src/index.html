@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="changes.css" />
   <link rel="stylesheet" href="jobs.css" />
   <link rel="stylesheet" href="specs.css" />
+  <link rel="stylesheet" href="gitflow.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -102,7 +103,11 @@
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
             <span id="chat-crumb" class="eyebrow chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
+            <!-- A task in a separate worktree: its branch and what to do with it (src/gitflow-ui.js). -->
+            <div id="worktree-bar" class="worktree-bar" role="group" aria-label="Worktree of this task" hidden></div>
             <div class="button-row">
+              <button id="sessions-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="sessions-dialog">Recent sessions</button>
+              <button id="export-transcript-btn" class="button secondary" type="button" title="Save this conversation as a Markdown file">Export transcript</button>
               <button id="export-task-btn" class="button secondary" type="button">Export task</button>
               <button id="delete-task-btn" class="button danger" type="button">Delete task</button>
             </div>
@@ -187,6 +192,11 @@
                     <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     <!-- Shown instead of the chevron once the task is fixed to its folder. -->
                     <svg class="folder-chip-lock" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3" /></svg>
+                  </button>
+                  <!-- An empty task in a Git repository can work in a separate worktree (src/gitflow-ui.js). -->
+                  <button id="worktree-chip" class="composer-chip worktree-chip" type="button" aria-pressed="false" hidden>
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3v12" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+                    <span id="worktree-chip-label">Separate worktree</span>
                   </button>
                   <!-- The active mode, still visible once the pills above are gone. -->
                   <button id="mode-chip" class="composer-chip mode-chip" type="button" data-mode="working" aria-haspopup="menu" aria-expanded="false" aria-controls="mode-menu">
@@ -281,6 +291,8 @@
                 <svg class="ws-crumb-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
                 <span id="workspace-path" class="ws-crumb-path">No folder selected</span>
               </div>
+              <!-- The branch and how far it is ahead of / behind its upstream (src/gitflow-ui.js). -->
+              <span id="workspace-branch" class="ws-toolbar-branch" hidden></span>
               <span id="workspace-status" class="ws-toolbar-status" role="status" aria-live="polite" aria-atomic="true">Open a local folder to begin.</span>
               <div class="ws-toolbar-actions">
                 <button id="workspace-refresh" class="button secondary compact" type="button" title="Reload the file tree">Refresh</button>
@@ -355,6 +367,12 @@
                       </form>
                     </div>
                     <div id="ws-view-git" class="ws-panel-view" role="tabpanel" aria-labelledby="ws-tab-git" data-panel-view="git" hidden>
+                      <!-- The user's own Git actions, with their Git identity and hooks (src/gitflow-ui.js). -->
+                      <div class="ws-git-actions" role="group" aria-label="Git actions">
+                        <button id="git-commit" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="commit-dialog">Commit…</button>
+                        <button id="git-pull" class="button secondary compact" type="button">Pull</button>
+                        <button id="git-switch" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="branch-dialog">Switch branch…</button>
+                      </div>
                       <p id="git-status" class="status-text" role="status" aria-live="polite">Open a repository to review its changes.</p>
                       <div id="git-files" class="ws-git-files" aria-label="Changed files"></div>
                     </div>
@@ -884,6 +902,110 @@
       <span class="jobs-spacer"></span>
       <button id="jobs-stop" class="button danger" type="button">Stop</button>
     </div>
+  </dialog>
+
+  <!-- Commit what changed, then push and open a pull request (src/gitflow-ui.js). -->
+  <dialog id="commit-dialog" aria-labelledby="commit-title" aria-describedby="commit-subtitle">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Git</span><h2 id="commit-title">Commit changes</h2><p id="commit-subtitle" class="changes-subtitle"></p></div>
+      <button id="commit-close" class="changes-close" type="button" aria-label="Close the commit dialog">×</button>
+    </div>
+    <div class="commit-body">
+      <section id="commit-form-section" class="commit-form" aria-label="Commit">
+        <div class="commit-files-head">
+          <span id="commit-files-title" class="commit-label">Files</span>
+          <span id="commit-count" class="commit-hint"></span>
+          <button id="commit-toggle-all" class="changes-action" type="button">Select all</button>
+        </div>
+        <div id="commit-files" class="commit-file-list" role="group" aria-labelledby="commit-files-title"></div>
+        <div class="commit-message-head">
+          <label for="commit-message" class="commit-label">Message</label>
+          <span id="commit-message-state" class="commit-hint" role="status"></span>
+          <button id="commit-suggest" class="changes-action" type="button" title="Write the message again from the ticked files">Suggest</button>
+        </div>
+        <textarea id="commit-message" class="commit-message" rows="3" spellcheck="true" placeholder="What these changes do, in one line (⌘↩ commits)"></textarea>
+        <div class="commit-where" role="radiogroup" aria-label="Where to commit">
+          <label class="commit-check"><input id="commit-where-current" type="radio" name="commit-where" value="current" checked /> <span id="commit-where-current-label">Commit to the current branch</span></label>
+          <label class="commit-check"><input id="commit-where-new" type="radio" name="commit-where" value="new" /> Create a new branch first</label>
+          <input id="commit-branch" class="commit-branch" type="text" aria-label="New branch name" autocomplete="off" autocapitalize="off" spellcheck="false" />
+        </div>
+        <label class="commit-check"><input id="commit-skip-hooks" type="checkbox" /> Skip hooks (<code>--no-verify</code>)</label>
+        <p class="commit-hint commit-hooks-note">The repository's commit hooks run first (pre-commit, commit-msg), with your Git identity and settings, as in a terminal.</p>
+      </section>
+      <section id="commit-after" class="commit-after" aria-label="Push and pull request" hidden>
+        <p id="commit-result" class="commit-result"></p>
+        <p id="commit-remote-note" class="commit-hint" hidden>This repository has no remote, so there is nowhere to push.</p>
+        <div class="button-row">
+          <button id="commit-push" class="button secondary" type="button">Push</button>
+          <button id="commit-pr-open" class="button secondary" type="button">Create pull request…</button>
+        </div>
+        <div id="commit-pr" class="commit-pr" hidden>
+          <label for="commit-pr-title" class="commit-label">Pull request title</label>
+          <input id="commit-pr-title" type="text" autocomplete="off" />
+          <label for="commit-pr-body" class="commit-label">Description</label>
+          <textarea id="commit-pr-body" rows="4"></textarea>
+          <label for="commit-pr-base" class="commit-label">Base branch <span class="commit-hint">(empty: the repository's default)</span></label>
+          <input id="commit-pr-base" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <div class="button-row"><button id="commit-pr-create" class="button primary" type="button">Create pull request</button></div>
+          <p class="commit-hint">The branch is pushed first if the remote does not have it, then the GitHub CLI (gh) opens the pull request with your gh login.</p>
+        </div>
+        <p id="commit-pr-link" class="commit-pr-link" hidden></p>
+      </section>
+      <p id="commit-status" class="commit-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="commit-actions">
+      <span class="changes-spacer"></span>
+      <button id="commit-cancel" class="button secondary" type="button">Cancel</button>
+      <button id="commit-submit" class="button primary" type="button">Commit</button>
+    </div>
+  </dialog>
+
+  <!-- Switch the open folder to another local branch (src/gitflow-ui.js). -->
+  <dialog id="branch-dialog" class="consent-dialog" aria-labelledby="branch-title" aria-describedby="branch-subtitle">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Git</span><h2 id="branch-title">Switch branch</h2><p id="branch-subtitle" class="changes-subtitle"></p></div>
+      <button id="branch-close" class="changes-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="dialog-body">
+      <div id="branch-list" class="branch-list" role="radiogroup" aria-label="Branches"></div>
+      <label id="branch-stash-row" class="commit-check" hidden><input id="branch-stash" type="checkbox" /> Stash my uncommitted changes first (<code>git stash pop</code> brings them back)</label>
+      <p id="branch-status" class="commit-status" role="status" aria-live="polite"></p>
+      <div class="button-row consent-actions">
+        <button id="branch-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="branch-switch" class="button primary" type="button">Switch</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Rewind a conversation to before one of the user's messages (src/sessions-ui.js). -->
+  <dialog id="rewind-dialog" class="consent-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-text">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Rewind</span><h2 id="rewind-title">Rewind to this message?</h2></div>
+      <button id="rewind-close" class="changes-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="dialog-body">
+      <p id="rewind-text" class="body-copy"></p>
+      <p id="rewind-files" class="commit-hint" hidden></p>
+      <p id="rewind-draft" class="commit-hint" hidden>Your unsent draft in the message box is replaced by this message.</p>
+      <ul id="rewind-report" class="rewind-report" hidden></ul>
+      <p id="rewind-status" class="commit-status" role="status" aria-live="polite"></p>
+      <div class="button-row consent-actions">
+        <button id="rewind-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="rewind-undo" class="button secondary" type="button" hidden>Rewind and undo file changes</button>
+        <button id="rewind-confirm" class="button primary" type="button">Rewind conversation</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Find a task again by its title or its words (src/sessions-ui.js, ⌘⇧O). -->
+  <dialog id="sessions-dialog" aria-labelledby="sessions-title">
+    <div class="dialog-header">
+      <div><span class="eyebrow">Sessions</span><h2 id="sessions-title">Recent sessions</h2></div>
+      <button id="sessions-close" class="changes-close" type="button" aria-label="Close recent sessions">×</button>
+    </div>
+    <div class="dialog-search"><label for="sessions-search">Search task titles and messages</label><input id="sessions-search" type="search" placeholder="Type to search" autocomplete="off" spellcheck="false" role="combobox" aria-controls="sessions-list" aria-expanded="true" aria-autocomplete="list" /></div>
+    <div id="sessions-list" class="sessions-list" role="listbox" aria-label="Recent sessions"></div>
+    <p class="sessions-keys"><kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>↩</kbd> open · <kbd>⌘⇧O</kbd> from anywhere</p>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>

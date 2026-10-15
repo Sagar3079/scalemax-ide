@@ -58,3 +58,14 @@ test('the preview folder can be edited, with the same conflict rule as a real sa
   assert.equal((await api.workspace.read('missing.md')).error.code, 'ENOENT');
   assert.equal((await api.workspace.run({ command: 'ls' })).ok, false, 'commands need the desktop app');
 });
+
+test('the preview stands in for Git, worktrees and transcripts without pretending to run them', async () => {
+  assert.deepEqual((await api.git.status({ folder: '/preview/demo-project' })).data, { isRepo: false });
+  for (const method of ['branches', 'suggestMessage', 'commit', 'push', 'pull', 'switchBranch', 'createPr']) {
+    assert.equal((await api.git[method]({ folder: '/preview/demo-project' })).error.code, 'UNAVAILABLE', method);
+  }
+  for (const method of ['create', 'info', 'merge', 'remove', 'reveal']) {
+    assert.equal((await api.worktrees[method]({ folder: '/preview/demo-project' })).error.code, 'UNAVAILABLE', method);
+  }
+  assert.equal((await api.sessions.exportTranscript({ title: 'x', markdown: '# x' })).error.code, 'UNAVAILABLE');
+});
