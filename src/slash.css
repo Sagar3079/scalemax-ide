@@ -126,7 +126,7 @@
   margin-bottom: 6px;
 }
 .hooks-error {
-  color: var(--sm-palette-red-8);
+  color: var(--sm-app-text-danger);
 }
 .hooks-row {
   display: flex;

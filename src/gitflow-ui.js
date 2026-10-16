@@ -290,7 +290,7 @@ function renderSubtitle() {
   const state = commit.state;
   const node = $('#commit-subtitle');
   if (!node || !state) return;
-  const name = state.root.split('/').filter(Boolean).pop() || state.root;
+  const name = commit.app?.folderLabel?.(state.root) || state.root.split('/').filter(Boolean).pop() || state.root;
   const where = state.branch ? `On ${state.branch}` : 'Not on a branch';
   const who = state.identity?.email ? `committing as ${state.identity.name || state.identity.email} <${state.identity.email}>` : 'Git has no user.email set: run git config --global user.email … first';
   node.textContent = `${name} · ${where} · ${who}`;
@@ -566,12 +566,18 @@ async function openBranchDialog(app, opener = null) {
     radio.name = 'branch-choice';
     radio.value = branch.name;
     radio.checked = branch.name === data.current;
-    radio.disabled = !branch.usable;
+    // Git keeps a branch in one checkout at a time: one checked out in another worktree (the main
+    // checkout, from a task worktree) cannot be switched to here.
+    const where = branch.elsewhere ? (app.folderLabel?.(branch.elsewhere) || branch.elsewhere.split('/').pop()) : '';
+    radio.disabled = !branch.usable || Boolean(where);
     radio.addEventListener('change', () => renderBranchControls());
     row.append(radio, element('span', 'branch-name', branch.name));
     if (branch.name === data.current) row.append(element('span', 'branch-note', 'current'));
+    else if (where) row.append(element('span', 'branch-note', `in ${where}`));
     else if (branch.upstream) row.append(element('span', 'branch-note', branch.upstream));
     if (!branch.usable) row.title = 'Switch to this branch in a terminal: its name is unusual.';
+    else if (where) row.title = `Checked out in ${branch.elsewhere}. Switch there, or remove that worktree first.`;
+    row.classList.toggle('is-taken', Boolean(where));
     return row;
   }));
   $('#branch-stash-row').hidden = !data.dirty;
@@ -769,6 +775,7 @@ function renderWorktreeBar(app) {
   label.append(branchIcon('worktree-icon'), element('span', 'worktree-branch', worktree.branch));
   if (worktree.base) label.append(element('span', 'worktree-base', `from ${worktree.base}`));
   const state = element('span', 'worktree-state', infoText(worktree, entry));
+  state.title = state.textContent;
   state.setAttribute('role', 'status');
   // Keyboard focus stays on the same action across a redraw.
   const focused = bar.contains(document.activeElement) ? document.activeElement.dataset.worktreeAction : '';

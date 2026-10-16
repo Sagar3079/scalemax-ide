@@ -62,6 +62,12 @@ function renderList() {
 function renderTabs() {
   const host = $('#specs-tabs');
   if (!host) return;
+  // No spec chosen (or none yet): there are no documents to switch between.
+  host.hidden = !view.slug;
+  if (!view.slug) {
+    host.replaceChildren();
+    return;
+  }
   host.replaceChildren(...DOCS.map((doc) => {
     const written = typeof view.spec?.docs?.[doc] === 'string';
     const tab = element('button', 'specs-tab', DOC_LABELS[doc]);
@@ -108,6 +114,12 @@ function renderTasks() {
 function renderDoc() {
   const host = $('#specs-doc');
   if (!host) return;
+  if (!view.slug) {
+    host.replaceChildren(element('p', 'specs-empty', view.specs.length
+      ? 'Choose a spec on the left to read its requirements, design and tasks.'
+      : 'A spec is what ScaleMax writes before it builds a feature: the requirements, then the design, then the tasks, each for you to read before the next. Choose New spec… to start one.'));
+    return;
+  }
   const text = view.spec?.docs?.[view.doc];
   if (typeof text !== 'string') {
     host.replaceChildren(element('p', 'specs-empty',
@@ -125,7 +137,7 @@ function renderDoc() {
 
 function renderHead() {
   const title = $('#specs-name');
-  if (title) title.textContent = view.slug || 'No spec selected';
+  if (title) title.textContent = view.slug || (view.specs.length ? 'No spec selected' : 'No specs yet');
   const progress = $('#specs-progress');
   if (progress) progress.textContent = view.spec ? progressText(view.specs.find((item) => item.slug === view.slug)?.progress) : '';
   const work = $('#specs-work');
@@ -222,7 +234,7 @@ export async function openSpecs(app = view.app, { slug = '', opener = null } = {
   const subtitle = $('#specs-subtitle');
   if (subtitle) {
     subtitle.textContent = view.folder
-      ? `Requirements, design and tasks in ${view.folder.name}/.scalemax/specs`
+      ? `Requirements, design and tasks in ${view.app?.folderLabel?.(view.folder.path) || view.folder.name}/.scalemax/specs`
       : 'Open a project folder to keep specs in it.';
   }
   if (!dialog.open) dialog.showModal();

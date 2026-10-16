@@ -104,11 +104,26 @@
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
             <span id="chat-crumb" class="eyebrow chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
-            <div class="button-row">
-              <button id="sessions-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="sessions-dialog">Recent sessions</button>
-              <button id="export-transcript-btn" class="button secondary" type="button" title="Save this conversation as a Markdown file">Export transcript</button>
-              <button id="export-task-btn" class="button secondary" type="button">Export task</button>
-              <button id="delete-task-btn" class="button danger" type="button">Delete task</button>
+            <!-- Three controls, so the toolbar stays one line in the narrowest window. -->
+            <div class="button-row chat-actions">
+              <button id="sessions-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="sessions-dialog" title="Recent sessions (⌘⇧O)">Recent sessions</button>
+              <button id="export-menu-btn" class="button secondary" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">
+                Export
+                <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+              <button id="delete-task-btn" class="button danger icon-only" type="button" aria-label="Delete task" title="Delete task">
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" /><path d="M9 7V4h6v3" /></svg>
+              </button>
+            </div>
+            <div id="export-menu" class="composer-menu export-menu" popover role="menu" aria-label="Export">
+              <button id="export-transcript-btn" class="composer-menu-option" type="button" role="menuitem">
+                <span class="composer-menu-option-name">Transcript</span>
+                <span class="composer-menu-option-desc">This conversation as a Markdown file</span>
+              </button>
+              <button id="export-task-btn" class="composer-menu-option" type="button" role="menuitem">
+                <span class="composer-menu-option-name">Task data</span>
+                <span class="composer-menu-option-desc">The whole task as JSON, to keep or import elsewhere</span>
+              </button>
             </div>
           </div>
           <!-- A task in a separate worktree: its branch and what to do with it, on a row of its own

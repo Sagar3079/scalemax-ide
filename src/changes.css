@@ -55,7 +55,7 @@
   color: var(--sm-text-weak);
 }
 .changes-kind.is-created {
-  color: var(--sm-palette-green-8);
+  color: var(--sm-app-text-success);
 }
 .changes-file {
   flex: 1;
@@ -93,10 +93,10 @@
   font-variant-numeric: tabular-nums;
 }
 .changes-added {
-  color: var(--sm-palette-green-8);
+  color: var(--sm-app-text-success);
 }
 .changes-removed {
-  color: var(--sm-palette-red-8);
+  color: var(--sm-app-text-danger);
 }
 .changes-zero {
   color: var(--sm-text-weak);
@@ -128,10 +128,10 @@
   color: var(--sm-text-weak);
 }
 .changes-state.is-kept {
-  color: var(--sm-palette-green-8);
+  color: var(--sm-app-text-success);
 }
 .changes-state.is-mixed {
-  color: var(--sm-color-text-warning-default);
+  color: var(--sm-app-text-warning);
   cursor: help;
 }
 .changes-note {
@@ -325,13 +325,13 @@
   background: color-mix(in srgb, var(--sm-palette-green-8) 13%, transparent);
 }
 .diff-line.is-add .diff-sign {
-  color: var(--sm-palette-green-8);
+  color: var(--sm-app-text-success);
 }
 .diff-line.is-del {
   background: color-mix(in srgb, var(--sm-palette-red-8) 12%, transparent);
 }
 .diff-line.is-del .diff-sign {
-  color: var(--sm-palette-red-8);
+  color: var(--sm-app-text-danger);
 }
 .diff-meta {
   font-style: italic;

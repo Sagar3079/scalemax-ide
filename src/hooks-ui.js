@@ -9,6 +9,8 @@
  * only when the hash the window was shown is still the hash of the file.
  * DOM is built with createElement and textContent only (no HTML).
  */
+import { normalizeWorktree } from './sessions.mjs';
+
 const $ = (selector) => document.querySelector(selector);
 
 const SCOPE_TITLES = {
@@ -28,8 +30,12 @@ function element(tag, className, text) {
 function bridge() {
   return window.scalemaxAPI?.hooks || null;
 }
-// The folder of the task on screen, or the open folder.
+// The folder of the task on screen, or the open folder. A task whose worktree was removed shows
+// the project the worktree came from: its own folder is gone.
 function folderOf(app) {
+  const task = app?.currentTask?.();
+  const worktree = normalizeWorktree(task?.worktree);
+  if (worktree?.removed && task.folder?.path === worktree.path) return worktree.mainRoot;
   return app?.taskFolderShown?.()?.path || app?.workspace?.root || '';
 }
 

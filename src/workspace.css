@@ -945,7 +945,7 @@
   font-family: var(--ws-code-font);
   font-size: 13px;
   font-weight: 600;
-  color: var(--sm-brand-primary);
+  color: var(--sm-app-text-accent);
 }
 
 .ws-terminal-form input {

@@ -33,6 +33,13 @@
   --sm-app-sidebar: #f7f7f8;
   --sm-app-border: rgba(0, 0, 0, 0.06);
   --sm-app-muted: var(--sm-bg-tertiary);
+  /* Status and accent colours for text and small icons, at 4.5:1 or more on the app's surfaces
+     and tinted badges. The palette's 7-8 shades and the brand colour are fills: as small text
+     they read at 2-3.7:1. */
+  --sm-app-text-danger: #b42c3f;
+  --sm-app-text-success: #067a44;
+  --sm-app-text-warning: #b54708;
+  --sm-app-text-accent: #007a60;
 }
 
 [data-theme="dark"] {
@@ -43,6 +50,10 @@
   --sm-app-sidebar: #1a1a1a;
   --sm-app-border: rgba(255, 255, 255, 0.08);
   --sm-app-muted: rgba(255, 255, 255, 0.09);
+  --sm-app-text-danger: #f47a7a;
+  --sm-app-text-success: #2ee07e;
+  --sm-app-text-warning: #ffa061;
+  --sm-app-text-accent: #22cba8;
 }
 
 *,
@@ -797,7 +808,7 @@ button {
 
 .button.danger {
   background: var(--sm-button-danger-secondary-bg);
-  color: var(--sm-button-danger-secondary-fg);
+  color: var(--sm-app-text-danger);
   border-color: var(--sm-button-danger-secondary-border);
 }
 
@@ -886,8 +897,15 @@ input[type="range"] {
   gap: 12px;
 }
 
+.range-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
 .range-row output {
+  flex-shrink: 0;
   min-width: 28px;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--sm-text-medium);
   text-align: right;
@@ -983,13 +1001,18 @@ input[type="range"] {
   margin: 12px 24px 0;
   border-color: var(--sm-palette-red-3);
   background: var(--sm-palette-red-1);
-  color: var(--sm-palette-red-9);
+  color: var(--sm-app-text-danger);
 }
 
 .warning-notice {
   border-color: var(--sm-palette-orange-3);
   background: var(--sm-palette-orange-1);
   color: var(--sm-text-medium);
+}
+
+/* "Next run: …" between the consent notice and the form: room above and below. */
+#scheduler-status {
+  margin: 12px 2px 16px;
 }
 
 .body-copy {
@@ -1528,7 +1551,7 @@ input[type="range"] {
 .composer-chip.is-bypass {
   border-color: var(--sm-palette-red-3);
   background: var(--sm-palette-red-1);
-  color: var(--sm-palette-red-7);
+  color: var(--sm-app-text-danger);
 }
 
 .model-button {
@@ -1645,7 +1668,7 @@ input[type="range"] {
 }
 
 .composer-menu-option[data-permission="bypass"] .composer-menu-option-name {
-  color: var(--sm-palette-red-7);
+  color: var(--sm-app-text-danger);
 }
 
 .composer-menu-option-desc {
@@ -2122,6 +2145,26 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+/* The chat toolbar's controls keep one line; the crumb gives way (ellipsis) first. */
+.chat-actions {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.button.icon-only {
+  width: 28px;
+  padding: 0;
+}
+
+.button.icon-only svg {
+  width: 15px;
+  height: 15px;
+}
+
+.export-menu {
+  width: 260px;
+}
+
 .chat-crumb-folder {
   font-weight: 600;
   letter-spacing: normal;
@@ -2489,12 +2532,12 @@ input[type="range"] {
 }
 
 .diff-line.is-add {
-  color: var(--sm-palette-green-9);
+  color: var(--sm-app-text-success);
   background: var(--sm-palette-green-1);
 }
 
 .diff-line.is-del {
-  color: var(--sm-palette-red-9);
+  color: var(--sm-app-text-danger);
   background: var(--sm-palette-red-1);
 }
 
@@ -2632,7 +2675,7 @@ input[type="range"] {
 .custom-delete:hover {
   background: var(--sm-palette-red-1);
   border-color: var(--sm-palette-red-3);
-  color: var(--sm-palette-red-9);
+  color: var(--sm-app-text-danger);
 }
 
 .catalog-heading-actions {
@@ -2667,7 +2710,7 @@ input[type="range"] {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.3px;
-  color: var(--sm-brand-primary);
+  color: var(--sm-app-text-accent);
 }
 
 .expert-desc {
@@ -2825,7 +2868,39 @@ input[type="range"] {
 }
 
 .automation-info {
+  flex: 1;
   min-width: 0;
+}
+
+.automation-info .status-text,
+.automation-history {
+  font-size: 11px;
+}
+
+.automation-history-list {
+  margin: 4px 0 0 16px;
+}
+
+.automation-error {
+  color: var(--sm-app-text-danger);
+}
+
+.automation-item .dot {
+  background: var(--sm-text-weak);
+}
+
+.automation-item .dot.active {
+  background: var(--sm-palette-green-6);
+}
+
+.automation-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .automation-name {
@@ -2836,8 +2911,11 @@ input[type="range"] {
 }
 
 .automation-prompt {
+  overflow: hidden;
   font-size: 12px;
-  color: var(--sm-text-weak);
+  color: var(--sm-text-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .automation-run-now,
@@ -2879,7 +2957,7 @@ input[type="range"] {
 .automation-delete:hover {
   background: var(--sm-palette-red-1);
   border-color: var(--sm-palette-red-3);
-  color: var(--sm-palette-red-9);
+  color: var(--sm-app-text-danger);
 }
 
 .dot {
@@ -3146,12 +3224,12 @@ input[type="range"] {
 
 .mcp-preset-status {
   font-size: 11px;
-  color: var(--sm-palette-green-9);
+  color: var(--sm-app-text-success);
   white-space: nowrap;
 }
 
 .mcp-preset-status.is-error {
-  color: var(--sm-palette-red-7);
+  color: var(--sm-app-text-danger);
 }
 
 .mcp-list {
@@ -3360,7 +3438,7 @@ input[type="range"] {
 
 .msg-tool.is-error {
   border-color: color-mix(in srgb, var(--sm-color-text-error-default) 45%, transparent);
-  color: var(--sm-color-text-error-default);
+  color: var(--sm-app-text-danger);
   font-weight: 500;
 }
 
@@ -3564,7 +3642,7 @@ input[type="range"] {
   border: 1px solid var(--sm-palette-green-3);
   border-radius: var(--sm-radius-lg);
   background: var(--sm-palette-green-1);
-  color: var(--sm-palette-green-9);
+  color: var(--sm-app-text-success);
   font-size: 12px;
   overflow-wrap: anywhere;
   white-space: pre-line;
@@ -3627,7 +3705,7 @@ input[type="range"] {
 }
 
 .connector-recommended .badge {
-  color: var(--sm-palette-green-9);
+  color: var(--sm-app-text-success);
   background: var(--sm-palette-green-1);
 }
 

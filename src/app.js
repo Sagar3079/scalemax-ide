@@ -92,6 +92,10 @@ const ICONS = {
   chats: 'M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z',
   chevron: 'm6 9 6 6 6-6',
   plus: 'M12 5v14M5 12h14',
+  play: 'M8 5.5v13l10.5-6.5L8 5.5Z',
+  pause: 'M9 5v14M15 5v14',
+  pencil: 'M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4ZM13.5 6.5l4 4',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3',
 };
 
 function icon(name, className) {
@@ -724,9 +728,12 @@ const app = {
     if (!show) return;
     const { name, path } = task.folder;
     const missing = this.missingFolders.has(path);
+    const worktree = normalizeWorktree(task.worktree);
+    const removed = Boolean(worktree?.removed && worktree.path === path);
     notice.classList.toggle('is-missing', missing);
     notice.title = path;
-    text.textContent = missing ? `This task's folder "${name}" is no longer available.` : `This task works in "${name}".`;
+    text.textContent = removed ? `This task's worktree was removed; its branch ${worktree.branch} is kept.`
+      : missing ? `This task's folder "${name}" is no longer available.` : `This task works in "${name}".`;
     action.hidden = false;
     action.textContent = missing ? 'New task' : 'Open it';
     action.dataset.noticeAction = missing ? 'new-task' : 'open';
@@ -1044,6 +1051,14 @@ const app = {
     return this.tasks.find((item) => item.id === this.currentTaskId) || null;
   },
 
+  // The name a folder goes by: a task's worktree by its task folder's name ("app (fix-login)"),
+  // not the generated folder name it has on disk; any other folder by its own name.
+  folderLabel(path) {
+    if (!path) return '';
+    const task = this.tasks.find((item) => item.folder?.name && normalizeWorktree(item.worktree)?.path === path);
+    return task ? task.folder.name : folderName(path);
+  },
+
   // The open folder as a task folder ({ name, path }), or null.
   rootFolder() {
     const root = this.workspace.root;
@@ -1238,7 +1253,7 @@ const app = {
       if (diff) diff.replaceChildren();
       if ($('#git-status')) $('#git-status').textContent = 'Open a repository to review its changes.';
     }
-    renderCrumb(this.workspace.root);
+    renderCrumb(this.workspace.root, this.folderLabel(this.workspace.root));
     this.renderFolder();
     if ($('#workspace-status')) {
       const count = this.workspace.files.length;
@@ -1579,6 +1594,15 @@ const app = {
     if (sequence !== this.folderSequence) return 'superseded';
     const folder = task?.folder;
     let outcome = 'ready';
+    // The user removed this task's worktree (the bar says so): its folder is gone on purpose, so
+    // it is not tried and no error is shown; the notice offers a new task.
+    const worktree = normalizeWorktree(task?.worktree);
+    if (folder && worktree?.removed && folder.path === worktree.path) {
+      this.missingFolders.add(folder.path);
+      this.switchingTo = '';
+      this.settleCurrentTask();
+      return 'missing';
+    }
     if (folder && folder.path !== this.workspace.root) {
       const current = task.id === this.currentTaskId;
       if (this.hasUnsavedEdits()) {
@@ -1863,6 +1887,31 @@ const app = {
       // The bubble was replaced (the chat was drawn again): patch the new one next time.
       if (!patchReply(reply, change, $('#chat-messages'))) this.renderChat();
     });
+    this.keepThreadEnd();
+  },
+
+  // The transcript keeps its end in view when its own box changes height (the worktree bar
+  // appears after a task opens, the composer wraps or grows, the window is resized), if the
+  // reader was at the end before. The box height comes only from the observer: a scroll event
+  // that fires after the layout already shrank would otherwise look like "scrolled up".
+  keepThreadEnd() {
+    const thread = $('#chat-messages');
+    if (!thread || typeof ResizeObserver !== 'function') return;
+    let top = 0;
+    let height = 0;
+    let box = 0;
+    thread.addEventListener('scroll', () => {
+      top = thread.scrollTop;
+      height = thread.scrollHeight;
+    }, { passive: true });
+    new ResizeObserver(() => {
+      // Hidden with its view: keep what was true when it was last shown.
+      if (!thread.clientHeight) return;
+      if (box && height - top - box < 48) thread.scrollTop = thread.scrollHeight;
+      top = thread.scrollTop;
+      height = thread.scrollHeight;
+      box = thread.clientHeight;
+    }).observe(thread);
   },
 
   updateTask(task, time = Date.now()) {
@@ -2660,18 +2709,15 @@ const app = {
     list.replaceChildren(...this.automations.map((automation) => {
       const row = element('div', 'automation-item');
       row.dataset.automationId = automation.id;
+      // Looks live in styles.css (.automation-*), so both themes apply.
       const info = element('div', 'automation-info');
-      info.style.minWidth = '0';
-      info.style.flex = '1';
       const prompt = element('div', 'automation-prompt', automation.prompt);
-      Object.assign(prompt.style, { fontSize: '12px', color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
       prompt.title = automation.prompt;
       info.append(element('strong', 'automation-name', automation.name), prompt);
       const next = automation.active && Number.isFinite(automation.nextRun)
         ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
       const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
       const status = element('div', 'status-text', `${automation.lastStatus || 'idle'}${last} · Next: ${next}`);
-      status.style.fontSize = '11px';
       info.append(status);
       // Where it runs: fixed when it was made, never the folder that happens to be open.
       const where = element('div', 'status-text automation-where', !('folder' in automation)
@@ -2679,13 +2725,11 @@ const app = {
         : automation.folder
           ? `Runs in ${automation.folder.name} · ${automation.mode === 'coding' ? 'Coding' : 'Working'}`
           : 'No folder: runs without file tools');
-      where.style.fontSize = '11px';
       where.title = automation.folder ? automation.folder.path : ('folder' in automation ? 'Made while no folder was open' : '');
       info.append(where);
       if (automation.lastStatus === 'error' || automation.lastStatus === 'interrupted') {
         if (automation.lastError) {
           const error = element('div', 'status-text automation-error', automation.lastError);
-          Object.assign(error.style, { fontSize: '11px', color: '#dc2626' });
           error.setAttribute('role', 'alert');
           info.append(error);
         }
@@ -2693,10 +2737,8 @@ const app = {
       const history = Array.isArray(automation.history) ? automation.history : [];
       if (history.length) {
         const details = element('details', 'automation-history');
-        details.style.fontSize = '11px';
         details.append(element('summary', '', `Run history (${history.length})`));
         const items = element('ol', 'automation-history-list');
-        items.style.margin = '4px 0 0 16px';
         for (const entry of history) {
           const item = element('li', `automation-history-${entry.status}`,
             `${new Date(entry.time).toLocaleString()} · ${entry.status}${entry.preview ? ` — ${entry.preview}` : ''}`);
@@ -2707,21 +2749,24 @@ const app = {
       }
       const schedule = this.describeSchedule(automation);
       const dot = element('span', automation.active ? 'dot active' : 'dot');
-      dot.style.backgroundColor = automation.active ? '#22c55e' : '#888';
       dot.setAttribute('aria-label', automation.active ? 'Active' : 'Paused');
-      const runNow = element('button', 'automation-run-now', '▶ Run now');
+      const runNow = element('button', 'automation-run-now');
+      runNow.append(icon('play', 'automation-icon'), 'Run now');
       runNow.dataset.action = 'run-now';
       runNow.title = `Run ${automation.name} immediately`;
       runNow.setAttribute('aria-label', runNow.title);
-      const toggle = element('button', 'automation-toggle', automation.active ? '⏸' : '▶');
+      const toggle = element('button', 'automation-toggle');
+      toggle.append(icon(automation.active ? 'pause' : 'play', 'automation-icon'));
       toggle.dataset.action = 'toggle';
       toggle.title = `${automation.active ? 'Pause' : 'Resume'} ${automation.name}`;
       toggle.setAttribute('aria-label', toggle.title);
-      const edit = element('button', 'automation-edit', '✎');
+      const edit = element('button', 'automation-edit');
+      edit.append(icon('pencil', 'automation-icon'));
       edit.dataset.action = 'edit';
       edit.title = `Edit ${automation.name}`;
       edit.setAttribute('aria-label', edit.title);
-      const remove = element('button', 'automation-delete', '🗑');
+      const remove = element('button', 'automation-delete');
+      remove.append(icon('trash', 'automation-icon'));
       remove.dataset.action = 'delete';
       remove.title = `Delete ${automation.name}`;
       remove.setAttribute('aria-label', remove.title);

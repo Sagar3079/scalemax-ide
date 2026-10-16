@@ -26,6 +26,8 @@
   align-items: center;
   gap: 5px;
   min-width: 0;
+  /* The branch name (also in the tooltip) gives way; the state stays whole. */
+  flex-shrink: 1;
   padding: 2px 8px;
   border: 1px solid var(--sm-app-border);
   border-radius: 100px;
@@ -61,7 +63,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 1;
+  flex-shrink: 0;
 }
 .worktree-actions {
   position: relative;
@@ -180,6 +182,8 @@
   color: var(--sm-text-strong);
 }
 .ws-branch-count {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .ws-branch-count.is-local {
@@ -288,13 +292,16 @@
 .branch-row:hover {
   background: var(--sm-app-surface-hover);
 }
+.branch-row.is-taken .branch-name {
+  color: var(--sm-text-weak);
+}
 .commit-file .git-status-code {
   flex-shrink: 0;
   width: 14px;
   text-align: center;
 }
 .git-status-code.is-conflict {
-  color: var(--sm-palette-red-8);
+  color: var(--sm-app-text-danger);
 }
 .commit-file-name,
 .branch-name {
@@ -313,7 +320,7 @@
   color: var(--sm-text-weak);
 }
 .commit-file-note.is-warning {
-  color: var(--sm-color-text-warning-default);
+  color: var(--sm-app-text-warning);
 }
 .commit-message {
   width: 100%;
@@ -367,7 +374,7 @@
   overflow-wrap: anywhere;
 }
 .commit-pr-anchor {
-  color: var(--sm-brand-primary);
+  color: var(--sm-app-text-accent);
   font-family: var(--sm-font-code-family);
   font-size: 12.5px;
 }
@@ -380,7 +387,7 @@
   white-space: pre-wrap;
 }
 .commit-status.is-error {
-  color: var(--sm-color-text-error-default);
+  color: var(--sm-app-text-danger);
 }
 .commit-actions {
   display: flex;

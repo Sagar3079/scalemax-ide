@@ -346,7 +346,7 @@ export function activeTabContent() {
 }
 
 /** Toolbar breadcrumb: folder name first, parent path dimmed (ellipsized at the start). */
-export function renderCrumb(root) {
+export function renderCrumb(root, label = '') {
   const node = $('#workspace-path');
   if (!node) return;
   node.title = root || '';
@@ -355,7 +355,9 @@ export function renderCrumb(root) {
     return;
   }
   const parts = root.split('/').filter(Boolean);
-  const name = parts.pop() || root;
+  const own = parts.pop() || root;
+  // A task worktree shows its task's name ("app (fix-login)"), not its generated folder name.
+  const name = label || own;
   const parent = element('span', 'ws-crumb-parent');
   // The isolate keeps the path left-to-right inside the right-to-left overflow box.
   parent.append(element('bdi', '', parts.length ? `/${parts.join('/')}` : '/'));

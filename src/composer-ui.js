@@ -913,6 +913,14 @@ export function bindComposerUi(app) {
   bindArrowKeys($('#permission-menu'), '.composer-menu-option');
   bindArrowKeys($('#mode-menu'), '.composer-menu-option');
   bindFolderMenu(app);
+  // The chat toolbar's Export menu: its two options keep their own handlers (src/sessions-ui.js,
+  // src/catalog-ui.js); picking one closes the menu.
+  const exportMenu = $('#export-menu');
+  bindPopover('#export-menu', '#export-menu-btn', 'end', () => {});
+  bindArrowKeys(exportMenu, '.composer-menu-option');
+  exportMenu?.addEventListener('click', (event) => {
+    if (event.target.closest('.composer-menu-option')) exportMenu.hidePopover?.();
+  });
 
   $('#model-tabs')?.addEventListener('click', (event) => {
     const tab = event.target.closest('[data-model-tab]');
