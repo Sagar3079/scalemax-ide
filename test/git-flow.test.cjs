@@ -369,6 +369,19 @@ test('a task worktree: made outside the project, accepted by the workspace, merg
   assert.equal(fs.existsSync(outside), true);
 });
 
+test('a branch checked out in another worktree is marked and cannot be switched to', async (t) => {
+  const { flow, root, base } = setup(t, { gitVersion: [2, 15, 0] });
+  const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
+  const inWorktree = await flow.branches(made.path);
+  assert.equal(inWorktree.current, 'scalemax/fix-the-answer');
+  assert.equal(inWorktree.branches.find((branch) => branch.name === base).elsewhere, root);
+  assert.equal(inWorktree.branches.find((branch) => branch.name === 'scalemax/fix-the-answer').elsewhere, null, 'its own branch is not elsewhere');
+  await assert.rejects(flow.switchBranch(made.path, { branch: base }), { code: 'BRANCH_IN_USE', message: new RegExp(`"${path.basename(root)}"`) });
+  const inMain = await flow.branches(root);
+  assert.equal(inMain.branches.find((branch) => branch.name === 'scalemax/fix-the-answer').elsewhere, made.path);
+  assert.equal(inMain.branches.find((branch) => branch.name === base).elsewhere, null);
+});
+
 test('the backups a save leaves in .cache/editor-backups stay out of Git: commit list, merge and remove', async (t) => {
   const { flow, root, base } = setup(t, { gitVersion: [2, 15, 0] });
   const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
