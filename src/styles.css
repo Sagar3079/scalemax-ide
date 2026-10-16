@@ -1346,8 +1346,11 @@ input[type="range"] {
   border-color: transparent;
 }
 
+/* In a narrow window the model button and Send move to a second line together (right-aligned
+   by .send-actions) instead of being squeezed to nothing or pushed past the window's edge. */
 .sm-home-composer__toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
