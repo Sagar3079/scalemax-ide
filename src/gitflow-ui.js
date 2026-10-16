@@ -105,8 +105,12 @@ export async function refreshGitHeader(app) {
   if (token !== header.token) return;
   header.root = root;
   header.data = data;
+  // Git looked at the open folder again (a reply changed files, a save, Refresh Git): the bar of
+  // a task working in it reads its state again ("1 change not committed", commits to merge).
+  for (const task of app.tasks) if (root && task.folder?.path === root && normalizeWorktree(task.worktree)) infos.delete(task.id);
   renderHeader(app);
   renderWorktreeChip(app);
+  renderWorktreeBar(app);
 }
 
 function renderHeader(app) {
