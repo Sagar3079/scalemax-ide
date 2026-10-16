@@ -105,7 +105,7 @@ test('steps are bounded when kept and summarised for the folded list', () => {
   assert.equal(steps[1].preview.length, 200);
   assert.equal(steps[3].output.length, 4096);
   assert.ok(steps[3].output.endsWith('END'));
-  assert.equal(stepSummary(steps), '3 steps · Read 2 files · Ran a command · failed');
+  assert.equal(stepSummary(steps), '3 steps · Read 2 files · Tried to run a command · failed');
   assert.equal(stepSummary([{ type: 'note', text: 'Only words.' }]), 'Notes');
   assert.equal(normalizeSteps(Array.from({ length: 300 }, () => ({ type: 'note', text: 'n' }))).length, 200);
 });

@@ -327,34 +327,34 @@ export function taskTime(time, now = Date.now()) {
 // what a reply did (one call, several calls) and what it is doing right now.
 const TOOL_LABELS = {
   Workspace: {
-    list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder' },
-    read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file' },
-    search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project' },
-    write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file' },
-    edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file' },
-    run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command' },
+    list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder', tried: (n) => (n === 1 ? 'Tried to list a folder' : `Tried to list ${n} folders`) },
+    read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file', tried: (n) => (n === 1 ? 'Tried to read a file' : `Tried to read ${n} files`) },
+    search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project', tried: (n) => (n === 1 ? 'Tried to search the project' : `Tried to search ${n} times`) },
+    write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file', tried: (n) => (n === 1 ? 'Tried to write a file' : `Tried to write ${n} files`) },
+    edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file', tried: (n) => (n === 1 ? 'Tried to edit a file' : `Tried ${n} edits`) },
+    run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command', tried: (n) => (n === 1 ? 'Tried to run a command' : `Tried to run ${n} commands`) },
   },
   Web: {
-    search: { one: 'Searched the web', many: (n) => `Searched the web ${n} times`, doing: 'Searching the web' },
-    open_page: { one: 'Read a web page', many: (n) => `Read ${n} web pages`, doing: 'Reading a web page' },
+    search: { one: 'Searched the web', many: (n) => `Searched the web ${n} times`, doing: 'Searching the web', tried: (n) => (n === 1 ? 'Tried to search the web' : `Tried to search the web ${n} times`) },
+    open_page: { one: 'Read a web page', many: (n) => `Read ${n} web pages`, doing: 'Reading a web page', tried: (n) => (n === 1 ? 'Tried to read a web page' : `Tried to read ${n} web pages`) },
   },
   Computer: {
-    read_clipboard: { one: 'Read the clipboard', many: (n) => `Read the clipboard ${n} times`, doing: 'Reading the clipboard' },
-    write_clipboard: { one: 'Copied to the clipboard', many: (n) => `Copied to the clipboard ${n} times`, doing: 'Copying to the clipboard' },
-    open: { one: 'Opened it in its app', many: (n) => `Opened ${n} things`, doing: 'Opening it in its app' },
-    reveal: { one: 'Showed it in the Finder', many: (n) => `Showed ${n} items in the Finder`, doing: 'Showing it in the Finder' },
+    read_clipboard: { one: 'Read the clipboard', many: (n) => `Read the clipboard ${n} times`, doing: 'Reading the clipboard', tried: (n) => (n === 1 ? 'Tried to read the clipboard' : `Tried to read the clipboard ${n} times`) },
+    write_clipboard: { one: 'Copied to the clipboard', many: (n) => `Copied to the clipboard ${n} times`, doing: 'Copying to the clipboard', tried: (n) => (n === 1 ? 'Tried to copy to the clipboard' : `Tried to copy to the clipboard ${n} times`) },
+    open: { one: 'Opened it in its app', many: (n) => `Opened ${n} things`, doing: 'Opening it in its app', tried: (n) => (n === 1 ? 'Tried to open it in its app' : `Tried to open ${n} things`) },
+    reveal: { one: 'Showed it in the Finder', many: (n) => `Showed ${n} items in the Finder`, doing: 'Showing it in the Finder', tried: (n) => (n === 1 ? 'Tried to show it in the Finder' : `Tried to show ${n} items in the Finder`) },
   },
   Todos: {
-    todo_write: { one: 'Updated the to-do list', many: (n) => `Updated the to-do list ${n} times`, doing: 'Updating the to-do list' },
+    todo_write: { one: 'Updated the to-do list', many: (n) => `Updated the to-do list ${n} times`, doing: 'Updating the to-do list', tried: (n) => (n === 1 ? 'Tried to update the to-do list' : `Tried to update the to-do list ${n} times`) },
   },
   // Work handed to a subagent (lib/subagents.cjs).
   Agents: {
-    agent_task: { one: 'Ran a subagent', many: (n) => `Ran ${n} subagents`, doing: 'Running a subagent' },
+    agent_task: { one: 'Ran a subagent', many: (n) => `Ran ${n} subagents`, doing: 'Running a subagent', tried: (n) => (n === 1 ? 'Tried to run a subagent' : `Tried to run ${n} subagents`) },
   },
   // The resources MCP servers offer (lib/mcp.cjs: mcp_list_resources, mcp_read_resource).
   MCP: {
-    list_resources: { one: 'Listed MCP resources', many: (n) => `Listed MCP resources ${n} times`, doing: 'Listing MCP resources' },
-    read_resource: { one: 'Read an MCP resource', many: (n) => `Read ${n} MCP resources`, doing: 'Reading an MCP resource' },
+    list_resources: { one: 'Listed MCP resources', many: (n) => `Listed MCP resources ${n} times`, doing: 'Listing MCP resources', tried: (n) => (n === 1 ? 'Tried to list MCP resources' : `Tried to list MCP resources ${n} times`) },
+    read_resource: { one: 'Read an MCP resource', many: (n) => `Read ${n} MCP resources`, doing: 'Reading an MCP resource', tried: (n) => (n === 1 ? 'Tried to read an MCP resource' : `Tried to read ${n} MCP resources`) },
   },
 };
 
@@ -383,7 +383,12 @@ export function toolCallGroups(calls) {
   return groups.map((group) => {
     const known = toolLabel(group.server, group.tool);
     const name = `${group.server ? `${group.server} · ` : ''}${group.tool}`;
-    const base = known ? (group.count === 1 ? known.one : known.many(group.count)) : `${name}${group.count > 1 ? ` ×${group.count}` : ''}`;
+    // The verb counts what worked ("Edited a file · 1 failed"); when nothing worked it says what
+    // was tried ("Tried 2 edits · failed"), never "Made 2 edits".
+    const done = group.count - group.failed;
+    const base = !known ? `${name}${group.count > 1 ? ` ×${group.count}` : ''}`
+      : done === 0 ? known.tried(group.count)
+        : done === 1 ? known.one : known.many(done);
     const failure = !group.failed ? '' : group.failed === group.count ? ' · failed' : ` · ${group.failed} failed`;
     const calls = `${group.count} call${group.count === 1 ? '' : 's'}${group.failed ? `, ${group.failed} failed` : ''}`;
     return { ...group, ok: group.failed === 0, label: `${base}${failure}`, title: `${name}: ${calls}` };

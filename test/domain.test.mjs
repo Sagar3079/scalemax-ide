@@ -501,8 +501,8 @@ test('tool calls of a reply are grouped with plain labels', () => {
   assert.deepEqual(groups.map((group) => [group.label, group.ok]), [
     ['Read 2 files', true],
     ['Listed a folder', true],
-    ['Made 2 edits · 1 failed', false],
-    ['Ran a command · failed', false],
+    ['Edited a file · 1 failed', false],
+    ['Tried to run a command · failed', false],
     ['GitHub · search_code ×2', true],
     ['lonely', true],
   ]);
