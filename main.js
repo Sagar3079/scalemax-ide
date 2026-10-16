@@ -2040,7 +2040,10 @@ app.on('will-quit', (event) => {
   void Promise.race([closing, new Promise((resolve) => { timer = setTimeout(resolve, MCP_CLOSE_WAIT_MS); })])
     .finally(() => {
       clearTimeout(timer);
-      app.quit();
+      // Quit again from a new task. With no MCP server the race settles in a microtask, still
+      // inside the will-quit Electron is dispatching; a quit asked for there is dropped when the
+      // prevented will-quit unwinds, and the app (Cmd+Q included) never quit.
+      setImmediate(() => app.quit());
     });
 });
 
