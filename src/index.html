@@ -104,8 +104,6 @@
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
             <span id="chat-crumb" class="eyebrow chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
-            <!-- A task in a separate worktree: its branch and what to do with it (src/gitflow-ui.js). -->
-            <div id="worktree-bar" class="worktree-bar" role="group" aria-label="Worktree of this task" hidden></div>
             <div class="button-row">
               <button id="sessions-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="sessions-dialog">Recent sessions</button>
               <button id="export-transcript-btn" class="button secondary" type="button" title="Save this conversation as a Markdown file">Export transcript</button>
@@ -113,6 +111,9 @@
               <button id="delete-task-btn" class="button danger" type="button">Delete task</button>
             </div>
           </div>
+          <!-- A task in a separate worktree: its branch and what to do with it, on a row of its own
+               under the toolbar so it never squeezes the toolbar (src/gitflow-ui.js). -->
+          <div id="worktree-bar" class="worktree-bar" role="group" aria-label="Worktree of this task" hidden></div>
           <div class="sm-home-page">
             <header class="sm-home-header">
               <div class="sm-home-header__title-wrap">

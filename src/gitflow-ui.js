@@ -619,6 +619,9 @@ async function switchBranch() {
 // Empty tasks whose first message makes a worktree, and tasks making one now.
 const offers = new Set();
 const making = new Set();
+// Whether the worktree bar's "More" menu is open; kept across redraws (a worktree's state arrives
+// after the bar is drawn).
+let menuOpen = false;
 
 function repoHere(app) {
   return header.root === app.workspace.root ? header.data : null;
@@ -734,6 +737,15 @@ function worktreeAction(label, action, title) {
   return button;
 }
 
+/** Opens or closes the worktree bar's "More" menu; a keyboard open focuses its first item. */
+function setWorktreeMenu(app, open, { focusFirst = false, refocus = true } = {}) {
+  menuOpen = open;
+  renderWorktreeBar(app);
+  const bar = $('#worktree-bar');
+  if (open && focusFirst) bar?.querySelector('.worktree-menu-item')?.focus();
+  else if (!open && refocus) bar?.querySelector('[data-worktree-menu]')?.focus();
+}
+
 /** The task header's worktree bar: the branch, its state and what to do with it. */
 function renderWorktreeBar(app) {
   const bar = $('#worktree-bar');
@@ -743,6 +755,7 @@ function renderWorktreeBar(app) {
   const show = Boolean(worktree && task.folder?.path === worktree.path);
   bar.hidden = !show;
   if (!show) {
+    menuOpen = false;
     bar.replaceChildren();
     return;
   }
@@ -755,20 +768,43 @@ function renderWorktreeBar(app) {
   state.setAttribute('role', 'status');
   // Keyboard focus stays on the same action across a redraw.
   const focused = bar.contains(document.activeElement) ? document.activeElement.dataset.worktreeAction : '';
+  const focusedMenu = bar.contains(document.activeElement) && Boolean(document.activeElement.dataset.worktreeMenu);
   const nodes = [label, state];
   if (!worktree.removed) {
+    // Commit and Create PR stay in view; the rarer actions sit in a menu so the bar stays one
+    // line at the narrowest window.
     const actions = element('div', 'worktree-actions');
-    actions.append(
+    const more = element('button', 'worktree-action worktree-more', 'More');
+    more.dataset.worktreeMenu = 'toggle';
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', String(menuOpen));
+    more.title = 'More worktree actions';
+    const menu = element('div', 'worktree-menu');
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'More worktree actions');
+    menu.hidden = !menuOpen;
+    for (const item of [
       worktreeAction('Show in Finder', 'reveal', worktree.path),
-      worktreeAction('Commit…', 'commit', 'Commit the changes in this worktree'),
       ...(worktree.base ? [worktreeAction(`Merge into ${worktree.base}`, 'merge', `Merge ${worktree.branch} into ${worktree.base} in "${worktree.mainName}"`)] : []),
-      worktreeAction('Create PR', 'pr', `Push ${worktree.branch} and open a pull request`),
       worktreeAction('Remove worktree', 'remove', 'Delete this worktree folder (the branch is kept)'),
+    ]) {
+      item.classList.add('worktree-menu-item');
+      item.setAttribute('role', 'menuitem');
+      menu.append(item);
+    }
+    actions.append(
+      worktreeAction('Commit…', 'commit', 'Commit the changes in this worktree'),
+      worktreeAction('Create PR', 'pr', `Push ${worktree.branch} and open a pull request`),
+      more,
+      menu,
     );
     nodes.push(actions);
+  } else {
+    menuOpen = false;
   }
   bar.replaceChildren(...nodes);
   if (focused) bar.querySelector(`[data-worktree-action="${focused}"]`)?.focus();
+  else if (focusedMenu) bar.querySelector('[data-worktree-menu]')?.focus();
   if (!worktree.removed && (!entry || Date.now() - entry.at > INFO_MAX_AGE_MS)) void readWorktreeInfo(app, task, worktree);
 }
 
@@ -933,8 +969,25 @@ export function bindGitFlowUi(app) {
     app.showToast(offers.has(task.id) ? 'This task will work in a separate worktree' : 'This task works in the project folder itself');
   });
   $('#worktree-bar')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-worktree-menu]')) {
+      setWorktreeMenu(app, !menuOpen, { focusFirst: event.detail === 0 });
+      return;
+    }
     const button = event.target.closest('[data-worktree-action]');
-    if (button) void runWorktreeAction(app, button.dataset.worktreeAction, button);
+    if (!button) return;
+    if (button.closest('.worktree-menu')) setWorktreeMenu(app, false, { refocus: false });
+    void runWorktreeAction(app, button.dataset.worktreeAction, button);
+  });
+  // The menu closes on Escape (focus back on "More") and on any click outside it.
+  $('#worktree-bar')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && menuOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setWorktreeMenu(app, false);
+    }
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (menuOpen && !event.target.closest?.('.worktree-actions')) setWorktreeMenu(app, false, { refocus: false });
   });
   renderHeader(app);
 }
