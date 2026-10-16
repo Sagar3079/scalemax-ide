@@ -369,6 +369,34 @@ test('a task worktree: made outside the project, accepted by the workspace, merg
   assert.equal(fs.existsSync(outside), true);
 });
 
+test('the backups a save leaves in .cache/editor-backups stay out of Git: commit list, merge and remove', async (t) => {
+  const { flow, root, base } = setup(t, { gitVersion: [2, 15, 0] });
+  const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  await workspace.select(made.path);
+  const before = await workspace.read('src/app.js');
+  await workspace.write({ path: 'src/app.js', content: 'export const answer = 42;\n', revision: before.revision });
+  const backups = path.join(made.path, '.cache', 'editor-backups');
+  assert.equal(fs.readdirSync(backups).filter((name) => name.endsWith('.bak')).length, 1, 'the save was backed up');
+  assert.deepEqual((await flow.status(made.path)).files.map((file) => file.path), ['src/app.js']);
+  assert.deepEqual((await workspace.gitStatus()).files, [{ status: ' M', path: 'src/app.js' }]);
+  await flow.commit(made.path, { paths: ['src/app.js'], message: 'fix: the answer is 42' });
+  assert.equal((await flow.worktreeInfo(made.path, { base })).dirty, false);
+  assert.equal((await flow.mergeWorktree(made.path, { base, into: root })).merged, true);
+  assert.deepEqual(await flow.removeWorktree(made.path, { base }), { removed: true, branch: 'scalemax/fix-the-answer' });
+  // A backup folder made before the marker existed gets it on the next save.
+  await workspace.select(root);
+  fs.mkdirSync(path.join(root, '.cache', 'editor-backups'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.cache', 'editor-backups', 'old.bak'), 'old\n');
+  const readme = await workspace.read('README.md');
+  await workspace.write({ path: 'README.md', content: '# Demo 2\n', revision: readme.revision });
+  assert.deepEqual((await flow.status(root)).files.map((file) => file.path), ['README.md']);
+  // Something else of the project's own in .cache is still listed.
+  write(root, '.cache/build.log', 'built\n');
+  assert.deepEqual((await flow.status(root)).files.map((file) => file.path).sort(), ['.cache/', 'README.md']);
+});
+
 test('removing follows the Git on PATH: git worktree remove from 2.17, the folder and a prune before', async (t) => {
   // No version given: the flow asks Git (2.15 on the development Mac takes the older way).
   const { flow, root, env } = setup(t);

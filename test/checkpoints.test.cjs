@@ -180,7 +180,7 @@ test('the workspace can delete a file only with its current revision, and backs 
   await assert.rejects(workspace.remove({ path: 'link.md', revision: file.revision }), { code: 'SYMLINK' });
   assert.deepEqual(await workspace.remove({ path: 'README.md', revision: file.revision }), { path: 'README.md', removed: true });
   assert.equal(fs.existsSync(path.join(root, 'README.md')), false);
-  const backups = fs.readdirSync(path.join(root, '.cache', 'editor-backups'));
+  const backups = fs.readdirSync(path.join(root, '.cache', 'editor-backups')).filter((name) => name.endsWith('.bak'));
   assert.equal(fs.readFileSync(path.join(root, '.cache', 'editor-backups', backups[0]), 'utf8'), '# Demo\n');
   assert.equal(SERVER_ID, 'Workspace');
 });
