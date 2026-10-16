@@ -739,13 +739,15 @@ async function run(win) {
       await send('show history');
       await until(() => lastText(uiTaskB).startsWith('history: '), 8000);
       const historyText = lastText(uiTaskB);
-      // A reply that fails part way keeps what it wrote, with the reason under it.
+      // A reply that fails part way keeps what it wrote, with the reason under it. The stub's
+      // error event says server_error, which main retries like an overloaded server (1 s, 3 s,
+      // 8 s) before it gives up, so the wait covers all four tries.
       const lastMessage = (taskId) => {
         const task = app.tasks.find((item) => item.id === taskId);
         return task ? task.messages[task.messages.length - 1] : null;
       };
       await send('fail midway please');
-      await until(() => Boolean(lastMessage(uiTaskB) && lastMessage(uiTaskB).interrupted === 'failed'), 8000);
+      await until(() => Boolean(lastMessage(uiTaskB) && lastMessage(uiTaskB).interrupted === 'failed'), 20000);
       const failed = lastMessage(uiTaskB) || {};
       // Stop that reaches main before the tool loop started still stops the reply.
       const early = api.provider.send({ requestId: 'smoke-early-stop', folder: ${JSON.stringify(parDirA)}, messages: [{ role: 'user', content: 'ping' }] });
