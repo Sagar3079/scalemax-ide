@@ -4,7 +4,10 @@
  *     and gives the model image parts, main.js withImages);
  *   - files named with @: typing "@" opens a menu of the open folder's files (workspace:find);
  *     on send, each file still named in the text goes along as its contents (read through the
- *     workspace service, so secret files and links are refused there).
+ *     workspace service, so secret files and links are refused there);
+ *   - "@folder/" goes along as what is in that folder (two levels), "@https://…" as the page's
+ *     text (fetched by main with web_open's guards) and "@job:j2" as a background command's
+ *     recent output (only one of this folder): main resolves them (mention:resolve).
  * DOM is built with createElement and textContent only (no HTML).
  */
 import { normalizeMessageImages } from './domain.mjs';
@@ -22,10 +25,13 @@ const MAX_MENTIONS_BYTES = 512 * 1024;
 const MAX_MENTIONS = 8;
 // "@path" right before the caret: start of the text or after a space, no spaces inside.
 const MENTION_AT_CARET = /(^|\s)@([^\s@]*)$/;
-// Every "@path" in a message (paths with letters, digits and . _ - / only).
-const MENTION_IN_TEXT = /(^|\s)@([\w.\-/]+[\w\-/])/g;
+// Every "@…" in a message: a web address, a background command ("job:j2"), or a path with
+// letters, digits and . _ - / only (a folder when it ends in "/").
+const MENTION_IN_TEXT = /(^|\s)@(?:(https?:\/\/[^\s<>"'`]+)|job:(j\d{1,9})(?![\w\-/])|([\w.\-/]+[\w\-/]))/g;
+// Folders offered in the menu besides the files.
+const MAX_FOLDER_SUGGESTIONS = 5;
 
-const state = { app: null, images: [], busy: 0, menu: null, results: [], active: 0, token: 0, timer: null };
+const state = { app: null, images: [], busy: 0, menu: null, results: [], details: new Map(), active: 0, token: 0, timer: null };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -173,7 +179,9 @@ function renderMenu() {
   if (!state.menu) { closeMenu(); return; }
   menu.hidden = false;
   if (!state.results.length) {
-    menu.replaceChildren(element('div', 'mention-empty', state.menu.loading ? 'Looking for files…' : 'No file with that name in this folder'));
+    const jobs = /^job:/i.test(state.menu.query);
+    menu.replaceChildren(element('div', 'mention-empty', state.menu.loading ? 'Looking for files…'
+      : jobs ? 'No background command in this folder' : 'No file with that name in this folder'));
     input.removeAttribute('aria-activedescendant');
     return;
   }
@@ -183,12 +191,66 @@ function renderMenu() {
     option.setAttribute('role', 'option');
     option.setAttribute('aria-selected', String(index === state.active));
     option.dataset.path = path;
-    const slash = path.lastIndexOf('/');
-    option.append(element('span', 'mention-name', path.slice(slash + 1)), element('span', 'mention-dir', slash > 0 ? path.slice(0, slash) : ''));
+    const label = mentionLabel(path);
+    option.append(element('span', 'mention-name', label.name), element('span', 'mention-dir', label.dir));
     return option;
   }));
   input.setAttribute('aria-activedescendant', `mention-option-${state.active}`);
   menu.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+}
+
+// How a suggestion shows in the menu: a file or folder by its name and where it is, a background
+// command by its id and command line.
+function mentionLabel(path) {
+  if (path.startsWith('job:')) return { name: path, dir: state.details.get(path) || '' };
+  const folder = path.endsWith('/');
+  const trimmed = folder ? path.slice(0, -1) : path;
+  const slash = trimmed.lastIndexOf('/');
+  return { name: `${trimmed.slice(slash + 1)}${folder ? '/' : ''}`, dir: slash > 0 ? trimmed.slice(0, slash) : '' };
+}
+
+/**
+ * Folders to offer besides the files found for `query` ("@src" → src/): the folders of those files
+ * whose name has the query in it or whose path starts with it, or with nothing typed the top-level
+ * ones; at most MAX_FOLDER_SUGGESTIONS, in the order of the files.
+ */
+export function folderSuggestions(files, query) {
+  const wanted = String(query ?? '').toLowerCase().replace(/\/+$/, '');
+  const folders = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    const parts = String(file).split('/');
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      const folder = `${parts.slice(0, depth).join('/')}/`;
+      if (folders.includes(folder)) continue;
+      const fits = wanted ? parts[depth - 1].toLowerCase().includes(wanted) || folder.toLowerCase().startsWith(wanted) : depth === 1;
+      if (fits) folders.push(folder);
+      if (folders.length >= MAX_FOLDER_SUGGESTIONS) return folders;
+    }
+  }
+  return folders;
+}
+
+// What the menu offers for `query`: background commands of this folder after "job:", otherwise
+// folders and files of the open folder.
+async function mentionSuggestions(query, root) {
+  const details = new Map();
+  let found = [];
+  if (/^job:/i.test(query)) {
+    const listed = await window.scalemaxAPI?.jobs?.list?.();
+    const wanted = query.slice(4).toLowerCase();
+    const jobs = listed?.ok && Array.isArray(listed.data) ? listed.data : [];
+    found = jobs.filter((job) => job && job.root === root && typeof job.id === 'string'
+      && (!wanted || job.id.startsWith(wanted) || String(job.command || '').toLowerCase().includes(wanted)))
+      .slice(0, 20).map((job) => {
+        details.set(`job:${job.id}`, String(job.command || ''));
+        return `job:${job.id}`;
+      });
+  } else {
+    const result = await window.scalemaxAPI?.workspace?.find?.(query);
+    const files = result?.ok && Array.isArray(result.data?.files) ? result.data.files : [];
+    found = [...folderSuggestions(files, query), ...files];
+  }
+  return { found, details };
 }
 
 function updateMention() {
@@ -197,18 +259,20 @@ function updateMention() {
   if (!input || !app?.workspace?.root || input.selectionStart !== input.selectionEnd) { closeMenu(); return; }
   const before = input.value.slice(0, input.selectionStart);
   const match = MENTION_AT_CARET.exec(before);
-  if (!match) { closeMenu(); return; }
+  // A web address has nothing to choose from.
+  if (!match || /^https?:/i.test(match[2])) { closeMenu(); return; }
   const query = match[2];
   state.menu = { start: before.length - query.length - 1, query, loading: true };
   const token = (state.token += 1);
   clearTimeout(state.timer);
   state.timer = setTimeout(async () => {
-    let result = null;
+    let suggestions = { found: [], details: new Map() };
     try {
-      result = await window.scalemaxAPI?.workspace?.find?.(query);
+      suggestions = await mentionSuggestions(query, app.workspace.root);
     } catch { /* shown as no results */ }
     if (token !== state.token || !state.menu) return;
-    state.results = result?.ok && Array.isArray(result.data?.files) ? result.data.files : [];
+    state.results = suggestions.found;
+    state.details = suggestions.details;
     state.active = 0;
     state.menu.loading = false;
     renderMenu();
@@ -264,17 +328,80 @@ function utf8Head(text, limit) {
 }
 
 /**
- * The files named with @ in `text`, as blocks for the model ("File src/app.js:" and its text).
+ * What is named with @ in `text`, in order and once each (at most MAX_MENTIONS):
+ * { kind: 'file' | 'folder' | 'url' | 'job', value }. A trailing . , ; : ! ? ) or ] after a web
+ * address is the sentence's, not the address's.
+ */
+export function mentionTargets(text) {
+  const targets = [];
+  const seen = new Set();
+  for (const match of String(text || '').matchAll(MENTION_IN_TEXT)) {
+    const target = match[2] ? { kind: 'url', value: match[2].replace(/[.,;:!?)\]]+$/, '') }
+      : match[3] ? { kind: 'job', value: match[3] }
+        : { kind: match[4].endsWith('/') ? 'folder' : 'file', value: match[4] };
+    const key = `${target.kind}:${target.value}`;
+    if (!target.value || seen.has(key)) continue;
+    seen.add(key);
+    targets.push(target);
+    if (targets.length >= MAX_MENTIONS) break;
+  }
+  return targets;
+}
+
+const MENTION_HEADINGS = {
+  folder: (label) => `Folder ${label} (named by the user with @; what is in it, two levels deep, secret files left out):`,
+  url: (label) => `Web page ${label} (named by the user with @; read by ScaleMax just now, as text):`,
+  job: (label) => `Background command ${label} (named by the user with @; its most recent output):`,
+};
+// A folder, a web page or a background command named with @, as main resolves it; a block for the
+// model and its size, or null (the user is told why it did not go along).
+async function otherMention(app, target, folder, room) {
+  const api = window.scalemaxAPI?.mentions;
+  if (!api?.resolve) return null;
+  let result;
+  try {
+    result = await api.resolve({ folder, kind: target.kind, value: target.value });
+  } catch {
+    result = null;
+  }
+  if (!result?.ok || typeof result.data?.text !== 'string') {
+    const name = target.kind === 'job' ? `job:${target.value}` : target.value;
+    app.showToast?.(`@${name} did not go along: ${result?.error?.message || 'it could not be read'}`);
+    return null;
+  }
+  let content = result.data.text;
+  let note = '';
+  const limit = Math.min(MAX_MENTION_BYTES, room);
+  if (utf8Bytes(content) > limit) {
+    content = utf8Head(content, limit);
+    note = '\n[… the rest was left out]';
+  }
+  const fence = content.includes('```') ? '~~~~' : '```';
+  const label = typeof result.data.label === 'string' && result.data.label ? result.data.label : target.value;
+  return { text: `${MENTION_HEADINGS[target.kind](label)}\n${fence}\n${content}\n${fence}${note}`, bytes: utf8Bytes(content) };
+}
+
+/**
+ * What is named with @ in `text`, as blocks for the model: a file as "File src/app.js:" and its
+ * text, a folder as its listing, a web page as its text, a background command as its output.
  * Paths that are not files of the folder are left alone (an e-mail address, a handle).
  */
 export async function mentionBlocks(app, text, folder) {
   const api = window.scalemaxAPI?.workspace;
   if (!api?.read || !folder || folder !== app.workspace?.root) return '';
-  const paths = [...new Set([...String(text || '').matchAll(MENTION_IN_TEXT)].map((match) => match[2]))].slice(0, MAX_MENTIONS);
   const blocks = [];
   let room = MAX_MENTIONS_BYTES;
-  for (const path of paths) {
+  for (const target of mentionTargets(text)) {
     if (room <= 0) break;
+    if (target.kind !== 'file') {
+      const block = await otherMention(app, target, folder, room);
+      if (block) {
+        blocks.push(block.text);
+        room -= block.bytes;
+      }
+      continue;
+    }
+    const path = target.value;
     let result;
     try {
       result = await api.read(path);

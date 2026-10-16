@@ -613,11 +613,23 @@ const COMPUTER_SUMMARIES = {
   reveal: 'The model wants to show a file of your project in the Finder.',
 };
 function approvalSummary(request) {
+  // Handing work to a subagent (lib/subagents.cjs; it asks in Manual): its own calls ask too.
+  if (request.kind === 'agents') {
+    const args = approvalArguments(request);
+    const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
+    const what = typeof args.description === 'string' && args.description.trim() ? ` ("${args.description.trim().slice(0, 120)}")` : '';
+    return `The model wants to hand part of this work to a subagent${what}. It works in ${where} with a fresh context of its own and reports back; ${args.kind === 'general'
+      ? 'it may change files and run commands, and its own tool calls ask you as usual.' : 'it can only read and search.'}`;
+  }
   if (request.kind === 'workspace') {
     const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
     if (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input') {
       const action = request.reason === 'unsandboxed-input' ? 'type into a command' : 'run a command';
       return `The model wants to ${action} in ${where} outside the sandbox. There it can change any of your files, read credential folders such as ~/.ssh and use the network. ScaleMax asks about this every time, whatever the permission mode.`;
+    }
+    // The hooks settings: commands that run on this Mac outside the sandbox (lib/hooks.cjs).
+    if (request.reason === 'hooks-config') {
+      return `The model wants to change .scalemax/settings.json in ${where}, where hooks are set up: commands ScaleMax runs on your Mac, outside the sandbox. ScaleMax asks about this every time, whatever the permission mode, and changed project hooks wait for your approval before they run.`;
     }
     const summary = WORKSPACE_SUMMARIES[request.toolName];
     if (!summary) return `The model wants to read files in ${where}.`;
@@ -633,6 +645,13 @@ function approvalSummary(request) {
     return COMPUTER_SUMMARIES[request.toolName] || 'The model wants to use your clipboard or open something on your computer.';
   }
   if (request.kind === 'web') return 'The model wants to search the web or read a page.';
+  // A resource address the model filled in from a server's URI template (lib/mcp.cjs
+  // readResourceReason): only a read, but the address itself reaches the server.
+  if (request.serverId === 'MCP' && request.toolName === 'read_resource') {
+    const args = approvalArguments(request);
+    const server = typeof args.server === 'string' && args.server ? `"${args.server.slice(0, 80)}"` : 'an MCP server';
+    return `The model wants to read a resource from ${server} at an address it filled in itself. It only reads, but the address could carry text from this conversation to that server. Check it below, or turn on "Trust its read-only labels" for the server to stop asking.`;
+  }
   if (request.claimsReadOnly) {
     return `The model wants to run "${request.toolName}" on ${request.serverName}. The server says this tool only reads data, but ScaleMax cannot check that. If you trust this server, turn on "Trust its read-only labels" for it in Assistant → MCP servers.`;
   }
@@ -656,6 +675,8 @@ function showNextApproval() {
   const task = reply && reply.taskId !== approvals.app.currentTaskId
     ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
   $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
+  // A call a subagent of that reply makes says which one.
+  if (request.subagent) $('#approval-eyebrow').textContent += ` · Subagent: ${request.subagent}`;
   // A call that always asks (a command outside the sandbox, the clipboard) is allowed one at a
   // time; an address the model made up can be allowed for its site, for the rest of this reply.
   const egress = request.reason === 'egress' && Boolean(request.host);
@@ -664,7 +685,8 @@ function showNextApproval() {
   $('#approval-title').textContent = request.reason === 'unsandboxed-input'
     ? 'Type into this command outside the sandbox?'
     : outside ? 'Run this command outside the sandbox?'
-      : egress ? `Open an address on ${request.host || 'this site'}?` : `Allow ${request.serverName} · ${request.toolName}?`;
+      : egress ? `Open an address on ${request.host || 'this site'}?`
+        : request.kind === 'agents' ? 'Hand this to a subagent?' : `Allow ${request.serverName} · ${request.toolName}?`;
   $('#approval-summary').textContent = approvalSummary(request);
   $('#approval-arguments').textContent = request.arguments || '{}';
   const all = $('#approval-all');
@@ -710,14 +732,16 @@ function bindApprovals(app) {
       approvalId: request.approvalId,
       requestId: String(request.requestId || ''),
       serverName: String(request.serverName || request.serverId || 'MCP server'),
-      kind: ['workspace', 'web', 'computer'].includes(request.kind) ? request.kind : 'mcp',
+      kind: ['workspace', 'web', 'computer', 'agents'].includes(request.kind) ? request.kind : 'mcp',
+      // The subagent making this call (its description), when one does.
+      subagent: typeof request.subagent === 'string' ? request.subagent.slice(0, 120) : '',
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
       folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
       // Why it always asks ('unsandboxed', 'egress', or another reason main gives), and how a command runs.
       reason: typeof request.reason === 'string' && request.reason
-        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private'].includes(request.reason) ? request.reason : 'required') : '',
+        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private', 'hooks-config'].includes(request.reason) ? request.reason : 'required') : '',
       host: typeof request.host === 'string' ? request.host.slice(0, 255) : '',
       claimsReadOnly: request.claimsReadOnly === true,
       sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',
@@ -847,8 +871,9 @@ function writeProjectNotes(app) {
   input.value = '/init';
   // Main only recognises a message that is exactly "/init", so no attachment rides along.
   app.attachment = null;
-  // handleSend takes the text and the attachment before its first await.
-  void app.handleSend();
+  // handleSend takes the text before its first await; as an internal message it leaves the
+  // pictures waiting in the message box for the user's own next message.
+  void app.handleSend({ internal: true });
   app.attachment = attachment;
   input.value = draft;
   app.updateSendEnabled();
@@ -888,6 +913,14 @@ export function bindComposerUi(app) {
   bindArrowKeys($('#permission-menu'), '.composer-menu-option');
   bindArrowKeys($('#mode-menu'), '.composer-menu-option');
   bindFolderMenu(app);
+  // The chat toolbar's Export menu: its two options keep their own handlers (src/sessions-ui.js,
+  // src/catalog-ui.js); picking one closes the menu.
+  const exportMenu = $('#export-menu');
+  bindPopover('#export-menu', '#export-menu-btn', 'end', () => {});
+  bindArrowKeys(exportMenu, '.composer-menu-option');
+  exportMenu?.addEventListener('click', (event) => {
+    if (event.target.closest('.composer-menu-option')) exportMenu.hidePopover?.();
+  });
 
   $('#model-tabs')?.addEventListener('click', (event) => {
     const tab = event.target.closest('[data-model-tab]');

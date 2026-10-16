@@ -7,7 +7,16 @@
 //   FAKE_MCP_CRASH=1        write 'boom' (plus FAKE_MCP_LEAK when set) to stderr and exit(3)
 //   FAKE_MCP_PAGINATE=1     return the two tools on two tools/list pages via nextCursor
 //   FAKE_MCP_ECHO_PREFIX=x  prefix echo output (proves configured env reaches the child)
-//   FAKE_MCP_HUGE_LINE=1    write an unterminated stdout line larger than 4 MiB
+//   FAKE_MCP_HUGE_LINE=1    write a stdout line larger than 4 MiB at startup; echo of "huge"
+//                           (id first) or "huge-last" (id last, like the TypeScript SDK)
+//                           answers with a line larger than 4 MiB
+//   FAKE_MCP_STUBBORN=1     ignore SIGTERM and the end of stdin (only SIGKILL stops it)
+//   FAKE_MCP_EXTRAS=1       also offer resources (two, on two resources/list pages, plus the
+//                           template memo://notes/{day}) and prompts (review), and a tool
+//                           "change" that adds a tool, a resource and a prompt, announcing each
+//                           with its list_changed notification before it answers
+//   FAKE_MCP_NO_TEMPLATES=1 (with EXTRAS) answer resources/templates/list with -32601
+//   FAKE_MCP_HANG=initialize  never answer initialize; FAKE_MCP_HANG=tools: never answer tools/list
 
 if (process.env.FAKE_MCP_CRASH === '1') {
   const leak = process.env.FAKE_MCP_LEAK ? ` ${process.env.FAKE_MCP_LEAK}` : '';
@@ -38,6 +47,27 @@ const TOOLS = [
   },
 ];
 
+const EXTRAS = process.env.FAKE_MCP_EXTRAS === '1';
+const HANG = process.env.FAKE_MCP_HANG || '';
+if (EXTRAS) {
+  TOOLS.push({ name: 'change', description: 'Change what this server offers.', inputSchema: { type: 'object', properties: {} } });
+}
+const RESOURCES = [
+  { uri: 'memo://notes/today', name: 'Today', mimeType: 'text/plain', description: 'Notes for today.' },
+  { uri: 'memo://images/logo', name: 'Logo', mimeType: 'image/png' },
+];
+const PROMPTS = [
+  {
+    name: 'review',
+    title: 'Review a file',
+    description: 'Ask for a review.',
+    arguments: [
+      { name: 'file', description: 'The file to review.', required: true },
+      { name: 'focus', description: 'What to look at.' },
+    ],
+  },
+];
+
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
@@ -59,9 +89,54 @@ function listTools(id, params) {
   else result(id, { tools: [TOOLS[0]], nextCursor: 'page-2' });
 }
 
+function listResources(id, params) {
+  if (params && params.cursor === 'resources-2') result(id, { resources: RESOURCES.slice(1) });
+  else result(id, { resources: RESOURCES.slice(0, 1), nextCursor: 'resources-2' });
+}
+
+function readResource(id, params) {
+  const uri = String((params && params.uri) || '');
+  if (uri.startsWith('memo://notes/')) {
+    result(id, { contents: [{ uri, mimeType: 'text/plain', text: `notes for ${uri.slice('memo://notes/'.length)}` }] });
+  } else if (uri === 'memo://images/logo') {
+    result(id, { contents: [{ uri, mimeType: 'image/png', blob: Buffer.from('fake png bytes').toString('base64') }] });
+  } else {
+    failure(id, -32002, 'Resource not found');
+  }
+}
+
+function getPrompt(id, params) {
+  const args = (params && params.arguments) || {};
+  if (!params || params.name !== 'review' || typeof args.file !== 'string') {
+    failure(id, -32602, 'Missing required argument: file');
+    return;
+  }
+  result(id, {
+    description: 'A review request.',
+    messages: [
+      { role: 'user', content: { type: 'text', text: `Review ${args.file}${args.focus ? ` for ${args.focus}` : ''}.` } },
+      { role: 'assistant', content: { type: 'text', text: 'Sure, send it.' } },
+    ],
+  });
+}
+
 function callTool(id, params) {
   const name = params && params.name;
   const args = (params && params.arguments) || {};
+  if (name === 'change' && EXTRAS) {
+    TOOLS.push({ name: 'late', description: 'Added later.', inputSchema: { type: 'object', properties: {} } });
+    RESOURCES.push({ uri: 'memo://notes/late', name: 'Late', mimeType: 'text/plain' });
+    PROMPTS.push({ name: 'late', description: 'Added later.' });
+    for (const kind of ['tools', 'resources', 'prompts']) send({ jsonrpc: '2.0', method: `notifications/${kind}/list_changed` });
+    result(id, { content: [{ type: 'text', text: 'changed' }] });
+    return;
+  }
+  if (name === 'echo' && process.env.FAKE_MCP_HUGE_LINE === '1' && (args.text === 'huge' || args.text === 'huge-last')) {
+    const content = [{ type: 'text', text: 'y'.repeat(5 * 1024 * 1024) }];
+    if (args.text === 'huge') result(id, { content });
+    else process.stdout.write(`${JSON.stringify({ result: { content }, jsonrpc: '2.0', id })}\n`);
+    return;
+  }
   if (name === 'echo') {
     const prefix = process.env.FAKE_MCP_ECHO_PREFIX || '';
     result(id, { content: [{ type: 'text', text: `${prefix}${String(args.text ?? '')}` }] });
@@ -84,10 +159,13 @@ function handle(message) {
   const isRequest = id !== undefined && id !== null;
   switch (method) {
     case 'initialize':
+      if (HANG === 'initialize') return;
       result(id, {
         protocolVersion: '2025-06-18',
         serverInfo: { name: 'fake-mcp', version: '1.0.0' },
-        capabilities: { tools: {} },
+        capabilities: EXTRAS
+          ? { tools: { listChanged: true }, resources: { listChanged: true }, prompts: { listChanged: true } }
+          : { tools: {} },
       });
       return;
     case 'notifications/initialized':
@@ -96,7 +174,31 @@ function handle(message) {
       if (isRequest) result(id, {});
       return;
     case 'tools/list':
+      if (HANG === 'tools') return;
       listTools(id, params);
+      return;
+    case 'resources/list':
+      if (EXTRAS) listResources(id, params);
+      else failure(id, -32601, 'Method not found');
+      return;
+    case 'resources/templates/list':
+      if (EXTRAS && process.env.FAKE_MCP_NO_TEMPLATES !== '1') {
+        result(id, { resourceTemplates: [{ uriTemplate: 'memo://notes/{day}', name: 'Notes of a day', mimeType: 'text/plain' }] });
+      } else {
+        failure(id, -32601, 'Method not found');
+      }
+      return;
+    case 'resources/read':
+      if (EXTRAS) readResource(id, params);
+      else failure(id, -32601, 'Method not found');
+      return;
+    case 'prompts/list':
+      if (EXTRAS) result(id, { prompts: PROMPTS });
+      else failure(id, -32601, 'Method not found');
+      return;
+    case 'prompts/get':
+      if (EXTRAS) getPrompt(id, params);
+      else failure(id, -32601, 'Method not found');
       return;
     case 'tools/call':
       callTool(id, params);
@@ -122,12 +224,17 @@ process.stdin.on('data', (chunk) => {
     index = buffer.indexOf('\n');
   }
 });
-process.stdin.on('end', () => process.exit(0));
+if (process.env.FAKE_MCP_STUBBORN === '1') {
+  process.on('SIGTERM', () => {});
+  setInterval(() => {}, 1000);
+} else {
+  process.stdin.on('end', () => process.exit(0));
+}
 
 // Startup noise that a client must tolerate: a non-JSON stdout line and a
 // diagnostic stderr line.
 process.stdout.write('fake-mcp starting up (this line is not JSON)\n');
 process.stderr.write('fake-mcp: log line on stderr\n');
 if (process.env.FAKE_MCP_HUGE_LINE === '1') {
-  process.stdout.write('x'.repeat(5 * 1024 * 1024));
+  process.stdout.write(`${'x'.repeat(5 * 1024 * 1024)}\n`);
 }

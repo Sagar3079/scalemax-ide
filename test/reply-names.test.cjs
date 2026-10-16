@@ -76,3 +76,50 @@ test('a failing repair never breaks the reply', async () => {
   const loop = createToolLoop({ provider, mcp, restoreText: () => { throw new Error('boom'); } });
   assert.equal((await loop.send({ requestId: 'r2', messages: [{ role: 'user', content: 'hi' }] })).text, 'plain');
 });
+
+test('one repair per reply: the request is read for names once, then serves every string', async () => {
+  const replies = [
+    { content: 'Listing kiro-scalemax-ide first.', toolCalls: [{ id: 'c1', name: 'mcp_fs_list', arguments: '{}' }] },
+    { content: '', toolCalls: [{ id: 'c2', name: 'mcp_fs_list', arguments: '{"path":"kiro-notes.md"}' }] },
+    { content: gateway('Your folder kiro-scalemax-ide holds kiro-notes.md.', 'DeepSeek V4 Flash'), model: 'deepseek-v4-flash', reasoning: gateway('Read kiro-notes.md', 'DeepSeek V4 Flash') },
+  ];
+  let round = 0;
+  const provider = {
+    async send() { throw new Error('unused'); },
+    async complete() { return replies[round++]; },
+    cancel: () => false,
+  };
+  const mcp = {
+    async chatTools() {
+      return { tools: [{ type: 'function', function: { name: 'mcp_fs_list', description: 'list', parameters: { type: 'object', properties: {} } } }], resolve: () => ({ serverId: 'fs', toolName: 'list', readOnly: true }), errors: [] };
+    },
+    async callTool() { return { text: 'kiro-notes.md' }; },
+  };
+  const built = [];
+  let repairs = 0;
+  const loop = createToolLoop({
+    provider,
+    mcp,
+    restorer: (sources, context) => {
+      built.push(context);
+      const names = collectNames(sources, [context.folderName]);
+      return (text) => { repairs += 1; return restoreNames(text, { names, replacements: DEEPSEEK }); };
+    },
+  });
+  const result = await loop.send({ requestId: 'r3', messages: [{ role: 'user', content: 'what is here?' }] }, { permission: 'bypass', folderName: 'kiro-scalemax-ide' });
+  assert.deepEqual(built, [{ model: 'deepseek-v4-flash', folderName: 'kiro-scalemax-ide' }]);
+  assert.equal(result.text, 'Your folder kiro-scalemax-ide holds kiro-notes.md.');
+  assert.equal(result.reasoning, 'Read kiro-notes.md');
+  // Text, thinking, the note and both step titles: five strings, one repair.
+  assert.equal(result.steps.length, 3);
+  assert.equal(repairs, 5);
+  // Nothing to repair (null) and a repair that fails both leave the reply as it is.
+  for (const restorer of [() => null, () => { throw new Error('boom'); }, () => () => { throw new Error('boom'); }]) {
+    const plain = createToolLoop({
+      provider: { async send() { return { text: 'plain kiro-app', model: 'm' }; }, async complete() { throw new Error('unused'); }, cancel: () => false },
+      mcp: { async chatTools() { return { tools: [], resolve: () => null, errors: [] }; }, async callTool() {} },
+      restorer,
+    });
+    assert.equal((await plain.send({ requestId: 'r4', messages: [{ role: 'user', content: 'hi' }] })).text, 'plain kiro-app');
+  }
+});

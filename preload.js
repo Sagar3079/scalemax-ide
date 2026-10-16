@@ -79,8 +79,10 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
 
     /**
      * What a reply in progress is doing: the model is thinking, a tool runs, or a tool call waits
-     * for approval. Events carry the requestId of the send they belong to.
-     * @param {(progress: {requestId: string, phase: 'thinking'|'tool'|'approval', serverId?: string, toolName?: string}) => void} callback
+     * for approval. Events carry the requestId of the send they belong to. A subagent (agent_task,
+     * lib/subagents.cjs) reports as { phase: 'subagent', callId, status, description, kind } and
+     * { phase: 'subagent', callId, event }, nested under the step of its call.
+     * @param {(progress: {requestId: string, phase: 'thinking'|'tool'|'approval'|'subagent', serverId?: string, toolName?: string}) => void} callback
      * @returns {() => void} unsubscribe
      */
     onProgress: (callback) => {
@@ -148,8 +150,9 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
 
   approvals: {
     /**
-     * Subscribes to tool calls that wait for the user's approval.
-     * @param {(request: {approvalId: string, requestId: string, serverId: string, serverName: string, toolName: string, readOnly: boolean, arguments: string}) => void} callback
+     * Subscribes to tool calls that wait for the user's approval (`subagent`: the description of
+     * the subagent that makes the call, when one does).
+     * @param {(request: {approvalId: string, requestId: string, serverId: string, serverName: string, toolName: string, readOnly: boolean, arguments: string, subagent?: string}) => void} callback
      * @returns {() => void} unsubscribe
      */
     onRequest: (callback) => {
@@ -327,7 +330,29 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     signIn: (input) => ipcRenderer.invoke('mcp:oauth-start', input),
 
     /** @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
-    cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel')
+    cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel'),
+
+    // --- MCP resources and prompts ---
+    /**
+     * The resources (documents, files, records) and URI templates a server offers.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {resources: Array<{uri: string, name: string, title?: string, description: string, mimeType: string}>, templates: Array<{uriTemplate: string, name: string, description: string, mimeType: string}>}, error?: object}>}
+     */
+    resources: (input) => ipcRenderer.invoke('mcp:resources', input),
+
+    /**
+     * The prompts a server offers, with the arguments each one takes.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: Array<{name: string, title: string, description: string, arguments: Array<{name: string, description: string, required: boolean}>}>, error?: object}>}
+     */
+    prompts: (input) => ipcRenderer.invoke('mcp:prompts', input),
+
+    /**
+     * One prompt filled in with its arguments, as text for the message box (nothing is sent).
+     * @param {{id: string, name: string, arguments?: {[name: string]: string}}} input
+     * @returns {Promise<{ok: boolean, data?: {name: string, description: string, text: string, messages: Array<{role: 'user'|'assistant', text: string}>}, error?: object}>}
+     */
+    getPrompt: (input) => ipcRenderer.invoke('mcp:prompt-get', input)
   },
 
   dialog: {
@@ -449,6 +474,127 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     /** @param {{ids: string[]}} input forgets the changes of these replies */
     remove: (input) => ipcRenderer.invoke('checkpoint:remove', input)
   },
+  // --- Automations (main-process scheduler) ---
+  /**
+   * Automations run in the main process (lib/automations.cjs), also while no window is open. The
+   * window edits them through the store; here it asks for Run now, sends the instructions runs
+   * use, and hears about every run (the run's messages for its task included).
+   */
+  automations: {
+    /**
+     * For a window that just opened: the ids running now, whether runs fire without a window, the
+     * saved automations, and the runs whose messages this window has not saved back yet.
+     * @returns {Promise<{ok: boolean, data?: {running: string[], background: boolean, automations: Array<object>, runs: Array<{runId: string, task: object, messages: Array<object>}>}, error?: object}>}
+     */
+    state: () => ipcRenderer.invoke('automations:state'),
+
+    /**
+     * Runs one automation now; resolves when the run ended. The schedule stays as it is.
+     * @param {{id: string}} input
+     * @returns {Promise<{ok: boolean, data?: {status: 'success'|'error'|'skipped', message?: string, code?: string}, error?: object}>}
+     */
+    runNow: (input) => ipcRenderer.invoke('automations:run-now', input),
+
+    /**
+     * The instructions runs are sent with: the system prompt for each mode, temperature, reasoning.
+     * @param {{systemPrompts: {working: string, coding: string}, temperature?: number, reasoning?: {thinking: boolean, effort: 'low'|'medium'|'high'}}} input
+     * @returns {Promise<{ok: boolean, data?: {saved: boolean}, error?: object}>}
+     */
+    setContext: (input) => ipcRenderer.invoke('automations:context', input),
+
+    /**
+     * What changed: the saved automations, the ids running now, and after a run how it went and
+     * the messages it added to its task.
+     * @param {(change: {automations: Array<object>, running: string[], run?: {runId: string, task: object, messages: Array<object>}, finished?: {id: string, name: string, status: string, message?: string, code?: string, manual: boolean}}) => void} callback
+     * @returns {() => void} unsubscribe
+     */
+    onChanged: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, change) => callback(change);
+      ipcRenderer.on('automations:changed', listener);
+      return () => ipcRenderer.removeListener('automations:changed', listener);
+    }
+  },
+
+  // --- Git flow, worktrees and sessions ---
+  /**
+   * The user's own Git actions (lib/git-flow.cjs), with their Git identity, settings, credentials
+   * and hooks; never tools the model can call. `folder` is a folder opened in ScaleMax (or a
+   * task's worktree); paths must be among the changes Git lists.
+   */
+  git: {
+    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {isRepo: boolean, branch?: string|null, detached?: boolean, upstream?: string|null, ahead?: number, behind?: number, files?: Array<{path: string, from?: string, index: string, worktree: string, kind: string, secret: boolean}>, conflicts?: number, operation?: string|null, identity?: {name: string, email: string}, remotes?: string[], worktree?: {linked: boolean, main: string|null}}}>} */
+    status: (input) => ipcRenderer.invoke('git:status', input),
+    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {current: string|null, detached: boolean, dirty: boolean, branches: Array<{name: string, upstream: string|null, usable: boolean}>}}>} */
+    branches: (input) => ipcRenderer.invoke('git:branches', input),
+    /**
+     * A one-line conventional commit subject for the chosen files, from the current provider
+     * (cancel with provider.cancel(requestId)), or from the file list without one.
+     * @param {{folder: string, paths: string[], requestId?: string}} input
+     * @returns {Promise<{ok: boolean, data?: {message: string, source: 'provider'|'files', model?: string, note?: string}}>}
+     */
+    suggestMessage: (input) => ipcRenderer.invoke('git:suggest-message', input),
+    /** @param {{folder: string, paths: string[], message: string, branch?: string|null, skipHooks?: boolean}} input branch: a new branch to create first */
+    commit: (input) => ipcRenderer.invoke('git:commit', input),
+    /** @param {{folder: string}} input pushes the current branch (sets its upstream the first time; never forced) */
+    push: (input) => ipcRenderer.invoke('git:push', input),
+    /** @param {{folder: string}} input fast-forward only */
+    pull: (input) => ipcRenderer.invoke('git:pull', input),
+    /** @param {{folder: string, branch: string, stash?: boolean}} input refused with uncommitted changes unless stash */
+    switchBranch: (input) => ipcRenderer.invoke('git:switch', input),
+    /** @param {{folder: string, title: string, body?: string, base?: string|null, draft?: boolean}} input @returns {Promise<{ok: boolean, data?: {url: string, branch: string, pushed: boolean}}>} */
+    createPr: (input) => ipcRenderer.invoke('git:pr-create', input)
+  },
+
+  /** A separate checkout per task in ScaleMax's data folder (git worktree), and what it can do. */
+  worktrees: {
+    /** @param {{folder: string, taskId: string, title: string}} input @returns {Promise<{ok: boolean, data?: {path: string, name: string, branch: string, base: string|null, mainRoot: string, mainName: string}}>} */
+    create: (input) => ipcRenderer.invoke('worktree:create', input),
+    /** @param {{folder: string, base?: string}} input @returns {Promise<{ok: boolean, data?: {branch: string, dirty: boolean, changed: number, unmerged: number|null}}>} */
+    info: (input) => ipcRenderer.invoke('worktree:info', input),
+    /** @param {{folder: string, base: string, into: string}} input merges the worktree's branch into base in the checkout it came from */
+    merge: (input) => ipcRenderer.invoke('worktree:merge', input),
+    /** @param {{folder: string, base?: string, force?: boolean}} input refused (WORKTREE_DIRTY / UNMERGED) until force; the branch is kept */
+    remove: (input) => ipcRenderer.invoke('worktree:remove', input),
+    /** @param {{folder: string}} input shows the worktree in the Finder */
+    reveal: (input) => ipcRenderer.invoke('worktree:reveal', input)
+  },
+
+  /** Conversations as files. */
+  sessions: {
+    /** @param {{title: string, markdown: string}} input @returns {Promise<{ok: boolean, data?: {saved: boolean, name?: string}}>} save dialog */
+    exportTranscript: (input) => ipcRenderer.invoke('session:export', input)
+  },
+
+  // --- Slash commands and hooks ---
+  /**
+   * Custom slash commands of a task folder and of the user (lib/slash-commands.cjs). The window
+   * lists them and asks main for the prompt a command becomes; it never reads the files itself.
+   */
+  slash: {
+    /** @param {{folder?: string}} input @returns {Promise<{ok: boolean, data?: {commands: Array<{name: string, description: string, argumentHint: string, source: 'project'|'user'}>}}>} */
+    list: (input) => ipcRenderer.invoke('slash:list', input),
+    /** @param {{folder?: string, name: string, arguments?: string}} input @returns {Promise<{ok: boolean, data?: {name: string, source: string, prompt: string}}>} */
+    expand: (input) => ipcRenderer.invoke('slash:expand', input)
+  },
+  /**
+   * Hooks (lib/hooks.cjs) of a task folder and of the user: list them per scope, allow a project's
+   * hooks exactly as shown (by their hash) or take that back, switch one on or off.
+   */
+  hooks: {
+    /** @param {{folder?: string}} input @returns {Promise<{ok: boolean, data?: {folder: object|null, scopes: Array<object>}}>} */
+    list: (input) => ipcRenderer.invoke('hooks:list', input),
+    /** @param {{folder: string, hash?: string, revoke?: boolean}} input */
+    approve: (input) => ipcRenderer.invoke('hooks:approve', input),
+    /** @param {{id: string, enabled: boolean}} input */
+    setEnabled: (input) => ipcRenderer.invoke('hooks:set-enabled', input)
+  },
+  /** @-mentions of a folder ("@src/"), a web page ("@https://…") or a background command ("@job:j2"), as text. */
+  mentions: {
+    /** @param {{folder?: string, kind: 'folder'|'url'|'job', value: string}} input @returns {Promise<{ok: boolean, data?: {kind: string, label: string, text: string}}>} */
+    resolve: (input) => ipcRenderer.invoke('mention:resolve', input)
+  },
+
   /** @returns {string} e.g. 'darwin' | 'win32' | 'linux' */
   getPlatform: () => process.platform
 });

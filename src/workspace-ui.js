@@ -1,40 +1,55 @@
 /**
  * ScaleMax IDE: Workspace tab behaviour.
  *
- * Tabbed editor (per-tab content, revision and dirty state), ARIA file tree
- * with filtering and Git decorations, resizable explorer and bottom panel,
- * panel tabs, keyboard shortcuts and a lightweight syntax-highlight overlay.
+ * Tabbed code editor (CodeMirror 6, set up in src/editor.js: each tab keeps its own editor
+ * state, so switching tabs keeps its undo history, selection and scroll position), dirty state
+ * from the text itself, revision-checked saves, the review of a reply's changes inside the
+ * editor (Keep / Undo per change), ARIA file tree with filtering and Git decorations, resizable
+ * explorer and bottom panel, panel tabs and keyboard shortcuts.
  *
  * app.workspace.openPath / revision / dirty always describe the active tab,
  * so attachFile(), runSkill() and saveFile() keep their meaning.
  * All DOM is built with createElement + textContent. Importing this module
- * never touches the DOM; the pure helpers are unit-tested in Node.
+ * never touches the DOM; src/editor.js, which needs a real page, is imported once the Workspace
+ * is bound, and until it has loaded (or when it cannot) the plain #editor-input textarea is the
+ * editor. The pure helpers are unit-tested in Node.
  */
 
 const LAYOUT_KEY = 'scalemax-workspace-layout';
 const MAX_TABS = 12;
-const MAX_HIGHLIGHT_CHARS = 150_000;
 const EXPLORER_MIN = 160;
 const EXPLORER_MAX = 480;
 const PANEL_MIN = 96;
 const EDITOR_MIN = 140;
 const KEY_STEP = 16;
-const INDENT = '  ';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (no DOM)
 // ---------------------------------------------------------------------------
 
+// Language ids, each highlighted by its CodeMirror package (LANGUAGE_SUPPORT in src/editor.js).
 const LANGUAGES = {
-  javascript: { label: 'JavaScript', exts: ['js', 'mjs', 'cjs', 'jsx'] },
-  typescript: { label: 'TypeScript', exts: ['ts', 'tsx', 'mts', 'cts'] },
-  json: { label: 'JSON', exts: ['json', 'jsonc', 'webmanifest'] },
-  css: { label: 'CSS', exts: ['css', 'scss', 'less'] },
-  html: { label: 'HTML', exts: ['html', 'htm', 'xml', 'svg', 'plist'] },
+  javascript: { label: 'JavaScript', exts: ['js', 'mjs', 'cjs'] },
+  jsx: { label: 'JavaScript JSX', exts: ['jsx'] },
+  typescript: { label: 'TypeScript', exts: ['ts', 'mts', 'cts'] },
+  tsx: { label: 'TypeScript JSX', exts: ['tsx'] },
+  json: { label: 'JSON', exts: ['json', 'jsonc', 'json5', 'webmanifest'] },
+  css: { label: 'CSS', exts: ['css'] },
+  scss: { label: 'SCSS', exts: ['scss'] },
+  less: { label: 'Less', exts: ['less'] },
+  html: { label: 'HTML', exts: ['html', 'htm', 'xhtml'] },
   markdown: { label: 'Markdown', exts: ['md', 'mdx', 'markdown'] },
-  python: { label: 'Python', exts: ['py', 'pyw'] },
-  shell: { label: 'Shell', exts: ['sh', 'zsh', 'bash', 'command'] },
+  python: { label: 'Python', exts: ['py', 'pyw', 'pyi'] },
+  rust: { label: 'Rust', exts: ['rs'] },
+  go: { label: 'Go', exts: ['go'] },
+  java: { label: 'Java', exts: ['java'] },
+  c: { label: 'C', exts: ['c', 'h'] },
+  cpp: { label: 'C++', exts: ['cpp', 'cc', 'cxx', 'hpp', 'hh', 'hxx'] },
+  php: { label: 'PHP', exts: ['php', 'phtml'] },
+  sql: { label: 'SQL', exts: ['sql'] },
+  xml: { label: 'XML', exts: ['xml', 'svg', 'plist', 'xsd', 'xsl', 'xslt'] },
   yaml: { label: 'YAML', exts: ['yml', 'yaml'] },
+  shell: { label: 'Shell', exts: ['sh', 'zsh', 'bash', 'command'] },
   toml: { label: 'TOML', exts: ['toml'] },
 };
 const EXT_TO_LANGUAGE = new Map();
@@ -44,7 +59,15 @@ for (const [id, language] of Object.entries(LANGUAGES)) {
 const FILENAME_LANGUAGES = new Map([
   ['.zshrc', 'shell'], ['.bashrc', 'shell'], ['.profile', 'shell'], ['dockerfile', 'shell'],
   ['makefile', 'shell'], ['.gitignore', 'shell'], ['.npmrc', 'shell'], ['.editorconfig', 'toml'],
+  ['.babelrc', 'json'], ['.eslintrc', 'json'], ['.prettierrc', 'json'], ['cargo.lock', 'toml'], ['pipfile', 'toml'],
 ]);
+// Names a Markdown code fence may use besides the language ids and file extensions.
+const FENCE_NAMES = new Map([
+  ['node', 'javascript'], ['bash', 'shell'], ['console', 'shell'], ['shellsession', 'shell'],
+  ['golang', 'go'], ['c++', 'cpp'], ['yml', 'yaml'], ['svg', 'xml'],
+]);
+// Languages whose code is usually indented by four spaces (or a tab: Go) when a file shows none.
+const FOUR_SPACES = new Set(['python', 'rust', 'java', 'c', 'cpp', 'php']);
 
 /** Lowercase extension of a file name ('' when none; dotfiles have none). */
 export function extOf(name) {
@@ -64,117 +87,65 @@ export function languageLabel(language) {
   return LANGUAGES[language]?.label || 'Plain text';
 }
 
-const JS_KEYWORDS = 'abstract|as|async|await|break|case|catch|class|const|continue|debugger|declare|default|delete|do|else|enum|export|extends|false|finally|for|from|function|get|if|implements|import|in|instanceof|interface|let|namespace|new|null|of|private|protected|public|readonly|return|set|static|super|switch|this|throw|true|try|type|typeof|undefined|var|void|while|with|yield';
-const PY_KEYWORDS = 'False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield|match|case|self';
-const SH_KEYWORDS = 'if|then|else|elif|fi|for|while|until|do|done|case|esac|in|function|return|local|export|readonly|declare|unset|set|shift|source|exit|echo|printf|cd|test';
-const NUMBER = String.raw`\b(?:0[xX][\da-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?n?)\b`;
-const DQ = String.raw`"(?:\\.|[^"\\\n])*"?`;
-const SQ = String.raw`'(?:\\.|[^'\\\n])*'?`;
+/** Every language id but 'plain'. */
+export function languageIds() {
+  return Object.keys(LANGUAGES);
+}
 
-// Each grammar is an ordered list of [tokenType, pattern]; the patterns are
-// joined into one alternation and scanned left to right with a global regex.
-const GRAMMARS = {
-  javascript: [
-    ['comment', String.raw`\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)`],
-    ['string', `${DQ}|${SQ}|` + String.raw`\x60(?:\\[\s\S]|[^\x60\\])*\x60?`],
-    ['number', NUMBER],
-    ['keyword', String.raw`\b(?:${JS_KEYWORDS})\b`],
-  ],
-  json: [
-    ['attr', String.raw`"(?:\\.|[^"\\\n])*"(?=\s*:)`],
-    ['string', DQ],
-    ['number', String.raw`-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`],
-    ['keyword', String.raw`\b(?:true|false|null)\b`],
-    ['comment', String.raw`\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)`],
-  ],
-  css: [
-    ['comment', String.raw`\/\*[\s\S]*?(?:\*\/|$)`],
-    ['string', `${DQ}|${SQ}`],
-    ['keyword', String.raw`@[\w-]+|!important\b`],
-    ['attr', String.raw`--?[A-Za-z_][\w-]*(?=\s*:[^;{}]*[;}])|\b[A-Za-z][\w-]*(?=\s*:[^;{}]*[;}])`],
-    ['number', String.raw`#[\da-fA-F]{3,8}\b|-?\b\d*\.?\d+(?:px|em|rem|%|vh|vw|vmin|vmax|s|ms|deg|fr|ch|ex|pt)?\b`],
-  ],
-  html: [
-    ['comment', String.raw`<!--[\s\S]*?(?:-->|$)`],
-    ['tag', String.raw`<\/?[A-Za-z][\w:.-]*|\/?>|<!DOCTYPE[^>]*>`],
-    ['attr', String.raw`\b[A-Za-z_:@][\w:.-]*(?=\s*=)`],
-    ['string', String.raw`"[^"\n]*"|'[^'\n]*'`],
-  ],
-  markdown: [
-    ['string', String.raw`\x60\x60\x60[\s\S]*?(?:\x60\x60\x60|$)|\x60[^\x60\n]+\x60`],
-    ['heading', String.raw`^#{1,6}[ \t][^\n]*`],
-    ['keyword', String.raw`\*\*[^*\n]+\*\*|__[^_\n]+__|^[ \t]*(?:[-*+]|\d+\.)(?=[ \t])`],
-    ['tag', String.raw`!?\[[^\]\n]*\]\([^)\n]*\)`],
-    ['comment', String.raw`^>[^\n]*`],
-  ],
-  python: [
-    ['comment', String.raw`#[^\n]*`],
-    ['string', String.raw`\b[rRbBuUfF]{0,2}(?:'''[\s\S]*?(?:'''|$)|"""[\s\S]*?(?:"""|$))|\b[rRbBuUfF]{0,2}(?:"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)`],
-    ['attr', String.raw`@[\w.]+`],
-    ['number', NUMBER],
-    ['keyword', String.raw`\b(?:${PY_KEYWORDS})\b`],
-  ],
-  shell: [
-    ['comment', String.raw`(?<![\w$\\])#[^\n]*`],
-    ['string', String.raw`"(?:\\[\s\S]|[^"\\])*"?|'[^']*'?`],
-    ['attr', String.raw`\$\{[^}\n]*\}?|\$[A-Za-z_]\w*|\$[0-9#?@*$!-]`],
-    ['keyword', String.raw`\b(?:${SH_KEYWORDS})\b`],
-    ['number', String.raw`\b\d+\b`],
-  ],
-  yaml: [
-    ['comment', String.raw`(?<![^\s])#[^\n]*`],
-    ['attr', String.raw`^[ \t]*(?:-[ \t]+)?[\w.\-"'/]+(?=[ \t]*:(?:\s|$))`],
-    ['string', `${DQ}|${SQ}`],
-    ['keyword', String.raw`\b(?:true|false|null|yes|no|on|off)\b|[&*][\w-]+|^---$`],
-    ['number', String.raw`-?\b\d+(?:\.\d+)?\b`],
-  ],
-  toml: [
-    ['comment', String.raw`#[^\n]*`],
-    ['tag', String.raw`^\s*\[\[?[^\]\n]*\]\]?`],
-    ['attr', String.raw`^[ \t]*[\w.\-"']+(?=[ \t]*=)`],
-    ['string', String.raw`"""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|` + `${DQ}|${SQ}`],
-    ['keyword', String.raw`\b(?:true|false)\b`],
-    ['number', String.raw`-?\b\d[\d_]*(?:\.\d+)?\b`],
-  ],
-};
-GRAMMARS.typescript = GRAMMARS.javascript;
-
-const COMPILED = new Map();
-
-function compiled(language) {
-  if (!COMPILED.has(language)) {
-    const grammar = GRAMMARS[language];
-    COMPILED.set(language, grammar ? {
-      types: grammar.map(([type]) => type),
-      regex: new RegExp(grammar.map(([, pattern]) => `(${pattern})`).join('|'), 'gm'),
-    } : null);
-  }
-  return COMPILED.get(language);
+/** Language id for the info string of a Markdown code fence ("```ts"), or null. */
+export function fenceLanguage(info) {
+  const name = String(info || '').trim().split(/[\s{,]/)[0].toLowerCase();
+  if (!name) return null;
+  if (Object.hasOwn(LANGUAGES, name)) return name;
+  return FENCE_NAMES.get(name) || EXT_TO_LANGUAGE.get(name) || null;
 }
 
 /**
- * Splits text into [type, text] segments; type is null for plain text.
- * Concatenating every segment's text always reproduces the input exactly.
+ * The line break a text uses: '\r\n' when every line ends with one, '\r' for a file of old Mac
+ * line breaks only, else '\n'. The editor keeps it, so saving writes the file's own line breaks
+ * (a stray '\r' in a '\n' file stays a character of its line).
  */
-export function tokenize(text, language) {
-  const source = String(text ?? '');
-  const grammar = compiled(language);
-  if (!grammar || !source) return source ? [[null, source]] : [];
-  const segments = [];
-  const { regex, types } = grammar;
-  regex.lastIndex = 0;
-  let last = 0;
-  let match;
-  while ((match = regex.exec(source)) !== null) {
-    if (match[0] === '') { regex.lastIndex += 1; continue; }
-    if (match.index > last) segments.push([null, source.slice(last, match.index)]);
-    let group = 1;
-    while (group < match.length && match[group] === undefined) group += 1;
-    segments.push([types[group - 1] || null, match[0]]);
-    last = match.index + match[0].length;
+export function lineBreakOf(text) {
+  const value = String(text ?? '');
+  let lf = 0;
+  let crlf = 0;
+  for (let at = value.indexOf('\n'); at !== -1; at = value.indexOf('\n', at + 1)) {
+    lf += 1;
+    if (at > 0 && value.charCodeAt(at - 1) === 13) crlf += 1;
   }
-  if (last < source.length) segments.push([null, source.slice(last)]);
-  return segments;
+  let cr = 0;
+  for (let at = value.indexOf('\r'); at !== -1; at = value.indexOf('\r', at + 1)) cr += 1;
+  if (lf && crlf === lf && cr === crlf) return '\r\n';
+  if (!lf && cr) return '\r';
+  return '\n';
+}
+
+/**
+ * The indentation a file already uses, like VS Code guesses it: a tab when more lines start
+ * with one, else the step (2, 4 or 8 spaces) most lines indent by. A file without indented
+ * lines gets its language's usual one.
+ */
+export function indentFor(text, language = 'plain') {
+  let tabs = 0;
+  let spaces = 0;
+  let previous = 0;
+  const steps = new Map();
+  for (const line of String(text ?? '').split('\n', 2000)) {
+    if (!line.trim()) continue;
+    if (line.startsWith('\t')) { tabs += 1; previous = 0; continue; }
+    const width = /^ */.exec(line)[0].length;
+    if (width) spaces += 1;
+    const step = Math.abs(width - previous);
+    // Steps of 1 and 3 are alignment (" * " in block comments), not indentation.
+    if (step === 2 || step === 4 || step === 8) steps.set(step, (steps.get(step) || 0) + 1);
+    previous = width;
+  }
+  if (tabs > spaces) return '\t';
+  let best = 0;
+  for (const step of [2, 4, 8]) if ((steps.get(step) || 0) > (steps.get(best) || 0)) best = step;
+  if (best) return ' '.repeat(best);
+  if (language === 'go') return '\t';
+  return FOUR_SPACES.has(language) ? '    ' : '  ';
 }
 
 /** 1-based line and column of an offset, plus the number of lines. */
@@ -190,40 +161,78 @@ export function cursorPosition(text, offset) {
   return { line, column: at - lineStart + 1 };
 }
 
+/** The statusbar's "Ln 3, Col 7 (12 selected)", with the number of cursors when there are several. */
+export function locationText({ line = 1, column = 1, selected = 0, cursors = 1 } = {}) {
+  let text = `Ln ${line}, Col ${column}`;
+  if (selected) text += ` (${selected} selected)`;
+  if (cursors > 1) text += ` · ${cursors} cursors`;
+  return text;
+}
+
 /**
- * Indents (or outdents) every line touched by [start, end) by two spaces.
- * Returns the replacement for the covered line block and the new selection.
+ * The text a file had before a reply changed it, rebuilt from the text it has now (`after`,
+ * exactly as the reply left it) and the reply's diff of the file (checkpoints.diff: hunks with
+ * three lines of context and old/new line numbers, see lib/line-diff.cjs). File contents never
+ * cross the bridge, so this is how the editor gets the earlier version. Every context and added
+ * line is checked against `after`; null when they do not match, or when the diff cannot tell:
+ * cut short (`truncated`), not recorded, or a file the reply emptied (the diff does not say
+ * whether its earlier last line ended with a line break).
  */
-export function indentLines(text, start, end, outdent = false) {
-  const value = String(text ?? '');
-  const blockStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
-  const endAt = end > start && value[end - 1] === '\n' ? end - 1 : end;
-  const nextBreak = value.indexOf('\n', endAt);
-  const blockEnd = nextBreak === -1 ? value.length : nextBreak;
-  const lines = value.slice(blockStart, blockEnd).split('\n');
-  let firstDelta = 0;
-  let totalDelta = 0;
-  const changed = lines.map((line, index) => {
-    let next = line;
-    if (outdent) {
-      const remove = line.startsWith(INDENT) ? INDENT.length : (line.startsWith(' ') || line.startsWith('\t') ? 1 : 0);
-      next = line.slice(remove);
-    } else {
-      next = INDENT + line;
-    }
-    const delta = next.length - line.length;
-    if (index === 0) firstDelta = delta;
-    totalDelta += delta;
-    return next;
-  });
-  const replacement = changed.join('\n');
-  return {
-    blockStart,
-    blockEnd,
-    replacement,
-    selectionStart: Math.max(blockStart, start + firstDelta),
-    selectionEnd: Math.max(blockStart, end + totalDelta),
+export function originalFromHunks(after, diff) {
+  if (!diff || diff.truncated || diff.noDiff || diff.untracked || !Array.isArray(diff.hunks)) return null;
+  const text = String(after ?? '');
+  // Lines as lib/line-diff.cjs splits them: a final line break ends the last line.
+  const lines = text ? text.split('\n') : [];
+  const newline = !text || lines[lines.length - 1] === '';
+  if (text && newline) lines.pop();
+  const before = [];
+  let beforeNewline = newline;
+  let next = 0;
+  // Unchanged lines of `after` up to (not including) line index `end`.
+  const copyTo = (end) => {
+    if (!Number.isSafeInteger(end) || end < next || end > lines.length) return false;
+    while (next < end) before.push(lines[next++]);
+    return true;
   };
+  for (const hunk of diff.hunks) {
+    for (const line of Array.isArray(hunk?.lines) ? hunk.lines : []) {
+      if (line?.noNewline) {
+        // The marker stands in the version that lacks the final line break.
+        if (line.type === '-') beforeNewline = false;
+        else if (line.type === '+') beforeNewline = true;
+        continue;
+      }
+      if (line?.type === '-') {
+        if (!copyTo(next + (line.oldLine - 1 - before.length))) return null;
+        before.push(String(line.text));
+      } else if (line?.type === '+' || line?.type === ' ') {
+        if (!copyTo(line.newLine - 1) || lines[next] !== line.text) return null;
+        if (line.type === ' ') {
+          if (before.length !== line.oldLine - 1) return null;
+          before.push(lines[next]);
+        }
+        next += 1;
+      } else {
+        return null;
+      }
+    }
+  }
+  copyTo(lines.length);
+  if (!text && before.length) return null;
+  return before.length ? before.join('\n') + (beforeNewline ? '\n' : '') : '';
+}
+
+/**
+ * The files of a reply's changes (normalizeChanges in src/domain.mjs) that can be reviewed in
+ * the editor: still as the reply left them in its record (not undone or kept), recorded, and
+ * open in a tab without unsaved edits. `paths` narrows them down.
+ */
+export function reviewTargets(changes, tabs, paths = null) {
+  const open = new Map((Array.isArray(tabs) ? tabs : []).map((tab) => [tab.path, tab]));
+  return (Array.isArray(changes?.files) ? changes.files : [])
+    .filter((file) => file.status === 'changed' && !file.untracked && (!paths || paths.includes(file.path))
+      && open.has(file.path) && !open.get(file.path).dirty)
+    .map((file) => file.path);
 }
 
 /**
@@ -261,6 +270,26 @@ export function visibleTreeRows(files, { expanded = new Set(), tree = {}, query 
   return rows;
 }
 
+/**
+ * The open folders after a refresh (src/app.js refreshWorkspace): each one stays open with its
+ * listing read again (`listings`: path → entries, or null when it is gone or unreadable, which
+ * closes it). A folder opened while the listings were read keeps the one it loaded then. Closed
+ * folders lose their cached listing, so they load fresh when opened.
+ * @returns {{ expanded: Set<string>, tree: Record<string, object[]> }}
+ */
+export function refreshedTree(expanded, listings, tree = {}) {
+  const open = new Set();
+  const next = {};
+  for (const path of expanded instanceof Set ? expanded : []) {
+    const fresh = listings instanceof Map && listings.has(path) ? listings.get(path) : undefined;
+    if (Array.isArray(fresh)) next[path] = fresh;
+    else if (fresh === undefined && Array.isArray(tree?.[path])) next[path] = tree[path];
+    else continue;
+    open.add(path);
+  }
+  return { expanded: open, tree: next };
+}
+
 // ---------------------------------------------------------------------------
 // DOM layer
 // ---------------------------------------------------------------------------
@@ -274,8 +303,8 @@ const state = {
   git: new Map(),
   branch: null,
   panel: 'terminal',
-  gutterLines: 0,
-  highlightFrame: 0,
+  // The tab whose text the editor holds: the active one, once it is drawn.
+  shown: null,
 };
 
 function element(tag, className, text) {
@@ -313,13 +342,11 @@ function activeTab() {
 /** Content of the active tab including unsaved edits, or null. */
 export function activeTabContent() {
   const tab = activeTab();
-  if (!tab) return null;
-  const input = $('#editor-input');
-  return input ? input.value : tab.content;
+  return tab ? tabText(tab) : null;
 }
 
 /** Toolbar breadcrumb: folder name first, parent path dimmed (ellipsized at the start). */
-export function renderCrumb(root) {
+export function renderCrumb(root, label = '') {
   const node = $('#workspace-path');
   if (!node) return;
   node.title = root || '';
@@ -328,7 +355,9 @@ export function renderCrumb(root) {
     return;
   }
   const parts = root.split('/').filter(Boolean);
-  const name = parts.pop() || root;
+  const own = parts.pop() || root;
+  // A task worktree shows its task's name ("app (fix-login)"), not its generated folder name.
+  const name = label || own;
   const parent = element('span', 'ws-crumb-parent');
   // The isolate keeps the path left-to-right inside the right-to-left overflow box.
   parent.append(element('bdi', '', parts.length ? `/${parts.join('/')}` : '/'));
@@ -512,71 +541,193 @@ export function renderTree(app) {
   }
 }
 
-// ---- Editor chrome -------------------------------------------------------
+// ---- Editor ----------------------------------------------------------------
+// The editor shows one tab at a time (state.shown). With CodeMirror a hidden tab keeps its
+// editor state and scroll snapshot in tab.view; with the textarea, its text in tab.content.
+// tab.content is also the text a tab's first editor state is made from. tab.saved is the text
+// on disk as last read or written, and tab.dirty says whether the tab's text differs from it.
 
-export function updateGutter() {
-  const input = $('#editor-input');
-  const gutter = $('#editor-gutter');
-  if (!input || !gutter) return;
-  let lines = 1;
-  for (let index = input.value.indexOf('\n'); index !== -1; index = input.value.indexOf('\n', index + 1)) lines += 1;
-  if (lines !== state.gutterLines) {
-    state.gutterLines = lines;
-    const numbers = new Array(lines);
-    for (let line = 0; line < lines; line += 1) numbers[line] = line + 1;
-    gutter.textContent = numbers.join('\n');
+let codemirror = null;
+let codemirrorLoading = null;
+
+/** Loads CodeMirror (src/editor.js) into #editor-view once; resolves to null when it cannot. */
+function loadCodeMirror(app) {
+  if (codemirrorLoading) return codemirrorLoading;
+  const host = $('#editor-view');
+  // A page without a real DOM (the unit tests' stand-in) keeps the textarea.
+  if (typeof HTMLElement !== 'function' || !(host instanceof HTMLElement)) {
+    codemirrorLoading = Promise.resolve(null);
+    return codemirrorLoading;
   }
-  gutter.scrollTop = input.scrollTop;
+  codemirrorLoading = import('./editor.js')
+    .then((module) => useEditor(app, module, (onUpdate) => module.createEditor(host, { onUpdate })))
+    .catch((error) => {
+      console.error('[ScaleMax] The code editor did not load; the plain text editor is used instead.', error);
+      return null;
+    });
+  return codemirrorLoading;
 }
 
-function renderHighlight() {
-  state.highlightFrame = 0;
+/**
+ * Makes CodeMirror the editor: `module` is src/editor.js, `create(onUpdate)` makes the view
+ * (module.createEditor; the unit tests pass a stand-in view over real editor states).
+ */
+export function useEditor(app, module, create) {
+  // A tab already shown in the textarea carries its text over.
+  captureShown();
+  const editor = create((update) => onEditorUpdate(app, update));
+  codemirror = { module, editor };
+  codemirrorLoading = Promise.resolve(codemirror);
   const input = $('#editor-input');
-  const overlay = $('#editor-highlight');
-  const code = input?.parentElement;
-  if (!input || !overlay || !code) return;
-  const tab = activeTab();
-  const language = tab ? languageFor(tab.path) : 'plain';
-  const enabled = Boolean(tab) && language !== 'plain' && compiled(language) && input.value.length <= MAX_HIGHLIGHT_CHARS;
-  code.classList.toggle('is-highlighted', Boolean(enabled));
-  if (!enabled) { overlay.replaceChildren(); return; }
-  const fragment = document.createDocumentFragment();
-  for (const [type, text] of tokenize(input.value, language)) {
-    if (type) fragment.append(element('span', `tok-${type}`, text));
-    else fragment.append(document.createTextNode(text));
+  if (input) input.hidden = true;
+  loadActive(app);
+  return codemirror;
+}
+
+function shownTab() {
+  return state.tabs.find((tab) => tab.path === state.shown) || null;
+}
+
+// The CodeMirror state of a tab: the editor's while it is shown, else the one it keeps.
+function editorState(tab) {
+  if (!codemirror) return null;
+  return tab.path === state.shown ? codemirror.editor.view.state : tab.view?.state || null;
+}
+
+/** A tab's text including unsaved edits. */
+function tabText(tab) {
+  if (codemirror) {
+    const current = editorState(tab);
+    return current ? codemirror.module.textOf(current) : tab.content;
   }
-  // A trailing newline needs a character after it to keep the last line's height.
-  fragment.append(document.createTextNode('\n '));
-  overlay.replaceChildren(fragment);
-  overlay.scrollTop = input.scrollTop;
-  overlay.scrollLeft = input.scrollLeft;
+  const input = $('#editor-input');
+  return tab.path === state.shown && input ? input.value : tab.content;
 }
 
-function scheduleHighlight() {
-  if (state.highlightFrame) return;
-  state.highlightFrame = window.requestAnimationFrame(renderHighlight);
+function markSaved(tab, text) {
+  tab.saved = text;
+  // CodeMirror's copy of it, made when the tab is next compared (isDirty).
+  tab.savedDoc = null;
 }
 
-function syncScroll() {
+function isDirty(tab) {
+  const current = editorState(tab);
+  if (!current) return tabText(tab) !== tab.saved;
+  if (!tab.savedDoc) tab.savedDoc = codemirror.module.savedDoc(current, tab.saved);
+  return !codemirror.module.unchanged(current, tab.savedDoc);
+}
+
+// Applies a transaction to a tab's editor state, on screen or kept (its scroll snapshot follows).
+function updateTab(tab, spec) {
+  if (!codemirror) return;
+  if (tab.path === state.shown) {
+    codemirror.editor.dispatch(spec);
+  } else if (tab.view) {
+    const transaction = tab.view.state.update(spec);
+    tab.view = { state: transaction.state, scroll: tab.view.scroll?.map(transaction.changes) || null };
+  }
+}
+
+// The file changed on disk: the tab shows `text`. In CodeMirror that is one undoable change, so
+// the selection and scroll position stay; a file whose line breaks changed kind starts afresh.
+function loadText(tab, text) {
+  tab.content = text;
+  markSaved(tab, text);
+  const current = editorState(tab);
+  if (current) {
+    const spec = codemirror.module.reloadSpec(current, text);
+    if (spec) {
+      updateTab(tab, spec);
+      return;
+    }
+    tab.review = null;
+    tab.view = { state: codemirror.module.createTabState(text, { path: tab.path }), scroll: null };
+    if (tab.path === state.shown) codemirror.editor.show(tab.view.state);
+    return;
+  }
+  const input = $('#editor-input');
+  if (tab.path === state.shown && input) input.value = text;
+}
+
+// The tab on screen keeps its editor state (or the textarea's text, selection and scroll).
+function captureShown() {
+  const tab = shownTab();
+  if (!tab) return;
+  if (codemirror) {
+    tab.view = codemirror.editor.snapshot();
+    return;
+  }
   const input = $('#editor-input');
   if (!input) return;
-  const gutter = $('#editor-gutter');
-  const overlay = $('#editor-highlight');
-  if (gutter) gutter.scrollTop = input.scrollTop;
-  if (overlay) {
-    overlay.scrollTop = input.scrollTop;
-    overlay.scrollLeft = input.scrollLeft;
+  tab.content = input.value;
+  tab.scrollTop = input.scrollTop;
+  tab.scrollLeft = input.scrollLeft;
+  tab.selectionStart = input.selectionStart;
+  tab.selectionEnd = input.selectionEnd;
+}
+
+// Puts the active tab on screen.
+function showActive() {
+  const tab = activeTab();
+  state.shown = tab ? tab.path : null;
+  if (codemirror) {
+    const { module, editor } = codemirror;
+    if (tab && !tab.view) {
+      tab.view = { state: module.createTabState(tab.content, { path: tab.path, review: tab.review?.original ?? null }), scroll: null };
+    }
+    editor.show(tab ? tab.view.state : null, tab ? tab.view.scroll : null);
+    return;
+  }
+  const input = $('#editor-input');
+  if (!input) return;
+  input.value = tab ? tab.content : '';
+  if (tab) {
+    input.setSelectionRange(tab.selectionStart || 0, tab.selectionEnd || 0);
+    input.scrollTop = tab.scrollTop || 0;
+    input.scrollLeft = tab.scrollLeft || 0;
   }
 }
 
+function focusEditor() {
+  if (codemirror) codemirror.editor.focus();
+  else $('#editor-input')?.focus();
+}
+
+// Typing, a selection, an undone change of a review: the tab's state follows.
+function onEditorUpdate(app, update) {
+  const tab = shownTab();
+  if (!tab) return;
+  if (update.docChanged) {
+    const dirty = isDirty(tab);
+    if (dirty !== tab.dirty) {
+      tab.dirty = dirty;
+      renderTabs(app);
+    }
+    setText('#editor-status', dirty ? 'Unsaved changes.' : 'Ready.');
+    // An undone change of a reply is saved straight away (after this update).
+    if (update.transactions.some((transaction) => transaction.isUserEvent('revert'))) {
+      queueMicrotask(() => { if (state.tabs.includes(tab)) void saveActiveTab(app); });
+    }
+  }
+  if (update.docChanged || update.selectionSet) updateLocation();
+  if (tab.review) renderReview(app);
+}
+
+// ---- Editor chrome -------------------------------------------------------
+
 function updateLocation() {
-  const input = $('#editor-input');
   const node = $('#editor-location');
-  if (!input || !node) return;
-  if (!activeTab()) { node.textContent = 'Ln 1, Col 1'; return; }
+  if (!node) return;
+  const tab = activeTab();
+  if (!tab || tab.path !== state.shown) { node.textContent = locationText(); return; }
+  if (codemirror) {
+    node.textContent = locationText(codemirror.module.location(codemirror.editor.view.state));
+    return;
+  }
+  const input = $('#editor-input');
+  if (!input) return;
   const { line, column } = cursorPosition(input.value, input.selectionStart);
-  const selected = Math.abs(input.selectionEnd - input.selectionStart);
-  node.textContent = `Ln ${line}, Col ${column}${selected ? ` (${selected} selected)` : ''}`;
+  node.textContent = locationText({ line, column, selected: Math.abs(input.selectionEnd - input.selectionStart) });
 }
 
 function renderEmptyState(app) {
@@ -630,40 +781,17 @@ function renderEditorChrome(app) {
   updateLocation();
 }
 
-function captureActive() {
-  const tab = activeTab();
-  const input = $('#editor-input');
-  if (!tab || !input) return;
-  tab.content = input.value;
-  tab.scrollTop = input.scrollTop;
-  tab.scrollLeft = input.scrollLeft;
-  tab.selectionStart = input.selectionStart;
-  tab.selectionEnd = input.selectionEnd;
-}
-
 function loadActive(app) {
-  const tab = activeTab();
-  const input = $('#editor-input');
-  if (input) {
-    input.value = tab ? tab.content : '';
-    if (tab) {
-      input.setSelectionRange(tab.selectionStart || 0, tab.selectionEnd || 0);
-      input.scrollTop = tab.scrollTop || 0;
-      input.scrollLeft = tab.scrollLeft || 0;
-    }
-  }
-  state.gutterLines = 0;
-  updateGutter();
-  renderHighlight();
-  syncScroll();
+  showActive();
   renderTabs(app);
   renderEditorChrome(app);
+  renderReview(app);
   renderTree(app);
 }
 
 function activate(app, path) {
   if (path === state.active) return;
-  captureActive();
+  captureShown();
   state.active = path;
   const tab = activeTab();
   if (tab) tab.usedAt = Date.now();
@@ -675,9 +803,15 @@ function activate(app, path) {
 export async function openFileInTab(app, path) {
   const bridge = window.scalemaxAPI?.workspace;
   if (!bridge || !path) return false;
-  if (state.tabs.some((tab) => tab.path === path)) {
+  // The first file waits for the editor, so it opens straight in CodeMirror.
+  await loadCodeMirror(app);
+  const open = state.tabs.find((tab) => tab.path === path);
+  if (open) {
     activate(app, path);
-    $('#editor-input')?.focus();
+    focusEditor();
+    // A clean tab shows the file as it is on disk now: a reply or a command may have changed it
+    // since it was loaded. Unsaved edits are never replaced (reloadTabs).
+    if (!open.dirty) void reloadTabs(app, [path]);
     return true;
   }
   if (state.tabs.length >= MAX_TABS) {
@@ -697,9 +831,12 @@ export async function openFileInTab(app, path) {
       path: result.data.path,
       name: result.data.path.split('/').pop(),
       content: result.data.content,
+      saved: result.data.content,
       revision: result.data.revision,
       dirty: false,
       usedAt: Date.now(),
+      view: null,
+      review: null,
     });
   }
   activate(app, result.data.path);
@@ -708,42 +845,48 @@ export async function openFileInTab(app, path) {
 }
 
 /**
- * Loads open tabs of `paths` again from disk after something else changed them there (an undo
- * of a reply's changes). Tabs with unsaved edits are left alone; a file that is gone closes.
+ * Loads open tabs of `paths` again from disk after something else changed them there (a reply,
+ * an undo of a reply's changes, a ticked spec task). Tabs with unsaved edits are left alone; a
+ * file that is gone closes. With `review` (a reply's changes, normalizeChanges), the files the
+ * reply changed are then marked in the editor for review (reviewReplyChanges).
  */
-export async function reloadTabs(app, paths) {
+export async function reloadTabs(app, paths, { review = null } = {}) {
   const bridge = window.scalemaxAPI?.workspace;
   const wanted = new Set(Array.isArray(paths) ? paths : []);
   if (!bridge?.read || !wanted.size) return;
   const root = app.workspace.root;
-  captureActive();
   let changed = false;
+  let closed = false;
   for (const tab of [...state.tabs]) {
     if (!wanted.has(tab.path) || tab.dirty) continue;
     const result = await bridge.read(tab.path);
     if (app.workspace.root !== root) return;
     // Typed into while the file was read: the user's edits win.
-    if (tab.path === state.active) captureActive();
     if (tab.dirty || !state.tabs.includes(tab)) continue;
     if (result?.ok) {
       if (result.data.revision === tab.revision) continue;
-      tab.content = result.data.content;
       tab.revision = result.data.revision;
+      loadText(tab, result.data.content);
       changed = true;
     } else if (result?.error?.code === 'ENOENT') {
       state.tabs = state.tabs.filter((item) => item !== tab);
       if (state.active === tab.path) state.active = state.tabs[state.tabs.length - 1]?.path || null;
-      changed = true;
+      closed = true;
     }
   }
-  if (changed) loadActive(app);
+  if (closed) loadActive(app);
+  else if (changed) {
+    renderTabs(app);
+    updateLocation();
+    renderReview(app);
+  }
+  if (review) await reviewReplyChanges(app, review);
 }
 
 export function closeTab(app, path) {
   const index = state.tabs.findIndex((tab) => tab.path === path);
   if (index === -1) return;
   const tab = state.tabs[index];
-  if (tab.path === state.active) captureActive();
   if (tab.dirty && !window.confirm(`Discard unsaved changes to ${tab.path}?`)) return;
   state.tabs.splice(index, 1);
   if (state.active === path) {
@@ -760,13 +903,26 @@ export function closeTab(app, path) {
   }
 }
 
-/** Saves the active tab with optimistic concurrency (the stored revision). */
+/**
+ * Saves the active tab with optimistic concurrency (the stored revision). Saves of one tab run
+ * one after another: a second save started while the first is on its way (Cmd+S twice, or an
+ * undone change of a review) carries the revision the first one returned instead of failing as
+ * a conflict.
+ */
 export async function saveActiveTab(app) {
   const bridge = window.scalemaxAPI?.workspace;
   const tab = activeTab();
   if (!bridge || !tab) { app.showToast('Open a file first'); return false; }
-  captureActive();
-  const content = tab.content;
+  const root = app.workspace.root;
+  const saving = (tab.saving || Promise.resolve()).then(() => writeTab(app, bridge, tab, root));
+  tab.saving = saving.catch(() => false);
+  return saving;
+}
+
+async function writeTab(app, bridge, tab, root) {
+  // Another folder opened while an earlier save of this tab ran: its tabs are gone.
+  if (app.workspace.root !== root) return false;
+  const content = tabText(tab);
   const result = await bridge.write({ path: tab.path, content, revision: tab.revision });
   if (!result?.ok) {
     app.showToast(result?.error?.message || 'Could not save that file');
@@ -774,9 +930,10 @@ export async function saveActiveTab(app) {
     return false;
   }
   tab.revision = result.data.revision;
-  // Edits typed while the write was in flight keep the tab dirty.
-  const input = $('#editor-input');
-  tab.dirty = state.active === tab.path && input ? input.value !== content : false;
+  markSaved(tab, content);
+  // Edits typed while the write was in flight keep the tab dirty, also when the user switched to
+  // another tab meanwhile: what the tab holds now is compared with what was written.
+  tab.dirty = isDirty(tab);
   renderTabs(app);
   setText('#editor-status', 'Saved.');
   app.showToast('File saved');
@@ -815,6 +972,114 @@ export function setGitDecorations(app, files, branch, isRepo) {
     count.textContent = String(state.git.size);
   }
   renderTree(app);
+}
+
+// ---- Review of a reply's changes ----------------------------------------------
+// Like Cursor's and Claude Code's inline review: a file a reply changed shows, in its tab, each
+// change against the file as it was before the reply (CodeMirror's unified merge view), with
+// Keep and Undo on each change and a bar above the editor for all of them. Undo puts that part
+// back and saves through the normal, revision-checked save; Keep only stops marking it. Whether
+// the reply's changes as a whole are kept or undone stays with the changes card under the reply
+// (src/changes-ui.js), which "Open full review" opens.
+
+/**
+ * Marks in the editor what a reply (`changes`: normalizeChanges) changed in files open in clean
+ * tabs, each still exactly as the reply left it. The earlier text is rebuilt from the reply's
+ * diff (originalFromHunks). A tab already under review keeps its earlier text, so the changes
+ * of several replies show together until they are kept or undone.
+ */
+export async function reviewReplyChanges(app, changes, paths = null) {
+  const api = window.scalemaxAPI?.checkpoints;
+  if (!api?.diff || !changes?.id) return;
+  await codemirrorLoading;
+  if (!codemirror) return;
+  const root = app.workspace.root;
+  for (const path of reviewTargets(changes, state.tabs, paths)) {
+    let result;
+    try {
+      result = await api.diff({ id: changes.id, path });
+    } catch {
+      continue;
+    }
+    if (app.workspace.root !== root) return;
+    const tab = state.tabs.find((item) => item.path === path);
+    if (!tab || tab.dirty || !result?.ok || result.data.current !== 'same') continue;
+    if (tab.review) {
+      tab.review.id = changes.id;
+      continue;
+    }
+    const original = originalFromHunks(tabText(tab), result.data);
+    if (original === null || original === tabText(tab)) continue;
+    tab.review = { id: changes.id, original };
+    // A tab never shown yet gets it with its first editor state (showActive).
+    const current = editorState(tab);
+    if (current) updateTab(tab, codemirror.module.reviewSpec(current, original));
+    if (tab.path === state.shown) renderReview(app);
+  }
+}
+
+function endReview(app, tab) {
+  if (!tab.review) return;
+  tab.review = null;
+  const current = editorState(tab);
+  if (current) updateTab(tab, codemirror.module.reviewSpec(current, null));
+  const bar = $('#editor-review');
+  const hadFocus = Boolean(bar?.contains?.(document.activeElement));
+  renderReview(app);
+  if (hadFocus) focusEditor();
+}
+
+// The bar above the editor while the shown tab is under review.
+function renderReview(app) {
+  const bar = $('#editor-review');
+  if (!bar) return;
+  const tab = activeTab();
+  const changes = tab?.review && tab.path === state.shown && codemirror
+    ? codemirror.module.reviewChanges(codemirror.editor.view.state) : null;
+  if (!changes?.length) {
+    bar.hidden = true;
+    // Every change kept or undone (or typed away): the review is over.
+    if (changes) {
+      queueMicrotask(() => {
+        const current = editorState(tab);
+        if (tab.review && current && !codemirror.module.reviewChanges(current)?.length) endReview(app, tab);
+      });
+    }
+    return;
+  }
+  bar.hidden = false;
+  setText('#editor-review-label', `${changes.length} ${changes.length === 1 ? 'change' : 'changes'} from the reply`);
+}
+
+// Runs a review action from the bar on the shown tab.
+function reviewAction(app, action) {
+  const tab = activeTab();
+  if (!tab?.review || !codemirror || tab.path !== state.shown) return;
+  const { module, editor } = codemirror;
+  const current = editor.view.state;
+  if (action === 'next' || action === 'previous') {
+    editor.nextChange(action === 'next' ? 1 : -1);
+  } else if (action === 'keep' || action === 'undo') {
+    const spec = action === 'keep' ? module.keepChangeSpec(current) : module.undoChangeSpec(current);
+    if (spec) editor.dispatch(spec);
+    else setText('#editor-status', 'Put the cursor in a change first (Next change).');
+  } else if (action === 'undo-all') {
+    const spec = module.undoAllSpec(current);
+    if (spec) editor.dispatch(spec);
+  } else if (action === 'keep-all') {
+    endReview(app, tab);
+  } else if (action === 'open') {
+    void openFullReview(app, tab);
+  }
+}
+
+// The reply's review dialog (src/changes-ui.js) for this file.
+async function openFullReview(app, tab) {
+  const id = tab.review?.id;
+  const task = (app.tasks || []).find((item) => item.messages?.some((message) => message.changes?.id === id));
+  if (!task) { app.showToast('That reply is no longer in a task.'); return; }
+  const { openReview } = await import('./changes-ui.js');
+  await openReview(app, task.id, id, tab.path, $('#editor-review-open'));
 }
 
 // ---- Panel tabs ------------------------------------------------------------
@@ -1042,58 +1307,57 @@ function bindTree(app) {
 
 // ---- Editor interaction ----------------------------------------------------
 
-function insertText(input, text) {
-  // execCommand keeps the edit on the textarea's native undo stack.
-  input.focus();
-  const inserted = typeof document.execCommand === 'function' && document.execCommand('insertText', false, text);
-  if (!inserted) {
-    input.setRangeText(text, input.selectionStart, input.selectionEnd, 'end');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-}
+// The review bar's controls (#editor-review), built once; renderReview() shows the bar.
+const REVIEW_ACTIONS = [
+  ['previous', 'Previous', 'Previous change (Shift+F7)'],
+  ['next', 'Next', 'Next change (F7)'],
+  ['keep', 'Keep', 'Keep the change at the cursor'],
+  ['undo', 'Undo', 'Undo the change at the cursor and save'],
+  ['keep-all', 'Keep all', 'Keep all changes and close the review'],
+  ['undo-all', 'Undo all', 'Undo all changes in this file and save'],
+  ['open', 'Open full review', 'Open full review of this reply\'s changes'],
+];
 
-function handleTab(event) {
-  const input = event.currentTarget;
-  if (input.readOnly) return;
-  event.preventDefault();
-  const { selectionStart: start, selectionEnd: end, value } = input;
-  const multiline = value.slice(start, end).includes('\n');
-  if (!event.shiftKey && !multiline) {
-    insertText(input, INDENT);
-    return;
+function bindReviewBar(app) {
+  const bar = $('#editor-review');
+  if (!bar) return;
+  const label = element('span', 'ws-review-label');
+  label.id = 'editor-review-label';
+  const actions = element('div', 'ws-review-actions');
+  for (const [action, text, title] of REVIEW_ACTIONS) {
+    const button = element('button', 'button secondary compact', text);
+    button.dataset.reviewAction = action;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    if (action === 'open') button.id = 'editor-review-open';
+    actions.append(button);
   }
-  const change = indentLines(value, start, end, event.shiftKey);
-  if (change.replacement === value.slice(change.blockStart, change.blockEnd)) return;
-  input.setSelectionRange(change.blockStart, change.blockEnd);
-  insertText(input, change.replacement);
-  input.setSelectionRange(change.selectionStart, change.selectionEnd);
+  bar.replaceChildren(label, actions);
+  bar.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-review-action]');
+    if (button) reviewAction(app, button.dataset.reviewAction);
+  });
 }
 
 function bindEditor(app) {
+  // The plain textarea, the editor until CodeMirror has loaded (or when it cannot).
   const input = $('#editor-input');
-  if (!input) return;
-  input.addEventListener('input', () => {
-    const tab = activeTab();
-    if (!tab) return;
-    tab.content = input.value;
-    if (!tab.dirty) {
-      tab.dirty = true;
+  input?.addEventListener('input', () => {
+    const tab = shownTab();
+    if (!tab || codemirror) return;
+    const dirty = isDirty(tab);
+    if (dirty !== tab.dirty) {
+      tab.dirty = dirty;
       renderTabs(app);
     }
-    app.workspace.dirty = true;
-    setText('#editor-status', 'Unsaved changes.');
-    updateGutter();
-    scheduleHighlight();
+    setText('#editor-status', dirty ? 'Unsaved changes.' : 'Ready.');
     updateLocation();
   });
-  input.addEventListener('scroll', syncScroll, { passive: true });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Tab' && !event.altKey && !event.metaKey && !event.ctrlKey) handleTab(event);
-  });
-  for (const type of ['click', 'keyup', 'select', 'focus']) input.addEventListener(type, updateLocation);
+  for (const type of ['click', 'keyup', 'select', 'focus']) input?.addEventListener(type, updateLocation);
   document.addEventListener('selectionchange', () => {
-    if (document.activeElement === input) updateLocation();
+    if (input && document.activeElement === input) updateLocation();
   });
+  bindReviewBar(app);
 
   const tabs = $('#editor-tabs');
   tabs?.addEventListener('click', (event) => {
@@ -1147,4 +1411,6 @@ export function bindWorkspaceUi(app) {
   const layout = readLayout();
   showPanel(['terminal', 'git', 'diff'].includes(layout.panelTab) ? layout.panelTab : 'terminal');
   loadActive(app);
+  // CodeMirror loads in the background; the first file opened waits for it (openFileInTab).
+  void loadCodeMirror(app);
 }

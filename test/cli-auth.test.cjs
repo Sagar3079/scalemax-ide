@@ -72,11 +72,23 @@ function loginScript({ before = null } = {}) {
   return { script, state };
 }
 
-function fakeStores({ valid = [EXISTING, FRESH], mcpFails = false } = {}) {
-  const state = { saved: [], removed: [], mcpSaved: [], mcpRemoved: [], token: null };
+// `check(token)` can answer for GitHub instead (an outage, a timeout); by default `valid` tokens
+// pass and the rest get a 401.
+function fakeStores({ valid = [EXISTING, FRESH], mcpFails = false, check = null, stored = null } = {}) {
+  const state = { saved: [], removed: [], checked: [], mcpSaved: [], mcpRemoved: [], token: stored };
   const connectors = {
-    save({ id, token }) { state.saved.push({ id, token }); state.token = token; return { id }; },
-    async test() { return valid.includes(state.token) ? { ok: true, supported: true } : { ok: false, message: 'GitHub rejected the stored token.' }; },
+    // Like lib/connectors.cjs: the token replaces the stored one only once GitHub accepted it.
+    async saveVerified({ id, token }) {
+      state.checked.push(token);
+      const outcome = check?.(token) || (valid.includes(token)
+        ? { ok: true, supported: true, status: 200, message: 'Connector token verified.' }
+        : { ok: false, supported: true, status: 401, message: 'Provider rejected the stored token.' });
+      if (outcome.ok) {
+        state.saved.push({ id, token });
+        state.token = token;
+      }
+      return outcome;
+    },
     remove({ id }) { state.removed.push(id); state.token = null; return { removed: true }; },
   };
   const mcp = {
@@ -158,10 +170,65 @@ test('a stale gh login is replaced by a fresh CLI login', async (t) => {
   const cli = createCliConnect({ ...stores, spawnImpl, locations: [gh], env: { PATH: '' } });
   const started = await cli.start({ id: 'github' }, { openExternal() {} });
   assert.equal(started.status, 'code');
-  assert.deepEqual(stores.state.removed, ['github']);
+  // The rejected token was checked but never stored; nothing stored was removed.
+  assert.deepEqual(stores.state.checked, [EXISTING]);
+  assert.deepEqual(stores.state.saved, []);
+  assert.deepEqual(stores.state.removed, []);
   const waiting = cli.wait({ id: 'github' });
   flow.state.loginDone();
   assert.equal((await waiting).source, 'login');
+  assert.deepEqual(stores.state.saved.map((entry) => entry.token), [FRESH]);
+});
+
+test('GitHub being unreachable keeps the stored connection and reports the error instead of a new login', async (t) => {
+  const gh = fakeGhBinary(t);
+  const flow = loginScript({ before: EXISTING });
+  const { spawnImpl, calls } = fakeSpawn(flow.script);
+  for (const outcome of [
+    { ok: false, supported: true, message: 'Connector validation timed out after 15 seconds.' },
+    { ok: false, supported: true, status: 503, message: 'Provider validation failed with HTTP status 503.' },
+  ]) {
+    const stores = fakeStores({ stored: 'gho_working_token_stored_before', check: () => outcome });
+    const cli = createCliConnect({ ...stores, spawnImpl, locations: [gh], env: { PATH: '' } });
+    await assert.rejects(
+      () => cli.start({ id: 'github' }, { openExternal() {} }),
+      (error) => error instanceof CliAuthError && error.code === 'VALIDATION_FAILED' && error.message === outcome.message,
+    );
+    assert.equal(stores.state.token, 'gho_working_token_stored_before');
+    assert.deepEqual(stores.state.removed, []);
+    assert.deepEqual(cli.status({ id: 'github' }), { phase: 'idle' });
+  }
+  assert.equal(calls.some((call) => call.args[1] === 'login'), false, 'no device-code login was started');
+
+  // The same after a fresh login: the error is reported, and the stored connection stays.
+  const fresh = loginScript();
+  const offline = fakeStores({ stored: 'gho_working_token_stored_before', check: () => ({ ok: false, supported: true, message: 'Could not reach the provider to validate the token.' }) });
+  const cli = createCliConnect({ ...offline, spawnImpl: fakeSpawn(fresh.script).spawnImpl, locations: [gh], env: { PATH: '' } });
+  await cli.start({ id: 'github' }, { openExternal() {} });
+  const waiting = cli.wait({ id: 'github' });
+  fresh.state.loginDone();
+  await assert.rejects(waiting, (error) => error.code === 'VALIDATION_FAILED' && /Could not reach/.test(error.message));
+  assert.equal(offline.state.token, 'gho_working_token_stored_before');
+});
+
+test('a login that fails right after showing the code still reports its error to wait()', async (t) => {
+  const gh = fakeGhBinary(t);
+  const { spawnImpl } = fakeSpawn((args, _env, child) => {
+    if (args[1] === 'token') {
+      child.finish(1, '', 'no oauth token found for github.com\n');
+      return;
+    }
+    // gh prints the code, then exits with an error before the user could approve anything.
+    child.finish(1, '', LOGIN_OUTPUT);
+  });
+  const cli = createCliConnect({ ...fakeStores(), spawnImpl, locations: [gh], env: { PATH: '' } });
+  const started = await cli.start({ id: 'github' }, { openExternal() {} });
+  assert.equal(started.status, 'code');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(cli.status({ id: 'github' }), { phase: 'idle' });
+  await assert.rejects(() => cli.wait({ id: 'github' }), (error) => error.code !== 'NOT_PENDING' && /did not complete/.test(error.message));
+  // Reported once; after that nothing is in progress.
+  await assert.rejects(() => cli.wait({ id: 'github' }), (error) => error.code === 'NOT_PENDING');
 });
 
 test('cancelling stops the gh login and rejects the wait', async (t) => {
@@ -189,6 +256,7 @@ test('clean failures: other connectors, gh exiting early, rejected token, MCP un
   const old = createCliConnect({ ...stores, spawnImpl: early.spawnImpl, locations: [gh], env: { PATH: '' } });
   await assert.rejects(() => old.start({ id: 'github' }, { openExternal() {} }), /exited before showing a sign-in code/);
   assert.deepEqual(old.status({ id: 'github' }), { phase: 'idle' });
+  await assert.rejects(() => old.wait({ id: 'github' }), (error) => error.code === 'NOT_PENDING');
 
   // The token works but GitHub's MCP server does not: keep the token, report the missing tools.
   const failing = fakeStores({ mcpFails: true });

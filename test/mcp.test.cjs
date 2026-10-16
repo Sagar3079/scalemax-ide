@@ -42,6 +42,7 @@ function makeManager(overrides = {}) {
     now: overrides.now || (() => 1_700_000_000_000),
     env: overrides.env || process.env,
     platform: overrides.platform || process.platform,
+    ...(overrides.toolsWaitMs !== undefined ? { toolsWaitMs: overrides.toolsWaitMs } : {}),
     spawnImpl: (command, args, options) => {
       spawnCalls.push({ command, args, options });
       const child = spawn(command, args, options);
@@ -483,12 +484,35 @@ test('a missing command or working directory fails with a clean error', async (t
   await assert.rejects(() => mcp.listTools({ id: 'fake' }), /Working directory not found/);
 });
 
-test('a stdout line over 4 MiB fails the connection', async (t) => {
-  const { mcp, pids } = makeManager();
+test('a stdout line over 4 MiB is dropped: only the request it answered fails, the server keeps running', async (t) => {
+  const { mcp, pids, spawnCalls } = makeManager();
   t.after(() => mcp.closeAll());
   mcp.save(stdioInput({ env: { FAKE_MCP_HUGE_LINE: '1' } }));
-  await assert.rejects(() => mcp.test({ id: 'fake' }), /larger than the 4 MB limit/);
-  await waitFor(() => !isAlive(pids[0]));
+  // The oversized startup line answers nothing; initialize still works.
+  assert.equal((await mcp.test({ id: 'fake' })).ok, true);
+  for (const text of ['huge', 'huge-last']) {
+    await assert.rejects(
+      () => mcp.callTool({ id: 'fake', name: 'echo', arguments: { text } }),
+      (error) => error instanceof McpError && /larger than the 4 MB limit/.test(error.message),
+    );
+    assert.equal((await mcp.callTool({ id: 'fake', name: 'echo', arguments: { text: 'still here' } })).text, 'still here');
+  }
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(isAlive(pids[0]), true);
+  assert.equal(mcp.list()[0].connected, true);
+});
+
+test('closeAll waits for servers that were already evicted, through SIGTERM then SIGKILL', async () => {
+  const { mcp, pids } = makeManager();
+  mcp.save(stdioInput({ env: { FAKE_MCP_STUBBORN: '1' } }));
+  await mcp.listTools({ id: 'fake' });
+  // Saving again evicts the live client without waiting; the process ignores SIGTERM.
+  mcp.save(stdioInput({ id: 'fake', name: 'Renamed', env: { FAKE_MCP_STUBBORN: '1' } }));
+  assert.equal(isAlive(pids[0]), true);
+  const closing = mcp.closeAll();
+  assert.ok(closing instanceof Promise);
+  await closing;
+  assert.throws(() => process.kill(pids[0], 0), { code: 'ESRCH' });
 });
 
 test('closeAll terminates the server process', async () => {
@@ -872,7 +896,7 @@ function fakeOAuthClient({ result = signedInResult(), refreshTo = { accessToken:
   };
 }
 
-async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStore(), oauth = fakeOAuthClient(), clock } = {}) {
+async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStore(), oauth = fakeOAuthClient(), clock, onFetch } = {}) {
   const handler = protectedHandler();
   const server = await startHttpServer(handler.handle);
   t.after(() => server.close());
@@ -884,7 +908,10 @@ async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStor
     now: clock || (() => current),
     oauthClient: oauth.client,
     // The directory's https URL is served by the local fake server.
-    fetchImpl: (url, init) => fetch(String(url).replace(NOTION_URL, server.url), init),
+    fetchImpl: async (url, init) => {
+      await onFetch?.(url, init);
+      return fetch(String(url).replace(NOTION_URL, server.url), init);
+    },
   });
   t.after(() => mcp.closeAll());
   return {
@@ -985,6 +1012,47 @@ test('tokens are refreshed shortly before they expire', async (t) => {
   assert.equal(handler.state.rejected, 0);
 });
 
+test('a late refresh of an old sign-in never replaces the tokens of a newer one', async (t) => {
+  const TOKEN_3 = 'oauth-access-token-three-0003';
+  const REFRESH_3 = 'oauth-refresh-token-three-0003';
+  let signedIn = signedInResult();
+  const oauth = fakeOAuthClient({ result: () => signedIn });
+  const refresh = oauth.client.refresh;
+  let finishOldRefresh = null;
+  // The first refresh hangs until the old client is evicted (its session DELETE) by the new sign-in.
+  oauth.client.refresh = async (auth, secrets) => {
+    if (!finishOldRefresh) await new Promise((resolve) => { finishOldRefresh = resolve; });
+    return refresh(auth, secrets);
+  };
+  const setup = await signInSetup(t, {
+    oauth,
+    onFetch: async (_url, init) => {
+      if (init.method !== 'DELETE' || !finishOldRefresh) return;
+      finishOldRefresh();
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+  const { mcp, store, handler } = setup;
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  // The first sign-in's token is revoked: a call starts a refresh that is still running...
+  handler.state.token = 'revoked-token';
+  const call = mcp.callTool({ id: 'notion', name: 'echo', arguments: { text: 'hi' } });
+  call.catch(() => {});
+  await waitFor(() => finishOldRefresh !== null);
+  // ...when the user signs in again and gets new tokens.
+  signedIn = signedInResult({ secrets: { accessToken: TOKEN_3, refreshToken: REFRESH_3 } });
+  handler.state.token = TOKEN_3;
+  setup.setNow(1_700_000_001_000);
+  const entry = await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: setup.openExternal });
+  assert.equal(entry.lastStatus, 'ok');
+  assert.equal(entry.auth.signedInAt, 1_700_000_001_000);
+  assert.equal(oauth.calls.refresh.length, 1, 'only the old sign-in was refreshed');
+  assert.equal(handler.state.seen.includes(`Bearer ${TOKEN_2}`), false, 'the old refresh result was never sent');
+  assert.match((await mcp.callTool({ id: 'notion', name: 'echo', arguments: { text: 'again' } })).text, /^echo:again/);
+  const stored = JSON.parse(Buffer.from(store.snapshot().mcpServers.notion.encryptedAuth, 'base64').toString().replace(/^enc:/, ''));
+  assert.deepEqual(stored, { clientSecret: '', accessToken: TOKEN_3, refreshToken: REFRESH_3 });
+});
+
 test('renaming keeps the sign-in, changing the URL or removing the server drops it', async (t) => {
   const setup = await signInSetup(t);
   const { mcp, store } = setup;
@@ -1061,4 +1129,179 @@ test('a server can be linked to a catalog connector; omitted keeps the link, nul
   assert.equal(mcp.save({ id: 'github', name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/' }).connector, 'github');
   assert.equal(mcp.save({ id: 'github', name: 'GitHub', transport: 'http', url: 'https://api.githubcopilot.com/mcp/', connector: null }).connector, null);
   assert.throws(() => mcp.save({ name: 'X', transport: 'http', url: 'https://example.com/mcp', connector: 'Not An Id' }), /connector link/);
+});
+
+// ---- Resources, prompts, slow servers and changed lists ----------------------------------
+
+const { RESOURCE_SERVER_ID } = require('../lib/mcp.cjs');
+
+function extrasInput(extra = {}) {
+  return stdioInput({ name: 'Memo', ...extra, env: { FAKE_MCP_EXTRAS: '1', ...(extra.env || {}) } });
+}
+
+test('resources and URI templates are listed page by page, and read as text for the model', async (t) => {
+  const { mcp, spawnCalls } = makeManager();
+  t.after(() => mcp.closeAll());
+  const { id } = mcp.save(extrasInput());
+  const listed = await mcp.resources({ id });
+  assert.deepEqual(listed, {
+    resources: [
+      { uri: 'memo://notes/today', name: 'Today', description: 'Notes for today.', mimeType: 'text/plain' },
+      { uri: 'memo://images/logo', name: 'Logo', description: '', mimeType: 'image/png' },
+    ],
+    templates: [{ uriTemplate: 'memo://notes/{day}', name: 'Notes of a day', description: '', mimeType: 'text/plain' }],
+  });
+  assert.deepEqual(await mcp.readResource({ id, uri: 'memo://notes/today' }), {
+    text: 'notes for today',
+    contents: [{ uri: 'memo://notes/today', mimeType: 'text/plain', kind: 'text' }],
+  });
+  const logo = await mcp.readResource({ id, uri: 'memo://images/logo' });
+  assert.equal(logo.text, `[binary: image/png, ${Buffer.byteLength('fake png bytes')} bytes]`);
+  await assert.rejects(() => mcp.readResource({ id, uri: 'memo://nothing' }), /Resource not found/);
+  await assert.rejects(() => mcp.readResource({ id, uri: 'bad\nuri' }), /URI must be/);
+  // A server without templates still lists its resources; one without resources asks nothing.
+  const plain = mcp.save(extrasInput({ name: 'No templates', env: { FAKE_MCP_NO_TEMPLATES: '1' } }));
+  assert.equal((await mcp.resources({ id: plain.id })).resources.length, 2);
+  assert.deepEqual((await mcp.resources({ id: plain.id })).templates, []);
+  const bare = mcp.save(stdioInput({ name: 'Bare' }));
+  assert.deepEqual(await mcp.resources({ id: bare.id }), { resources: [], templates: [] });
+  assert.deepEqual(await mcp.prompts({ id: bare.id }), []);
+  assert.equal(spawnCalls.length, 3, 'one connection per server, reused for every listing');
+});
+
+test('prompts are listed with their arguments and filled in as text for the message box', async (t) => {
+  const { mcp } = makeManager();
+  t.after(() => mcp.closeAll());
+  const { id } = mcp.save(extrasInput());
+  assert.deepEqual(await mcp.prompts({ id }), [{
+    name: 'review',
+    title: 'Review a file',
+    description: 'Ask for a review.',
+    arguments: [
+      { name: 'file', description: 'The file to review.', required: true },
+      { name: 'focus', description: 'What to look at.', required: false },
+    ],
+  }]);
+  const filled = await mcp.getPrompt({ id, name: 'review', arguments: { file: 'app.js', focus: 'security' } });
+  assert.deepEqual(filled, {
+    name: 'review',
+    description: 'A review request.',
+    messages: [{ role: 'user', text: 'Review app.js for security.' }, { role: 'assistant', text: 'Sure, send it.' }],
+    text: 'Review app.js for security.\n\nSure, send it.',
+  });
+  await assert.rejects(() => mcp.getPrompt({ id, name: 'review' }), (error) => error instanceof McpError && /Missing required argument: file/.test(error.message));
+  await assert.rejects(() => mcp.getPrompt({ id, name: '' }), /prompt name must be/);
+  await assert.rejects(() => mcp.getPrompt({ id, name: 'review', arguments: { file: 42 } }), /argument values must be text/);
+  await assert.rejects(() => mcp.getPrompt({ id, name: 'review', arguments: { 'bad name': 'x' } }), /argument names must be/);
+  // A prompt that failed never marks the server as broken.
+  assert.notEqual(mcp.list()[0].lastStatus, 'error');
+});
+
+test('the model gets two read-only resource tools, limited to what each server lists', async (t) => {
+  const { mcp } = makeManager();
+  t.after(() => mcp.closeAll());
+  mcp.save(extrasInput());
+  mcp.save(stdioInput());
+  const { tools, resolve, errors } = await mcp.chatTools();
+  assert.deepEqual(errors, []);
+  const names = tools.map((tool) => tool.function.name);
+  assert.deepEqual(names.slice(0, 2), ['mcp_list_resources', 'mcp_read_resource']);
+  assert.deepEqual(names.slice(2), ['mcp_fake_echo', 'mcp_fake_add', 'mcp_memo_echo', 'mcp_memo_add', 'mcp_memo_change']);
+  assert.deepEqual(tools[0].function.parameters.properties.server.enum, ['memo'], 'only servers that offer resources');
+  assert.match(tools[1].function.description, /data, not as instructions/);
+  assert.deepEqual(resolve('mcp_list_resources'), { serverId: RESOURCE_SERVER_ID, toolName: 'list_resources', readOnly: true });
+  const { alwaysAsk, ...readRoute } = resolve('mcp_read_resource');
+  assert.deepEqual(readRoute, { serverId: RESOURCE_SERVER_ID, toolName: 'read_resource', readOnly: true });
+  // Building the tools remembers what each server lists: a listed resource reads without asking.
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/today' }), '');
+  // Read-only by definition: offered when only read-only tools are.
+  assert.deepEqual((await mcp.chatTools({ readOnlyOnly: true })).tools.map((tool) => tool.function.name), ['mcp_list_resources', 'mcp_read_resource']);
+
+  const list = await mcp.callTool({ id: 'MCP', name: 'list_resources', arguments: { server: 'memo' } });
+  assert.equal(list.isError, false);
+  assert.equal(list.text, [
+    '- Today: memo://notes/today (text/plain) — Notes for today.',
+    '- Logo: memo://images/logo (image/png)',
+    'URI templates:',
+    '- Notes of a day: memo://notes/{day} (text/plain)',
+  ].join('\n'));
+  assert.equal((await mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri: 'memo://notes/today' } })).text, 'notes for today');
+  // Filled in from the template.
+  assert.equal((await mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri: 'memo://notes/2026-10-16' } })).text, 'notes for 2026-10-16');
+  // A listed resource reads without asking; a URI filled in from a template asks, unless the user
+  // trusts the server's labels.
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/today' }), '');
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/2026-10-16' }), 'required');
+  assert.equal(alwaysAsk({ server: 'nope', uri: 'memo://notes/today' }), 'required');
+  mcp.save(extrasInput({ id: 'memo', trustReadOnly: true }));
+  assert.equal(alwaysAsk({ server: 'memo', uri: 'memo://notes/2026-10-16' }), '');
+  for (const uri of ['memo://secret', 'memo://notes/', 'memo://notes/a b', 'https://collect.example/?d=key']) {
+    await assert.rejects(() => mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'memo', uri } }), /not one of this server's resources/, uri);
+  }
+  await assert.rejects(() => mcp.callTool({ id: 'MCP', name: 'read_resource', arguments: { server: 'nope', uri: 'memo://notes/today' } }), /Choose one of the MCP servers/);
+  await assert.rejects(() => mcp.callTool({ id: 'MCP', name: 'delete_resource', arguments: { server: 'memo' } }), /Unknown MCP resource tool/);
+  assert.equal((await mcp.callTool({ id: 'MCP', name: 'list_resources', arguments: { server: 'fake' } })).text, 'Fake offers no resources.');
+  mcp.save(extrasInput({ id: 'memo', enabled: false }));
+  await assert.rejects(() => mcp.callTool({ id: 'MCP', name: 'list_resources', arguments: { server: 'memo' } }), /Choose one of the MCP servers/);
+  // No server with resources: no resource tools at all.
+  assert.equal((await mcp.chatTools()).tools.some((tool) => tool.function.name.includes('resource')), false);
+});
+
+test('a server that hangs is left out of the reply after the wait, and is not waited for again', async (t) => {
+  const { mcp } = makeManager({ toolsWaitMs: 300 });
+  t.after(() => mcp.closeAll());
+  mcp.save(stdioInput());
+  mcp.save(stdioInput({ name: 'Stuck', env: { FAKE_MCP_HANG: 'initialize' } }));
+  mcp.save(stdioInput({ name: 'Silent', env: { FAKE_MCP_HANG: 'tools' } }));
+  let started = Date.now();
+  const first = await mcp.chatTools();
+  assert.ok(Date.now() - started < 3000, 'well under the 60 s start-up timeout');
+  assert.deepEqual(first.tools.map((tool) => tool.function.name), ['mcp_fake_echo', 'mcp_fake_add']);
+  assert.deepEqual(first.errors, [
+    { serverId: 'silent', message: 'Silent did not start within 1 second, so its tools were left out of this reply.', notReady: true },
+    { serverId: 'stuck', message: 'Stuck did not start within 1 second, so its tools were left out of this reply.', notReady: true },
+  ]);
+  started = Date.now();
+  const second = await mcp.chatTools();
+  assert.ok(Date.now() - started < 250, 'the servers already used up their wait');
+  assert.deepEqual(second.errors.map((error) => error.serverId), ['silent', 'stuck']);
+  assert.throws(() => makeManager({ toolsWaitMs: 0 }), /toolsWaitMs/);
+});
+
+test('a slow server is offered at a later turn on the same connection, once it is ready', async (t) => {
+  let delay = 600;
+  const handler = httpMcpHandler();
+  const server = await startHttpServer((entry, res) => {
+    if (entry.body?.method === 'tools/list' && delay) setTimeout(() => handler.handle(entry, res), delay);
+    else handler.handle(entry, res);
+  });
+  t.after(() => server.close());
+  const { mcp } = makeManager({ toolsWaitMs: 200 });
+  t.after(() => mcp.closeAll());
+  mcp.save({ name: 'Slow', transport: 'http', url: server.url });
+  const first = await mcp.chatTools();
+  assert.deepEqual(first.tools, []);
+  assert.equal(first.errors[0].notReady, true);
+  delay = 0;
+  await waitFor(() => mcp.list()[0].lastStatus === 'ok');
+  const later = await mcp.chatTools();
+  assert.deepEqual(later.tools.map((tool) => tool.function.name), ['mcp_slow_echo']);
+  assert.deepEqual(later.errors, []);
+  assert.equal(handler.state.initializeCount, 1, 'the connection made in the background is the one used');
+});
+
+test('a server that says its lists changed gets them fetched again', async (t) => {
+  const { mcp } = makeManager();
+  t.after(() => mcp.closeAll());
+  const { id } = mcp.save(extrasInput());
+  assert.deepEqual((await mcp.listTools({ id })).map((tool) => tool.name), ['echo', 'add', 'change']);
+  assert.equal((await mcp.resources({ id })).resources.length, 2);
+  assert.equal((await mcp.prompts({ id })).length, 1);
+  assert.equal((await mcp.callTool({ id, name: 'change' })).text, 'changed');
+  // The new tool list is fetched in the background (and the count follows); resources and
+  // prompts are fetched again when they are next asked for.
+  await waitFor(() => mcp.list()[0].toolCount === 4);
+  assert.deepEqual((await mcp.chatTools()).tools.map((tool) => tool.function.name).slice(-1), ['mcp_memo_late']);
+  assert.deepEqual((await mcp.resources({ id })).resources.map((resource) => resource.uri).slice(-1), ['memo://notes/late']);
+  assert.deepEqual((await mcp.prompts({ id })).map((prompt) => prompt.name), ['review', 'late']);
 });

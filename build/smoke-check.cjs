@@ -417,6 +417,16 @@ async function run(win) {
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
         commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
         specMethods: ['list','read','setTask'].filter((m) => typeof api.specs?.[m] === 'function'),
+        gitMethods: ['status','branches','suggestMessage','commit','push','pull','switchBranch','createPr'].filter((m) => typeof api.git?.[m] === 'function'),
+        worktreeMethods: ['create','info','merge','remove','reveal'].filter((m) => typeof api.worktrees?.[m] === 'function'),
+        sessionMethods: ['exportTranscript'].filter((m) => typeof api.sessions?.[m] === 'function'),
+        gitFlowControls: ['#commit-dialog', '#branch-dialog', '#rewind-dialog', '#sessions-dialog', '#worktree-bar', '#worktree-chip', '#workspace-branch', '#git-commit', '#git-pull', '#git-switch', '#sessions-btn', '#export-transcript-btn']
+          .every((selector) => Boolean(document.querySelector(selector))),
+        // Slash commands, hooks and @-mentions of folders, pages and background commands.
+        slashMethods: ['list','expand'].filter((m) => typeof api.slash?.[m] === 'function'),
+        hookMethods: ['list','approve','setEnabled'].filter((m) => typeof api.hooks?.[m] === 'function'),
+        mentionMethods: ['resolve'].filter((m) => typeof api.mentions?.[m] === 'function'),
+        slashControls: ['#slash-menu[hidden]', '#hooks-dialog', '#hooks-panel', '#hooks-refresh'].every((selector) => Boolean(document.querySelector(selector))),
         // The specs chip stays hidden until a folder is open; Plan is the first permission offered.
         specsControls: ['#specs-dialog', '#specs-open[hidden]', '#specs-list', '#specs-tabs', '#specs-doc', '#specs-new', '#specs-work',
           '#permission-menu [data-permission="plan"]'].every((selector) => Boolean(document.querySelector(selector))),
@@ -425,7 +435,10 @@ async function run(win) {
           .every((selector) => Boolean(document.querySelector(selector))),
         attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
         permissionLabel: document.querySelector('#permission-label')?.textContent || '',
-        mcpMethods: ['list','save','remove','test','tools','signIn','cancelSignIn'].filter((m) => typeof api.mcp?.[m] === 'function'),
+        mcpMethods: ['list','save','remove','test','tools','signIn','cancelSignIn','resources','prompts','getPrompt'].filter((m) => typeof api.mcp?.[m] === 'function'),
+        // Automations run in main (lib/automations.cjs); the window asks for Run now and hears about runs.
+        automationMethods: ['state','runNow','setContext','onChanged'].filter((m) => typeof api.automations?.[m] === 'function'),
+        automationControls: ['#automations-background-toggle[aria-checked="true"]', '#scheduler-status'].every((selector) => Boolean(document.querySelector(selector))),
         providerGetOk: providerResult && providerResult.ok === true,
         providerConfigured: providerResult && providerResult.data && providerResult.data.configured === false,
         cancelOk: cancelResult && cancelResult.ok === true,
@@ -726,13 +739,15 @@ async function run(win) {
       await send('show history');
       await until(() => lastText(uiTaskB).startsWith('history: '), 8000);
       const historyText = lastText(uiTaskB);
-      // A reply that fails part way keeps what it wrote, with the reason under it.
+      // A reply that fails part way keeps what it wrote, with the reason under it. The stub's
+      // error event says server_error, which main retries like an overloaded server (1 s, 3 s,
+      // 8 s) before it gives up, so the wait covers all four tries.
       const lastMessage = (taskId) => {
         const task = app.tasks.find((item) => item.id === taskId);
         return task ? task.messages[task.messages.length - 1] : null;
       };
       await send('fail midway please');
-      await until(() => Boolean(lastMessage(uiTaskB) && lastMessage(uiTaskB).interrupted === 'failed'), 8000);
+      await until(() => Boolean(lastMessage(uiTaskB) && lastMessage(uiTaskB).interrupted === 'failed'), 20000);
       const failed = lastMessage(uiTaskB) || {};
       // Stop that reaches main before the tool loop started still stops the reply.
       const early = api.provider.send({ requestId: 'smoke-early-stop', folder: ${JSON.stringify(parDirA)}, messages: [{ role: 'user', content: 'ping' }] });
@@ -1479,7 +1494,8 @@ async function run(win) {
     workspaceApi: probe.workspaceMethods.length === 10,
     dialogApi: probe.dialogMethods.length === 2,
     connectorApi: probe.connectorMethods.length === 15,
-    mcpApi: probe.mcpMethods.length === 7,
+    mcpApi: probe.mcpMethods.length === 10,
+    automationApi: probe.automationMethods.length === 4 && probe.automationControls === true,
     providerGetOk: probe.providerGetOk,
     providerConfiguredFalse: probe.providerConfigured,
     cancelOk: probe.cancelOk,
@@ -1579,6 +1595,9 @@ async function run(win) {
       && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
+    gitFlowApi: probe.gitMethods.length === 8 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,
+    slashApi: probe.slashMethods.length === 2 && probe.mentionMethods.length === 1 && probe.slashControls === true,
+    hooksApi: probe.hookMethods.length === 3,
     // An MCP server's own read-only label is a claim until the user trusts the server.
     mcpLabelsUntrusted: Boolean(e2e && e2e.untrustedAsked && /cannot check that/.test(e2e.untrustedSummary)
       && e2e.untrustedText === 'tool said: smoke-echo' && e2e.mcpTrustedFlag),

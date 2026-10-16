@@ -343,6 +343,44 @@ test('authorize() reports PORT_IN_USE when the callback port is taken', async ()
   assert.equal(opened, false);
 });
 
+test('authorize() runs one flow per callback port: a new flow cancels the waiting one and takes the port', async () => {
+  const port = await freePort();
+  const { fetchImpl } = tokenEndpoint();
+  let listening = 0;
+  const idle = () => authorize(CONFIG, { clientId: CLIENT_ID, port, fetchImpl, openExternal: async () => { listening += 1; } });
+  const first = idle();
+  first.catch(() => {});
+  while (listening === 0) await new Promise((resolve) => setImmediate(resolve));
+  // Started back to back: the second is replaced by the third while it still waits for the port.
+  const second = idle();
+  second.catch(() => {});
+  const browser = fakeBrowser((url) => get(callbackUrl(url, { code: 'code-3', state: stateOf(url) })));
+  const tokens = await authorize(CONFIG, { clientId: CLIENT_ID, port, fetchImpl, openExternal: browser.openExternal });
+  assert.equal(tokens.accessToken, 'access-1');
+  assert.equal((await browser.done).status, 200);
+  await assert.rejects(first, (error) => error.code === 'CANCELLED');
+  await assert.rejects(second, (error) => error.code === 'CANCELLED');
+  assert.equal(listening, 1, 'the replaced flow never listened or opened the browser');
+  await assertPortFree(port);
+});
+
+test('authorize() lets a flow that already has its code finish its token exchange', async () => {
+  const port = await freePort();
+  let finishExchange;
+  const slow = tokenEndpoint(() => new Promise((resolve) => { finishExchange = () => resolve(jsonResponse(DEFAULT_TOKENS)); }));
+  const firstBrowser = fakeBrowser((url) => get(callbackUrl(url, { code: 'code-1', state: stateOf(url) })));
+  const first = authorize(CONFIG, { clientId: CLIENT_ID, port, fetchImpl: slow.fetchImpl, openExternal: firstBrowser.openExternal });
+  while (!finishExchange) await new Promise((resolve) => setImmediate(resolve));
+  const secondBrowser = fakeBrowser((url) => get(callbackUrl(url, { code: 'code-2', state: stateOf(url) })));
+  const second = await authorize(CONFIG, {
+    clientId: CLIENT_ID, port, fetchImpl: tokenEndpoint().fetchImpl, openExternal: secondBrowser.openExternal,
+  });
+  assert.equal(second.accessToken, 'access-1');
+  finishExchange();
+  assert.equal((await first).accessToken, 'access-1');
+  await assertPortFree(port);
+});
+
 test('authorize() uses a localhost redirect for localhost-only providers', async () => {
   const port = await freePort();
   const ipv6 = await ipv6LoopbackAvailable();
