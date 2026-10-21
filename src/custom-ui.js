@@ -1,12 +1,11 @@
 /** ScaleMax IDE: create, edit and delete custom experts and skills. */
-import { renderAvatar, AVATAR_STYLES, AVATAR_COLORS } from './avatars.js';
+import { renderAvatar, risoDuotone, AVATAR_STYLES, AVATAR_COLORS } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill } from './custom-catalog.js';
 
 const KINDS = {
   expert: {
     listKey: 'customExperts',
     validate: validateCustomExpert,
-    eyebrow: 'Your own expert',
     promptLabel: 'Persona prompt applied to chat',
     promptHint: 'Describe how this expert thinks and answers. It is added to the system prompt of every chat request while the expert is selected.',
     placeholder: 'Act as a … Start from the user goal, ask for missing context, and …',
@@ -14,7 +13,6 @@ const KINDS = {
   skill: {
     listKey: 'customSkills',
     validate: validateCustomSkill,
-    eyebrow: 'Your own skill',
     promptLabel: 'Prompt template',
     promptHint: 'Write the instructions for this skill. Use {{input}} where the conversation material should go. Install the skill to apply it to chat, or Run it on the file open in the editor.',
     placeholder: 'Review {{input}} and produce …',
@@ -64,8 +62,10 @@ function renderColors() {
     const checked = color === selectedColor;
     swatch.setAttribute('aria-checked', String(checked));
     swatch.tabIndex = checked ? 0 : -1;
-    // CSSOM is CSP-safe; inline style attributes in markup are not.
-    swatch.style.backgroundColor = color;
+    // CSSOM is CSP-safe; inline style attributes in markup are not. The swatch shows the colour
+    // as the avatar prints it, in the two riso inks (styles.css .custom-color).
+    swatch.style.setProperty('--riso-fill', risoDuotone(color, 'light'));
+    swatch.style.setProperty('--riso-fill-dark', risoDuotone(color, 'dark'));
     return swatch;
   }));
 }
@@ -96,8 +96,6 @@ function fillForm(kind, record) {
   if (label) label.textContent = config.promptLabel;
   const hint = byId('custom-prompt-hint');
   if (hint) hint.textContent = config.promptHint;
-  const eyebrow = byId('custom-dialog-kind');
-  if (eyebrow) eyebrow.textContent = config.eyebrow;
   const title = byId('custom-dialog-title');
   if (title) title.textContent = record ? `Edit ${record.name}` : (kind === 'expert' ? 'New expert' : 'New skill');
   const remove = byId('custom-delete');

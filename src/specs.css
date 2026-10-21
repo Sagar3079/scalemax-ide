@@ -2,6 +2,7 @@
  * Feature specs (src/specs-ui.js): the chip in the composer, the dialog with the specs of the open
  * folder on the left and the selected one's requirements, design and tasks on the right, and the
  * "Run this plan" card under a reply written in Plan permission.
+ * Riso Zine Press: paper-raised sheets, 1px rules, blue ink for the read-only Plan state.
  */
 
 /* ---- The chip in the composer toolbar ------------------------------------------- */
@@ -11,11 +12,11 @@
   text-overflow: ellipsis;
 }
 
-/* Plan permission is read-only, so its chip reads as calm information, not a warning. */
+/* Plan permission is read-only, so its chip reads as calm information in blue ink. */
 .composer-chip.is-plan {
-  border-color: var(--sm-palette-blue-3);
-  background: var(--sm-palette-blue-1);
-  color: var(--sm-palette-blue-8);
+  border-color: color-mix(in srgb, var(--riso-blue, #0078BF) 45%, transparent);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 8%, transparent);
+  color: var(--riso-blue-text, #005E96);
 }
 
 /* ---- The dialog ----------------------------------------------------------------- */
@@ -23,25 +24,26 @@
 #specs-dialog {
   width: min(1040px, 94vw);
   height: min(720px, 84vh);
-  margin: 7vh auto auto;
+  margin: 8vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 #specs-dialog[open] {
   display: flex;
   flex-direction: column;
 }
 #specs-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--riso-backdrop, color-mix(in srgb, #F3F4F1 55%, transparent));
+  backdrop-filter: blur(2px) saturate(0.8);
 }
 .specs-subtitle {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--sm-text-weak);
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .specs-close {
   width: 28px;
@@ -49,81 +51,86 @@
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
-  font-size: 18px;
+  color: var(--riso-ink-2, #4A4D55);
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
 .specs-close:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
-.specs-close:focus-visible,
+.specs-close:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
 .specs-item:focus-visible,
 .specs-tab:focus-visible,
 .specs-doc:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: -2px;
 }
 .specs-body {
   flex: 1;
   min-height: 0;
   display: flex;
-  border-top: 1px solid var(--sm-app-border);
-  border-bottom: 1px solid var(--sm-app-border);
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
 /* ---- The specs of this folder --------------------------------------------------- */
 
 .specs-side {
-  flex: 0 0 250px;
+  flex: 0 0 256px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--sm-app-border);
+  border-right: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper, #F3F4F1);
 }
 .specs-list {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px;
+  gap: 0;
+  padding: 8px;
   overflow-y: auto;
 }
 .specs-empty {
-  margin: 10px 8px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--sm-text-weak);
+  margin: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .specs-item {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px;
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 .specs-item:hover {
-  background: var(--sm-app-surface-hover);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
 }
 .specs-item.is-selected {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
 .specs-item-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
+  line-height: 18px;
 }
 .specs-item.is-selected .specs-item-name {
   font-weight: 600;
@@ -133,11 +140,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .specs-new {
   flex-shrink: 0;
-  margin: 0 6px 8px;
+  margin: 0 8px 8px;
 }
 
 /* ---- The selected spec ---------------------------------------------------------- */
@@ -152,46 +161,57 @@
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 8px 14px;
+  padding: 8px 16px;
 }
 .specs-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
-  font-size: 12.5px;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
   font-weight: 600;
 }
 .specs-progress {
   flex-shrink: 0;
   margin-left: auto;
   font-size: 12px;
-  color: var(--sm-text-weak);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .specs-tabs {
   display: flex;
-  gap: 2px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--sm-app-border);
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .specs-tab {
-  padding: 5px 10px 7px;
+  position: relative;
+  padding: 4px 8px 8px;
   border: 0;
-  border-bottom: 2px solid transparent;
   background: none;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
+  transition: color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 .specs-tab:hover {
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 .specs-tab.is-selected {
-  border-bottom-color: var(--sm-brand-primary);
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
   font-weight: 600;
+}
+/* The selected document carries a blue ink stripe on its bottom edge. */
+.specs-tab.is-selected::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--riso-blue, #0078BF);
 }
 /* A document the assistant has not written yet is still reachable, just clearly empty. */
 .specs-tab.is-missing {
@@ -200,44 +220,50 @@
 .specs-doc {
   flex: 1;
   min-height: 0;
-  padding: 12px 16px 18px;
+  padding: 12px 16px 20px;
   overflow: auto;
 }
 .specs-markdown {
   font-size: 13px;
+  line-height: 20px;
+}
+.specs-markdown code {
+  font-size: 12px;
 }
 
-/* ---- The task list ------------------------------------------------------------- */
+/* ---- The task list: rows on rules, no box --------------------------------------- */
 
 .specs-tasks {
-  margin: 0 0 14px;
-  padding: 8px 0;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 8px;
-  background: var(--sm-app-surface);
+  margin: 0 0 16px;
+  padding: 0;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   list-style: none;
 }
 .specs-task {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 4px 12px 4px calc(12px + var(--specs-task-depth, 0) * 18px);
+  padding: 4px 0 4px calc(var(--specs-task-depth, 0) * 20px);
+}
+.specs-task + .specs-task {
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .specs-task input[type='checkbox'] {
   flex-shrink: 0;
-  margin: 2px 0 0;
-  accent-color: var(--sm-brand-primary);
+  margin: 4px 0 0;
+  accent-color: var(--riso-blue, #0078BF);
 }
 .specs-task-text {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--sm-text-strong);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink, #1A1B1F);
   cursor: pointer;
 }
 .specs-task input[type='checkbox']:checked + .specs-task-text {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
 }
@@ -249,7 +275,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 12px 16px;
 }
 .specs-spacer {
   flex: 1;
@@ -258,12 +284,13 @@
 /* ---- "Run this plan" under a reply that could only plan ------------------------- */
 
 .plan-card {
-  margin-top: 6px;
-  padding: 10px 12px 11px;
-  border: 1px solid var(--sm-palette-blue-3);
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--riso-blue, #0078BF) 35%, transparent);
   border-radius: 8px;
-  background: var(--sm-palette-blue-1);
-  font-size: 12.5px;
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 5%, var(--riso-paper-raised, #FAFAF8));
+  font-size: 13px;
+  line-height: 20px;
   white-space: normal;
 }
 .plan-head {
@@ -272,15 +299,21 @@
   gap: 8px;
 }
 .plan-title {
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
   font-weight: 600;
-  color: var(--sm-palette-blue-9);
+  color: var(--riso-blue-text, #005E96);
 }
 .plan-note {
-  margin: 4px 0 9px;
-  line-height: 1.5;
-  color: var(--sm-text-medium);
+  margin: 4px 0 12px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .plan-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .specs-tab {
+    transition: none;
+  }
 }

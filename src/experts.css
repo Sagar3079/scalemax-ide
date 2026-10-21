@@ -1,4 +1,102 @@
-/* Expert avatars (src/avatars.js): character badge sizing and CSS-only motion. */
+/* Expert cards and avatars (src/avatars.js): flat cards on rules, character badge sizing and
+   CSS-only motion. Riso Zine Press: the card is a paper-raised sheet with a 1px rule and no
+   shadow; the avatar's badge is a blue-ink tint, so the characters sit on the same press as the
+   rest of the shell. */
+
+/* ---- The card ------------------------------------------------------------------------------ */
+
+.expert-card {
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  box-shadow: none;
+  transition: border-color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.expert-card:hover {
+  border-color: color-mix(in srgb, var(--riso-ink, #1A1B1F) 30%, transparent);
+  box-shadow: none;
+}
+
+.expert-card.selected {
+  border-color: var(--riso-blue, #0078BF);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 5%, var(--riso-paper-raised, #FAFAF8));
+  box-shadow: none;
+}
+
+.expert-card .expert-name {
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.expert-card .expert-role {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--riso-blue-text, #005E96);
+}
+
+.expert-card .expert-desc {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+
+.expert-card .expert-actions {
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.expert-card .expert-use {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.expert-card .expert-use:hover {
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 6%, var(--riso-paper-raised, #FAFAF8));
+}
+
+.expert-card .expert-use[aria-pressed="true"],
+.expert-card.selected .expert-use {
+  border-color: color-mix(in srgb, var(--riso-blue, #0078BF) 55%, transparent);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 10%, var(--riso-paper-raised, #FAFAF8));
+  color: var(--riso-blue-text, #005E96);
+}
+
+.expert-card .expert-use:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+
+.expert-card .custom-tag {
+  height: auto;
+  margin-inline-start: 8px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--riso-ink-3, #6B6F78) 70%, transparent);
+  border-radius: 3px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--riso-ink-2, #4A4D55);
+}
+
+/* ---- The avatar ---------------------------------------------------------------------------- */
 
 /* Section 07 styles .expert-avatar as a 32px initials circle; cards show a character badge. */
 .expert-card .expert-avatar {
@@ -18,13 +116,43 @@
   height: 100%;
 }
 
+/* Two-ink duotone: every coloured part paints with its reprint in the riso blue and pink over
+   paper (avatars.js risoDuotone, set per part by renderAvatar), the deep-stock press in dark mode.
+   :where() keeps these below the badge rule that follows. */
+.expert-avatar-svg [fill^="#"] {
+  fill: var(--riso-fill);
+}
+
+.expert-avatar-svg [stroke^="#"] {
+  stroke: var(--riso-stroke);
+}
+
+:where([data-theme="dark"]) .expert-avatar-svg [fill^="#"] {
+  fill: var(--riso-fill-dark);
+}
+
+:where([data-theme="dark"]) .expert-avatar-svg [stroke^="#"] {
+  stroke: var(--riso-stroke-dark);
+}
+
+/* The badge behind each character: blue ink at a low strength, edged with the rule. */
 .expert-avatar-svg .avatar-badge {
-  stroke: var(--sm-app-border);
+  fill: var(--riso-blue, #0078BF);
+  fill-opacity: 0.12;
+  stroke: var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   stroke-width: 1;
 }
 
+.expert-card.selected .expert-avatar-svg .avatar-badge {
+  fill-opacity: 0.22;
+}
+
 [data-theme="dark"] .expert-avatar-svg .avatar-badge {
-  fill-opacity: 0.34;
+  fill-opacity: 0.2;
+}
+
+[data-theme="dark"] .expert-card.selected .expert-avatar-svg .avatar-badge {
+  fill-opacity: 0.32;
 }
 
 /* Animated parts move around their own centre. */
@@ -86,6 +214,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .expert-card {
+    transition: none;
+  }
+
   .expert-avatar-svg,
   .expert-avatar-svg * {
     animation: none !important;

@@ -28,12 +28,15 @@ globalThis.document = {
   querySelector: (selector) => nodes[selector] || null,
   querySelectorAll: () => [],
   createElement: () => fakeElement(),
+  // SVG (the sidebar's mini mascots, src/mascot.js).
+  createElementNS: () => fakeElement({ appendChild: (child) => child }),
   createTextNode: () => fakeElement(),
   activeElement: null,
 };
 
 const { default: app } = await import('../src/app.js');
 const { bindComposerContext } = await import('../src/context-ui.js');
+const { applyProgress } = await import('../src/reply-ui.js');
 const { openFileInTab, saveActiveTab, resetTabs } = await import('../src/workspace-ui.js');
 
 const input = nodes['#chat-input'];
@@ -378,4 +381,135 @@ test('a project\'s own hooks are asked about before a message; allowed by their 
   }
   assert.deepEqual(approved, [{ folder: ROOT, hash: 'b'.repeat(64) }]);
   assert.equal(sentAgain.length, 1);
+});
+
+test('a finished reply keeps how long it took and the time each of its steps ran', async () => {
+  const { task } = setup({
+    send: ({ requestId }) => {
+      // Progress as main streams it, at known times: the read ran 420 ms.
+      const reply = app.replyFor(requestId);
+      applyProgress(reply, { requestId, phase: 'tool', callId: 'step-1', title: 'Read a.js', serverId: 'Workspace', toolName: 'read_file' }, 1000);
+      applyProgress(reply, { requestId, phase: 'tool-done', callId: 'step-1', ok: true }, 1420);
+      return { ok: true, data: { text: 'Read it.', steps: [{ type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file' }] } };
+    },
+  });
+  input.value = 'Read a.js';
+  assert.equal(await app.handleSend(), true);
+  const [, answer] = task.messages;
+  assert.equal(answer.steps[0].durationMs, 420);
+  assert.ok(Number.isSafeInteger(answer.elapsedMs) && answer.elapsedMs >= 0, 'the reply\'s own time');
+  // The companion's moment belongs to this message, and the next reply starts a new one.
+  assert.equal(app.companionMoments.get(task.id).message, answer);
+  input.value = 'Again';
+  assert.equal(await app.handleSend(), true);
+  assert.equal(app.companionMoments.get(task.id).message, task.messages[3]);
+  // A reply that ended without a message leaves nothing for an unrelated message to take.
+  app.companionMoments.set(task.id, { at: Date.now() - 60_000, elapsedMs: 5, message: null });
+  app.appendMessage('assistant', 'Local demo response', task.id);
+  assert.equal(task.messages.at(-1).elapsedMs, undefined);
+});
+
+test('the sidebar row of a task shows its mini mascot state: working, waiting for you, done or failed', () => {
+  const { task } = setup();
+  const other = { id: 'task-2', title: 'Other', messages: [{ role: 'assistant', text: 'x', time: 0, interrupted: 'failed' }], createdAt: 0, updatedAt: 0 };
+  app.tasks.push(other);
+  const reply = app.beginReply(task.id, 'chat-task-1-1');
+  app.renderTaskRow(task);
+  assert.equal(app.taskMoods.get(task.id), 'thinking');
+  applyProgress(reply, { phase: 'approval', callId: 'c', title: 'Ran ls', serverId: 'Workspace', toolName: 'run_command' });
+  app.updateTaskMood(reply);
+  assert.equal(app.taskMoods.get(task.id), 'waiting', 'an approval pending in that task');
+  app.endReply(task.id, 'chat-task-1-1', { quiet: true });
+  app.unreadTasks.add(other.id);
+  app.renderTaskRow(other);
+  assert.equal(app.taskMoods.get(other.id), 'error', 'finished while away, and failed');
+  app.unreadTasks.delete(other.id);
+  app.renderTaskRow(other);
+  assert.equal(app.taskMoods.has(other.id), false, 'idle tasks show nothing');
+});
+
+test('an active sidebar row prints its state tag and time under the title; idle rows keep one line', () => {
+  const { task } = setup();
+  const createElement = document.createElement;
+  const escape = globalThis.CSS;
+  // Elements that keep their children and classes, so the row's structure can be read back.
+  document.createElement = (tag) => {
+    const classes = new Set();
+    const node = fakeElement({
+      tag, children: [],
+      append(...kids) { this.children.push(...kids); },
+      classList: { add: (name) => classes.add(name), toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), contains: (name) => classes.has(name) },
+    });
+    return node;
+  };
+  globalThis.CSS = { escape: (value) => value };
+  try {
+    const other = { id: 'task-2', title: 'Other', messages: [{ role: 'assistant', text: 'x', time: 0, interrupted: 'failed' }], createdAt: 0, updatedAt: Date.now() - 5 * 60_000 };
+    const idle = { id: 'task-3', title: 'Idle', messages: [{ role: 'user', text: 'x', time: 0 }], createdAt: 0, updatedAt: Date.now() - 2 * 60_000 };
+    app.tasks.push(other, idle);
+    const reply = app.beginReply(task.id, 'chat-task-1-2');
+    const row = app.renderTaskRow(task);
+    const [status, title, line] = row.children;
+    assert.match(status.className, /\btask-status\b.*\bis-running\b.*\bhas-mascot\b/);
+    assert.equal(title.className, 'task-title');
+    assert.ok(row.classList.contains('has-state'));
+    assert.equal(line.className, 'task-state-line');
+    const [tag, time] = line.children;
+    assert.equal(tag.className, 'sm-state-tag task-state-tag');
+    assert.deepEqual([tag.dataset.state, tag.textContent], ['working', 'Working']);
+    assert.match(time.className, /\btask-state-time\b/);
+    assert.match(time.textContent, /^\d+s$/);
+    assert.equal(time.dataset.startedAt, String(reply.startedAt));
+    // An approval: the tag turns to the highlighter in place.
+    nodes[`.task-item[data-task-id="${task.id}"]`] = fakeElement({
+      querySelector: (selector) => (selector === '.task-status' ? status : selector === '.task-state-tag' ? tag : null),
+    });
+    applyProgress(reply, { phase: 'approval', callId: 'c', title: 'Ran ls', serverId: 'Workspace', toolName: 'run_command' });
+    app.updateTaskMood(reply);
+    assert.deepEqual([tag.dataset.state, tag.textContent], ['waiting', 'Waiting for you']);
+    app.endReply(task.id, 'chat-task-1-2', { quiet: true });
+    // Finished while away: DONE, or FAILED, with when it ended.
+    app.unreadTasks.add(other.id);
+    const failed = app.renderTaskRow(other).children[2].children;
+    assert.deepEqual([failed[0].dataset.state, failed[0].textContent, failed[1].textContent], ['failed', 'Failed', '5m ago']);
+    other.messages[0].interrupted = undefined;
+    assert.deepEqual(app.renderTaskRow(other).children[2].children[0].dataset.state, 'done');
+    app.unreadTasks.delete(other.id);
+    // Idle: title and time, one line, no tag.
+    const quiet = app.renderTaskRow(idle);
+    assert.deepEqual(quiet.children.map((node) => node.className), ['task-title', 'task-time']);
+    assert.equal(quiet.children[1].textContent, '2m ago');
+    assert.equal(quiet.classList.contains('has-state'), false);
+  } finally {
+    document.createElement = createElement;
+    delete nodes[`.task-item[data-task-id="task-1"]`];
+    if (escape === undefined) delete globalThis.CSS;
+    else globalThis.CSS = escape;
+  }
+});
+
+test('the companion switch hides every mascot and is saved with the settings', () => {
+  setup();
+  const toggled = [];
+  document.body = fakeElement({ classList: { toggle: (name, on) => toggled.push([name, on]) } });
+  nodes['#companion-toggle'] = fakeElement({ type: 'checkbox', checked: true });
+  try {
+    app.settings.companion = false;
+    app.renderCompanionToggle();
+    assert.deepEqual(toggled.at(-1), ['companion-off', true]);
+    assert.equal(nodes['#companion-toggle'].checked, false);
+    app.settings.companion = true;
+    app.renderCompanionToggle();
+    assert.deepEqual(toggled.at(-1), ['companion-off', false]);
+    assert.equal(nodes['#companion-toggle'].checked, true);
+    // Without the switch on the page (not added yet), the body class still follows the setting.
+    delete nodes['#companion-toggle'];
+    app.settings.companion = false;
+    app.renderCompanionToggle();
+    assert.deepEqual(toggled.at(-1), ['companion-off', true]);
+  } finally {
+    delete nodes['#companion-toggle'];
+    delete document.body;
+    app.settings.companion = true;
+  }
 });

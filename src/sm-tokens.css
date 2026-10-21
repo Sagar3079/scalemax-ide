@@ -11,35 +11,9 @@
  * Generated file. Regenerate from the design source rather than editing by hand.
  */
 
-/* Assistant — the ScaleMax UI typeface. */
-@font-face {
-  font-family: Assistant;
-  src: url("../assets/fonts/Assistant-Regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: Assistant;
-  src: url("../assets/fonts/Assistant-Medium.woff2") format("woff2");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: Assistant;
-  src: url("../assets/fonts/Assistant-SemiBold.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: Assistant;
-  src: url("../assets/fonts/Assistant-Bold.woff2") format("woff2");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
+/* The UI face is the system stack (--sm-font-ui) and headings use Bricolage Grotesque,
+   both declared in styles.css. The Assistant files stay in assets/fonts but are no longer
+   loaded. */
 
 :root {
   /* VS Code IDE Light fallbacks — workbench variables used by the editor chrome. */
@@ -74,7 +48,7 @@
   --vscode-input-foreground: #616161;
   --vscode-dropdown-background: #ffffff;
   --vscode-editorWidget-border: #c8c8c8;
-  --vscode-font-family: Assistant, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   --vscode-font-size: 13px;
   --vscode-editor-font-family: Menlo, Monaco, "Courier New", monospace;
   --vscode-editor-font-size: 14px;
@@ -2430,7 +2404,7 @@
   --vscode-input-foreground: #cccccc;
   --vscode-dropdown-background: #313131;
   --vscode-editorWidget-border: #454545;
-  --vscode-font-family: Assistant, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   --vscode-font-size: 13px;
   --vscode-editor-font-family: Menlo, Monaco, "Courier New", monospace;
   --vscode-editor-font-size: 14px;

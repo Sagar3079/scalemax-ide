@@ -1,14 +1,15 @@
 /*
  * Git flow, worktrees and sessions (src/gitflow-ui.js, src/sessions-ui.js): the commit, branch,
  * rewind and Recent sessions dialogs, the worktree chip and bar, the Workspace header's branch,
- * and Rewind / Fork under the user's messages. Same surfaces and tokens as the changes dialog.
+ * and Rewind / Fork under the user's messages. Same sheets and rules as the changes dialog:
+ * paper-raised, 1px --riso-rule, rows on rules, the active row on a blue tint.
  */
 
 /* ---- Worktree chip (composer) and bar (task header) ---- */
 .worktree-chip[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--sm-brand-primary) 55%, var(--sm-color-border-secondary));
-  background: color-mix(in srgb, var(--sm-brand-primary) 12%, var(--sm-app-surface));
-  color: var(--sm-text-strong);
+  border-color: color-mix(in srgb, var(--riso-blue, #0078BF) 45%, transparent);
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  color: var(--riso-blue-text, #005E96);
 }
 /* A row of its own under the chat toolbar, always one line: the branch and state shrink first. */
 .worktree-bar {
@@ -16,47 +17,52 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 0 20px 8px;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
 }
 .worktree-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   /* The branch name (also in the tooltip) gives way; the state stays whole. */
   flex-shrink: 1;
-  padding: 2px 8px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
 }
 .worktree-icon,
 .ws-branch-icon {
   flex-shrink: 0;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.worktree-icon {
+  color: var(--riso-blue, #0078BF);
+}
 .worktree-branch {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
-  font-size: 11.5px;
-  color: var(--sm-text-strong);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  color: var(--riso-ink, #1A1B1F);
 }
 .worktree-base,
 .worktree-state {
   flex-shrink: 0;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .worktree-state {
@@ -69,7 +75,7 @@
   position: relative;
   flex-shrink: 0;
   display: flex;
-  gap: 2px;
+  gap: 4px;
   margin-left: auto;
 }
 .worktree-more::after {
@@ -77,16 +83,18 @@
   display: inline-block;
   width: 5px;
   height: 5px;
-  margin: 0 0 3px 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
+  margin: 0 0 4px 8px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  opacity: 0.7;
   transform: rotate(45deg);
 }
 .worktree-more[aria-expanded="true"] {
-  border-color: var(--sm-app-border);
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
+/* The More menu: a popover on paper-raised. */
 .worktree-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -96,16 +104,22 @@
   flex-direction: column;
   min-width: 180px;
   padding: 4px;
-  border: 1px solid var(--sm-app-border);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 8px;
-  background: var(--sm-app-surface);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  background: var(--riso-paper-raised, #FAFAF8);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .worktree-menu .worktree-menu-item {
   justify-content: flex-start;
   width: 100%;
   height: 28px;
+  border-color: transparent;
+  border-radius: 4px;
   text-align: left;
+}
+.worktree-menu .worktree-menu-item:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
 }
 .worktree-action,
 .msg-action {
@@ -114,26 +128,31 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 .worktree-action:hover:not(:disabled),
 .msg-action:hover:not(:disabled) {
-  border-color: var(--sm-app-border);
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
 }
 .worktree-action:focus-visible,
-.msg-action:focus-visible,
-.sessions-item.is-active,
-.commit-file:focus-within {
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+.msg-action:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
-.msg-action:disabled {
+.commit-file:has(:focus-visible) {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
+}
+.msg-action:disabled,
+.worktree-action:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -141,21 +160,23 @@
 /* ---- Rewind / Fork under the user's messages: shown on hover and keyboard focus ---- */
 .msg-actions {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 .chat-bubble.user:hover .msg-actions,
 .msg-actions:focus-within {
   opacity: 1;
 }
 .msg-action {
-  height: 22px;
-  font-size: 11px;
-  color: var(--sm-text-weak);
+  height: 24px;
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 @media (prefers-reduced-motion: reduce) {
-  .msg-actions {
+  .msg-actions,
+  .worktree-action,
+  .msg-action {
     transition: none;
   }
 }
@@ -164,50 +185,58 @@
 .ws-toolbar-branch {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex-shrink: 0;
   max-width: 260px;
-  padding: 2px 8px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 100px;
-  color: var(--sm-text-medium);
-  font-size: 11.5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink-2, #4A4D55);
+  font-size: 12px;
+}
+.ws-toolbar-branch .ws-branch-icon {
+  color: var(--riso-blue, #0078BF);
 }
 .ws-branch-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
-  color: var(--sm-text-strong);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  color: var(--riso-ink, #1A1B1F);
 }
 .ws-branch-count {
   flex-shrink: 0;
   white-space: nowrap;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 .ws-branch-count.is-local {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .ws-git-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 0;
 }
 
-/* ---- Commit dialog ---- */
+/* ---- The dialogs: paper-raised sheet, 8px radius, the lift shadow, the shell dimmed behind ---- */
 #commit-dialog,
 #sessions-dialog {
   width: min(640px, 94vw);
   max-height: 86vh;
-  margin: 7vh auto auto;
+  margin: 8vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 #commit-dialog[open],
 #sessions-dialog[open] {
@@ -219,24 +248,27 @@
   max-height: 84vh;
   margin: 12vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 #commit-dialog::backdrop,
 #sessions-dialog::backdrop,
 #branch-dialog::backdrop,
 #rewind-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--riso-backdrop, color-mix(in srgb, #F3F4F1 55%, transparent));
+  backdrop-filter: blur(2px) saturate(0.8);
 }
+
+/* ---- Commit dialog ---- */
 .commit-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 18px 8px;
-  border-top: 1px solid var(--sm-app-border);
+  padding: 4px 20px 8px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .commit-form,
 .commit-after,
@@ -253,55 +285,71 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .commit-files-head .changes-action,
 .commit-message-head .changes-action {
   margin-left: auto;
 }
 .commit-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink, #1A1B1F);
 }
 .commit-hint {
   margin: 0;
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
+/* The ticked files: rows on rules between two rules, no box. */
 .commit-file-list {
   max-height: 220px;
   overflow-y: auto;
-  padding: 2px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 8px;
-  background: var(--sm-app-surface);
+  padding: 0;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .commit-file,
 .branch-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 12.5px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 0;
+  font-size: 13px;
   cursor: pointer;
+}
+.commit-file + .commit-file,
+.branch-row + .branch-row {
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .commit-file:hover,
 .branch-row:hover {
-  background: var(--sm-app-surface-hover);
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 4%, transparent);
+}
+.branch-row:has(input:checked) {
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 8%, transparent);
+}
+.branch-row:has(:focus-visible) {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
 }
 .branch-row.is-taken .branch-name {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
+}
+.commit-file input,
+.branch-row input {
+  accent-color: var(--riso-blue, #0078BF);
 }
 .commit-file .git-status-code {
   flex-shrink: 0;
-  width: 14px;
+  width: 16px;
   text-align: center;
 }
 .git-status-code.is-conflict {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text, #B42638);
 }
 .commit-file-name,
 .branch-name {
@@ -310,24 +358,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
 }
 .commit-file-note,
 .branch-note {
   flex-shrink: 0;
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .commit-file-note.is-warning {
-  color: var(--sm-app-text-warning);
+  color: var(--riso-red-text, #B42638);
 }
 .commit-message {
   width: 100%;
   min-height: 64px;
   resize: vertical;
-  font-family: var(--sm-font-code-family);
-  font-size: 12.5px;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  line-height: 20px;
 }
 .commit-where {
   display: flex;
@@ -335,10 +384,10 @@
   gap: 4px;
 }
 .commit-branch {
-  margin-left: 22px;
-  width: calc(100% - 22px);
-  font-family: var(--sm-font-code-family);
-  font-size: 12.5px;
+  margin-left: 24px;
+  width: calc(100% - 24px);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
 }
 .commit-branch:disabled {
   opacity: 0.55;
@@ -346,12 +395,16 @@
 .commit-check {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--sm-text-medium);
+  gap: 8px;
+  font-size: 13px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+.commit-check input {
+  accent-color: var(--riso-blue, #0078BF);
 }
 .commit-check code {
-  font-size: 11.5px;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
 }
 .commit-hooks-note {
   margin-top: -4px;
@@ -363,10 +416,9 @@
   overflow-wrap: anywhere;
 }
 .commit-pr {
-  padding: 10px 12px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 8px;
-  background: var(--sm-app-surface);
+  padding: 12px 0;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .commit-pr-link {
   margin: 0;
@@ -374,41 +426,48 @@
   overflow-wrap: anywhere;
 }
 .commit-pr-anchor {
-  color: var(--sm-app-text-accent);
-  font-family: var(--sm-font-code-family);
-  font-size: 12.5px;
+  color: var(--riso-blue-text, #005E96);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.commit-pr-anchor:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 .commit-status {
-  min-height: 18px;
+  min-height: 20px;
   margin: 8px 0 0;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .commit-status.is-error {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text, #B42638);
 }
 .commit-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px 14px;
-  border-top: 1px solid var(--sm-app-border);
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
 /* ---- Switch branch ---- */
 .branch-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   max-height: 300px;
   overflow-y: auto;
   margin-bottom: 8px;
-  padding: 2px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 8px;
-  background: var(--sm-app-surface);
+  padding: 0;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
 /* ---- Rewind ---- */
@@ -417,15 +476,15 @@
   flex-direction: column;
   gap: 4px;
   margin: 8px 0 0;
-  padding-inline-start: 18px;
-  font-size: 12.5px;
-  color: var(--sm-text-medium);
+  padding-inline-start: 20px;
+  font-size: 13px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .rewind-report-head {
   list-style: none;
-  margin-inline-start: -18px;
+  margin-inline-start: -20px;
   font-weight: 500;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 /* ---- Recent sessions ---- */
@@ -436,25 +495,29 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 10px 8px;
+  gap: 0;
+  padding: 0 12px 8px;
 }
 .sessions-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--sm-radius-md);
+  gap: 4px;
+  padding: 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
-.sessions-item:hover,
+.sessions-item:hover {
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+}
 .sessions-item.is-active {
-  background: var(--sm-app-surface-hover);
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
 }
 .sessions-item-head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
 }
 .sessions-item-title {
   flex: 1;
@@ -464,17 +527,20 @@
   white-space: nowrap;
   font-size: 13px;
   font-weight: 500;
+  color: var(--riso-ink, #1A1B1F);
 }
 .sessions-item.is-current .sessions-item-title::after {
   content: " · open";
   font-weight: 400;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .sessions-item-time,
 .sessions-item-meta {
   flex-shrink: 0;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 11px;
-  color: var(--sm-text-weak);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .sessions-item-snippet {
   overflow: hidden;
@@ -482,17 +548,31 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  line-height: 16px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .sessions-empty {
-  margin: 12px 10px;
-  font-size: 12.5px;
-  color: var(--sm-text-weak);
+  margin: 12px;
+  font-size: 13px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .sessions-keys {
   margin: 0;
-  padding: 8px 18px 12px;
-  border-top: 1px solid var(--sm-app-border);
+  padding: 8px 20px 12px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
+}
+.sessions-keys kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 3px;
+  background: var(--riso-paper, #F3F4F1);
+  color: var(--riso-ink-2, #4A4D55);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
 }

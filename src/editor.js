@@ -86,7 +86,7 @@ const HIGHLIGHT = HighlightStyle.define([
   { tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null, tags.atom, tags.unit, tags.color], color: 'var(--tok-number)' },
   { tag: [tags.tagName, tags.angleBracket, tags.link], color: 'var(--tok-tag)' },
   { tag: [tags.attributeName, tags.propertyName, tags.labelName], color: 'var(--tok-attr)' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.macroName], color: 'var(--tok-function)' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.macroName], color: 'var(--tok-function)', fontWeight: '600' },
   { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName)], color: 'var(--tok-type)' },
   { tag: [tags.meta, tags.annotation, tags.processingInstruction, tags.documentMeta], color: 'var(--tok-meta)' },
   { tag: tags.heading, color: 'var(--tok-heading)', fontWeight: '600' },

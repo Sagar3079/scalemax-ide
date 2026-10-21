@@ -1,0 +1,542 @@
+/*
+ * The companion and its teammates (src/mascot.js): a robot-blob printed in two riso inks.
+ *
+ * Ink A (fluorescent pink) and ink B (blue) are the same drawing twice, overprinted. How well they
+ * register is the state: registered when idle or done, drifting while thinking, jittering out of
+ * register while working, stuck out of register after an error. Yellow is the highlighter pass
+ * behind a mascot that waits for the user; red marks a failure.
+ *
+ * Motion is CSS only and animates transform and opacity. It stops under prefers-reduced-motion
+ * (each state then reads from its static offset, face and colour) and while the window is hidden
+ * (body.mascots-paused). body.companion-off hides every mascot.
+ *
+ * Offsets are in the drawing's own units: 64 across for the companion, 32 for teammates and minis.
+ */
+
+/* ---- Inks and sizes --------------------------------------------------------------------- */
+
+.mascot {
+  --mascot-ink-a: var(--sm-mascot-ink-a, var(--riso-pink, #FF48B0));
+  --mascot-ink-b: var(--sm-mascot-ink-b, var(--riso-blue, #0078BF));
+  --mascot-yellow: var(--riso-yellow, #FFE800);
+  --mascot-red: var(--sm-state-failed, var(--riso-red, #F15060));
+  --mascot-ease: var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  /* How far each ink slips out of register while working (thinking and errors use parts of it). */
+  --mx: 1.8px;
+  --my: 1.1px;
+  /* How far the eyes look aside while thinking. */
+  --look: 1.6px;
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+  /* The inks overprint each other and the highlighter, not the page behind. */
+  isolation: isolate;
+}
+
+.mascot--teammate {
+  --mx: 1.3px;
+  --my: 0.8px;
+  --look: 0.9px;
+}
+
+.mascot--mini {
+  --mx: 1.4px;
+  --my: 0.9px;
+  --look: 0.9px;
+}
+
+[data-theme="dark"] .mascot {
+  --mascot-ink-b: var(--sm-mascot-ink-b, var(--riso-blue, #4BA6E0));
+}
+
+.mascot-ink {
+  mix-blend-mode: multiply;
+}
+
+.mascot-ink-a {
+  color: var(--mascot-ink-a);
+}
+
+.mascot-ink-b {
+  color: var(--mascot-ink-b);
+}
+
+/* On deep stock the inks add up instead, so the overprint still reads. */
+[data-theme="dark"] .mascot-ink {
+  mix-blend-mode: screen;
+}
+
+.mascot-highlight {
+  color: var(--mascot-yellow);
+  opacity: 0;
+}
+
+[data-theme="dark"] .mascot-highlight {
+  color: var(--riso-yellow, #FFE800);
+}
+
+.mascot-alert {
+  color: var(--mascot-red);
+  opacity: 0;
+}
+
+/* Parts that move turn or scale about their own box. */
+.mascot-figure,
+.mascot-ink,
+.mascot-eyes,
+.mascot-blink,
+.mascot-antenna-ball,
+.mascot-arm,
+.mascot-highlight,
+.mascot-alert {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* The figure stands on its base; arms turn at the shoulder; the highlighter is drawn from the left. */
+.mascot-figure {
+  transform-origin: 50% 100%;
+}
+
+.mascot-arm-l {
+  transform-origin: 100% 0%;
+}
+
+.mascot-arm-r {
+  transform-origin: 0% 0%;
+}
+
+.mascot-highlight {
+  transform-origin: 0% 50%;
+}
+
+/* State changes ease the inks and limbs into place (the snap into register is its own animation). */
+.mascot-ink,
+.mascot-figure,
+.mascot-arm {
+  transition: transform 0.45s var(--mascot-ease);
+}
+
+.mascot-highlight,
+.mascot-alert {
+  transition: opacity 0.3s var(--mascot-ease);
+}
+
+/* ---- Idle: registered, a slow blink, faint breathing -------------------------------------- */
+
+.mascot--idle .mascot-figure {
+  animation: mascot-breathe 4.8s ease-in-out infinite;
+}
+
+.mascot--idle .mascot-blink,
+.mascot--thinking .mascot-blink,
+.mascot--working .mascot-blink,
+.mascot--waiting .mascot-blink {
+  animation: mascot-blink 6s linear infinite;
+}
+
+.mascot--teammate .mascot-blink,
+.mascot--mini .mascot-blink {
+  animation-delay: -2.4s;
+}
+
+/* ---- Thinking: the inks drift apart and back, the eyes look side to side ----------------- */
+
+.mascot--thinking .mascot-ink-a {
+  transform: translate(calc(var(--mx) * -0.5), calc(var(--my) * 0.4));
+  animation: mascot-drift-a 2.8s ease-in-out infinite;
+}
+
+.mascot--thinking .mascot-ink-b {
+  transform: translate(calc(var(--mx) * 0.5), calc(var(--my) * -0.4));
+  animation: mascot-drift-b 2.8s ease-in-out infinite;
+}
+
+.mascot--thinking .mascot-eyes {
+  animation: mascot-look 3.6s ease-in-out infinite;
+}
+
+/* ---- Working: out of register and jittering like a print run, antenna pulsing, typing ------ */
+
+.mascot--working .mascot-ink-a {
+  transform: translate(var(--mx), calc(var(--my) * -1));
+  animation: mascot-press-a 1.3s ease-in-out infinite;
+}
+
+.mascot--working .mascot-ink-b {
+  transform: translate(calc(var(--mx) * -1), var(--my));
+  animation: mascot-press-b 1.7s ease-in-out infinite;
+}
+
+.mascot--working .mascot-antenna-ball {
+  animation: mascot-pulse 0.9s ease-in-out infinite;
+}
+
+.mascot--working .mascot-arm-l {
+  animation: mascot-type-l 0.34s ease-in-out infinite alternate;
+}
+
+.mascot--working .mascot-arm-r {
+  animation: mascot-type-r 0.34s ease-in-out -0.17s infinite alternate;
+}
+
+/* ---- Waiting for the user: registered, a highlighter pass behind, one arm up, a gentle bob --- */
+
+.mascot--waiting .mascot-highlight {
+  opacity: 1;
+}
+
+/* On deep stock a full-strength pass would wash the inks out. */
+[data-theme="dark"] .mascot--waiting .mascot-highlight {
+  opacity: 0.55;
+}
+
+.mascot--waiting:not(.mascot--settled) .mascot-highlight {
+  animation: mascot-swipe 0.6s var(--mascot-ease) both;
+}
+
+.mascot--waiting .mascot-figure {
+  animation: mascot-bob 1.8s ease-in-out infinite;
+}
+
+.mascot--waiting .mascot-arm-r {
+  transform: rotate(-104deg);
+  animation: mascot-wave 1.8s ease-in-out infinite;
+}
+
+/* ---- Done: the inks snap into register (the press comes down), happy eyes ------------------ */
+
+.mascot--done:not(.mascot--settled) .mascot-ink-a {
+  animation: mascot-snap-a 0.55s var(--mascot-ease) both;
+}
+
+.mascot--done:not(.mascot--settled) .mascot-ink-b {
+  animation: mascot-snap-b 0.55s var(--mascot-ease) both;
+}
+
+.mascot--done:not(.mascot--settled) .mascot-figure {
+  animation: mascot-stamp 0.55s var(--mascot-ease) both;
+}
+
+/* ---- Error: stuck out of register, no motion, a slight tilt, X eyes, a red dot ------------- */
+
+.mascot--error .mascot-ink-a {
+  transform: translate(var(--mx), calc(var(--my) * -1));
+}
+
+.mascot--error .mascot-ink-b {
+  transform: translate(calc(var(--mx) * -1), var(--my));
+}
+
+.mascot--error .mascot-figure {
+  transform: rotate(-7deg);
+}
+
+.mascot--error .mascot-alert {
+  opacity: 1;
+}
+
+/* ---- Teammates only: queued (dozing until a slot is free) and stopped ---------------------- */
+
+.mascot--queued {
+  opacity: 0.55;
+}
+
+.mascot--stopped {
+  opacity: 0.7;
+}
+
+/* ---- Keyframes (transform and opacity only) ----------------------------------------------- */
+
+@keyframes mascot-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.015); }
+}
+
+@keyframes mascot-blink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  96.5% { transform: scaleY(0.12); }
+}
+
+@keyframes mascot-drift-a {
+  0%, 100% { transform: translate(calc(var(--mx) * -0.15), calc(var(--my) * 0.1)); }
+  50% { transform: translate(calc(var(--mx) * -0.6), calc(var(--my) * 0.5)); }
+}
+
+@keyframes mascot-drift-b {
+  0%, 100% { transform: translate(calc(var(--mx) * 0.15), calc(var(--my) * -0.1)); }
+  50% { transform: translate(calc(var(--mx) * 0.6), calc(var(--my) * -0.5)); }
+}
+
+@keyframes mascot-look {
+  0%, 12%, 88%, 100% { transform: translateX(0); }
+  25%, 42% { transform: translateX(calc(var(--look) * -1)); }
+  58%, 75% { transform: translateX(var(--look)); }
+}
+
+@keyframes mascot-press-a {
+  0%, 100% { transform: translate(var(--mx), calc(var(--my) * -1)); }
+  30% { transform: translate(calc(var(--mx) * 0.55), calc(var(--my) * -1.35)); }
+  55% { transform: translate(calc(var(--mx) * 1.2), calc(var(--my) * -0.5)); }
+  80% { transform: translate(calc(var(--mx) * 0.8), calc(var(--my) * -1.15)); }
+}
+
+@keyframes mascot-press-b {
+  0%, 100% { transform: translate(calc(var(--mx) * -1), var(--my)); }
+  25% { transform: translate(calc(var(--mx) * -1.25), calc(var(--my) * 0.6)); }
+  60% { transform: translate(calc(var(--mx) * -0.6), calc(var(--my) * 1.3)); }
+  85% { transform: translate(calc(var(--mx) * -1.1), calc(var(--my) * 0.9)); }
+}
+
+@keyframes mascot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.6; }
+}
+
+@keyframes mascot-type-l {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(14deg); }
+}
+
+@keyframes mascot-type-r {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-14deg); }
+}
+
+@keyframes mascot-swipe {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes mascot-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.6px); }
+}
+
+@keyframes mascot-wave {
+  0%, 100% { transform: rotate(-104deg); }
+  50% { transform: rotate(-118deg); }
+}
+
+@keyframes mascot-snap-a {
+  from { transform: translate(calc(var(--mx) * 1.6), calc(var(--my) * -1.6)); }
+  to { transform: translate(0, 0); }
+}
+
+@keyframes mascot-snap-b {
+  from { transform: translate(calc(var(--mx) * -1.6), calc(var(--my) * 1.6)); }
+  to { transform: translate(0, 0); }
+}
+
+@keyframes mascot-stamp {
+  from { transform: scale(1.07); }
+  to { transform: scale(1); }
+}
+
+/* ---- Where mascots sit ------------------------------------------------------------------ */
+
+/* The companion beside a reply's status line, its caption under the status ("working · 1m 12s").
+   Under a finished reply: the companion and how the reply ended ("done · 1m 12s"). */
+.reply-companion {
+  --companion-mark: var(--sm-state-working, var(--riso-pink, #FF48B0));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.reply-companion-figure {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+}
+
+.reply-companion-figure .mascot {
+  width: 100%;
+  height: 100%;
+}
+
+/* After its moment the companion rests small under the newest reply: quiet when idle, there when
+   you look for it. The snap into register is the moment; the resize afterwards is instant. */
+.reply-companion.is-finished[data-state="idle"] {
+  gap: 8px;
+}
+.reply-companion.is-finished[data-state="idle"] .reply-companion-figure {
+  width: 28px;
+  height: 28px;
+}
+
+/* The greeting on an empty task, above "What will you work on next?". */
+.home-companion {
+  display: inline-flex;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 8px;
+}
+.home-companion .mascot {
+  width: 100%;
+  height: 100%;
+}
+body.companion-off .home-companion {
+  display: none;
+}
+
+.reply-companion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.reply-companion-caption {
+  align-self: flex-start;
+  font-family: var(--sm-font-display, inherit);
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  color: var(--sm-text-weak, #5f636b);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A registration mark in the state's ink before the words. */
+.reply-companion-caption::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--companion-mark);
+}
+
+/* Waiting for you: the words get the highlighter pass too. */
+.reply-companion[data-state="waiting"] {
+  --companion-mark: var(--sm-state-waiting, var(--riso-yellow, #FFE800));
+}
+
+.reply-companion[data-state="waiting"] .reply-companion-caption {
+  padding: 0 3px;
+  margin-left: -3px;
+  /* Ink black on the yellow pass in both themes. */
+  color: #1A1B1F;
+  background-image: linear-gradient(transparent 18%, var(--sm-state-waiting, var(--riso-yellow, #FFE800)) 18%, var(--sm-state-waiting, var(--riso-yellow, #FFE800)) 88%, transparent 88%);
+}
+
+.reply-companion.is-finished {
+  --companion-mark: var(--sm-state-done, var(--riso-blue, #0078BF));
+}
+
+.reply-companion.is-finished[data-outcome="failed"],
+.reply-companion.is-finished[data-outcome="cut-off"] {
+  --companion-mark: var(--sm-state-failed, var(--riso-red, #F15060));
+}
+
+.reply-companion.is-finished[data-outcome="stopped"] {
+  --companion-mark: var(--sm-text-weak, #5f636b);
+}
+
+/* With the companion on, it shows the activity and the time the status line's dots and clock show. */
+body:not(.companion-off) .reply-companion .thinking-dots,
+body:not(.companion-off) .reply-companion .pending-reply-time {
+  display: none;
+}
+
+/* A subagent's teammate, first in its group's title; it stands in for the step's state icon. */
+.reply-agent-mate {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.reply-agent-mate .mascot {
+  width: 100%;
+  height: 100%;
+}
+
+body:not(.companion-off) .reply-agent-mate + .reply-step-row > .reply-step-icon {
+  display: none;
+}
+
+/* A sidebar task's mini mascot, in place of the spinner or the dot. */
+body:not(.companion-off) .task-status.has-mascot {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  animation: none;
+}
+
+.task-status .mascot {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- Times and context (every step shows how long it ran; replies show their context share) -- */
+
+.reply-step-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--sm-text-weak, #5f636b);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.msg-duration {
+  color: var(--sm-text-weak, #5f636b);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-context-share {
+  white-space: nowrap;
+}
+
+/* ---- The brand mark ----------------------------------------------------------------------- */
+
+/* The sidebar and About marks are the companion itself, printed still: idle, both inks in register
+   and overprinting by multiply (screen on deep stock), with every motion off. It is the brand, not
+   a status, so it stays when the companion is turned off (app.js renderBrandMarks). */
+.brand-mascot .mascot {
+  width: 100%;
+  height: 100%;
+}
+
+.brand-mascot .mascot,
+.brand-mascot .mascot * {
+  animation: none !important;
+  transition: none !important;
+}
+
+body.companion-off .brand-mascot .mascot {
+  display: block !important;
+}
+
+/* ---- Off, hidden, still ------------------------------------------------------------------- */
+
+body.companion-off .mascot,
+body.companion-off .reply-companion-figure,
+body.companion-off .reply-companion-caption,
+body.companion-off .reply-agent-mate,
+body.companion-off .reply-companion.is-finished {
+  display: none !important;
+}
+
+body.mascots-paused .mascot,
+body.mascots-paused .mascot * {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot,
+  .mascot * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

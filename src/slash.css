@@ -1,7 +1,7 @@
 /*
  * Slash commands and hooks: the command menu in the message box (src/slash-ui.js, on the
- * .mention-menu surface of src/reply.css), the dialog that asks about a project's hooks and
- * Preferences > Hooks (src/hooks-ui.js).
+ * .mention-menu popover of src/reply.css: paper-raised, 1px rule, the highlighted row a blue
+ * tint), the dialog that asks about a project's hooks and Preferences > Hooks (src/hooks-ui.js).
  */
 .slash-menu {
   max-height: 280px;
@@ -10,23 +10,28 @@
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
 }
 .slash-head {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   white-space: nowrap;
 }
 .slash-name {
-  font-family: var(--sm-font-code-family);
-  color: var(--sm-text-strong);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--riso-ink, #1A1B1F);
+}
+.mention-option.is-active .slash-name {
+  color: var(--riso-blue-text, #005E96);
 }
 .slash-hint {
-  font-family: var(--sm-font-code-family);
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .slash-desc {
   min-width: 0;
@@ -34,45 +39,53 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
 }
+/* Where a command comes from: a small printed chip, outlined in ink-3; a project's own
+   commands are outlined in blue. */
 .slash-source {
-  padding: 1px 6px;
-  border-radius: 100px;
-  background: var(--sm-app-surface-hover);
-  font-size: 10.5px;
-  color: var(--sm-text-weak);
+  align-self: center;
+  padding: 0 4px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--riso-ink-3, #6B6F78);
   white-space: nowrap;
 }
 .slash-source.is-project {
-  color: var(--sm-text-medium);
-  box-shadow: inset 0 0 0 1px var(--sm-color-border-secondary);
+  border-color: color-mix(in srgb, var(--riso-blue, #0078BF) 45%, transparent);
+  color: var(--riso-blue-text, #005E96);
 }
 
-/* The dialog that asks about a project's hooks: the same surface as the tool approval prompt. */
+/* The dialog that asks about a project's hooks: the same sheet as the tool approval prompt. */
 #hooks-dialog {
   max-height: 84vh;
   margin: 14vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 #hooks-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--riso-backdrop, color-mix(in srgb, #F3F4F1 55%, transparent));
+  backdrop-filter: blur(2px) saturate(0.8);
 }
 #hooks-dialog:focus-visible {
   outline: none;
 }
+
+/* Hooks as rows on rules, not boxes. */
 .hooks-list,
 .hooks-rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 10px 0 0;
+  gap: 0;
+  margin: 12px 0 0;
   padding: 0;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   list-style: none;
 }
 .hooks-list {
@@ -83,64 +96,65 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 10px;
-  padding: 6px 8px;
-  border: 1px solid var(--sm-color-border-tertiary);
-  border-radius: 8px;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .hooks-item-head {
   font-size: 12px;
   font-weight: 600;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
 }
 .hooks-item-command {
   flex-basis: 100%;
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
-  color: var(--sm-text-strong);
+  line-height: 18px;
+  color: var(--riso-ink, #1A1B1F);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .hooks-item-limit {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 /* Preferences > Hooks. */
 .hooks-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin: 10px 0;
+  gap: 16px;
+  margin: 12px 0;
 }
 .hooks-scope-title {
-  margin: 0 0 2px;
+  margin: 0 0 4px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
   font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 .hooks-scope-status {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 .hooks-approve {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 .hooks-error {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text, #B42638);
 }
 .hooks-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 8px;
-  border: 1px solid var(--sm-color-border-tertiary);
-  border-radius: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .hooks-row-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 .hooks-row-text .hooks-item-command {

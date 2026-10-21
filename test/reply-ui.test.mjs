@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createReply, applyProgress, statusText, partialReply, replyReasoning } from '../src/reply-ui.js';
+import { createReply, applyProgress, statusText, partialReply, replyReasoning, timedSteps } from '../src/reply-ui.js';
 import { normalizeSteps, stepSummary } from '../src/domain.mjs';
 
 const R = 'chat-t1-1';
-const feed = (reply, events) => events.map((event) => applyProgress(reply, { requestId: R, ...event }));
+// The window's clock for progress events: each one arrives 100 ms after the one before.
+let clock = 1_000_000;
+const feed = (reply, events) => events.map((event) => applyProgress(reply, { requestId: R, ...event }, clock += 100));
 
 test('a streamed reply builds text blocks and steps in order', () => {
   const reply = createReply({ taskId: 't1', requestId: R, thinking: true });
@@ -74,12 +76,13 @@ test('a stopped reply keeps its text as the answer and the rest as steps', () =>
     { phase: 'tool', callId: 'step-2', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' },
     { phase: 'tool-output', callId: 'step-2', text: 'running…' },
   ]);
-  const midTool = partialReply(reply);
+  // Stopped 250 ms after the last event: the running command keeps the time it ran until then.
+  const midTool = partialReply(reply, clock + 250);
   assert.equal(midTool.text, '');
   assert.deepEqual(midTool.steps, [
     { type: 'note', text: 'Reading first.' },
-    { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file' },
-    { type: 'tool', title: 'Ran npm test', ok: false, server: 'Workspace', tool: 'run_command', output: 'running…', stopped: true },
+    { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file', durationMs: 100 },
+    { type: 'tool', title: 'Ran npm test', ok: false, server: 'Workspace', tool: 'run_command', output: 'running…', stopped: true, durationMs: 350 },
   ]);
   feed(reply, [{ phase: 'tool-done', callId: 'step-2', ok: true }, { phase: 'thinking', round: 2 }, { phase: 'delta', kind: 'text', text: 'Half an answ' }]);
   const midText = partialReply(reply);
@@ -292,15 +295,16 @@ test('a stopped reply keeps its subagent, stopped, with what it did so far', () 
     nested({ phase: 'tool-done', callId: 'step-1', ok: true }),
     nested({ phase: 'tool', callId: 'step-2', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' }),
   ]);
-  const [step] = partialReply(reply).steps;
+  const [step] = partialReply(reply, clock + 250).steps;
   assert.equal(step.stopped, true);
+  assert.equal(step.durationMs, 750, 'the subagent ran from its call until Stop');
   assert.deepEqual(step.agent, {
     kind: 'explore',
     status: 'stopped',
     steps: [
       { type: 'note', text: 'Reading.' },
-      { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file' },
-      { type: 'tool', title: 'Ran npm test', ok: false, server: 'Workspace', tool: 'run_command', stopped: true },
+      { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file', durationMs: 100 },
+      { type: 'tool', title: 'Ran npm test', ok: false, server: 'Workspace', tool: 'run_command', stopped: true, durationMs: 250 },
     ],
   });
 });
@@ -325,4 +329,66 @@ test('a subagent is kept small with its step, and summarised in plain words', ()
   assert.equal(normalizeSteps([{ type: 'tool', title: 'x', ok: true, agent: 'junk' }])[0].agent, undefined);
   assert.equal(stepSummary([step]), '1 step · Ran a subagent');
   assert.equal(stepSummary([step, { ...step }]), '2 steps · Ran 2 subagents');
+});
+
+test('every step keeps how long it ran; waiting for approval does not count', () => {
+  const reply = createReply({ taskId: 't1', requestId: R });
+  const at = (time, event) => applyProgress(reply, { requestId: R, ...event }, time);
+  at(1000, { phase: 'tool', callId: 'step-1', title: 'Read a.js', serverId: 'Workspace', toolName: 'read_file' });
+  assert.equal(reply.items[0].startedAt, 1000);
+  at(1420, { phase: 'tool-done', callId: 'step-1', ok: true });
+  assert.equal(reply.items[0].durationMs, 420);
+  // Asked first: the clock starts when the user allowed it.
+  at(2000, { phase: 'approval', callId: 'step-2', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' });
+  assert.equal(reply.items[1].startedAt, undefined);
+  at(9000, { phase: 'tool', callId: 'step-2', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' });
+  at(9500, { phase: 'tool', callId: 'step-2', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' });
+  assert.equal(reply.items[1].startedAt, 9000, 'a repeated event does not restart it');
+  at(72_000, { phase: 'tool-done', callId: 'step-2', ok: false });
+  assert.equal(reply.items[1].durationMs, 63_000);
+  // Refused at the prompt: it never ran, so it has no time.
+  at(80_000, { phase: 'approval', callId: 'step-3', title: 'Wrote b.js', serverId: 'Workspace', toolName: 'write_file' });
+  at(85_000, { phase: 'tool-done', callId: 'step-3', ok: false });
+  assert.equal(reply.items[2].durationMs, undefined);
+  assert.deepEqual(partialReply(reply, 90_000).steps.map((step) => step.durationMs), [420, 63_000, undefined]);
+  // Kept bounded with the reply.
+  assert.deepEqual(normalizeSteps([
+    { type: 'tool', title: 'a', ok: true, durationMs: 420 },
+    { type: 'tool', title: 'b', ok: true, durationMs: -1 },
+    { type: 'tool', title: 'c', ok: true, durationMs: 1.5 },
+    { type: 'tool', title: 'd', ok: true, durationMs: '12' },
+    { type: 'tool', title: 'e', ok: true, durationMs: 8 * 24 * 3600 * 1000 },
+  ]).map((step) => step.durationMs), [420, undefined, undefined, undefined, undefined]);
+});
+
+test('main\'s steps of a finished reply get the times the window measured, call by call', () => {
+  const reply = createReply({ taskId: 't1', requestId: R });
+  const at = (time, event) => applyProgress(reply, { requestId: R, ...event }, time);
+  at(0, { phase: 'delta', kind: 'text', text: 'Looking.' });
+  at(100, { phase: 'tool', callId: 'step-1', title: 'Read   a.js', serverId: 'Workspace', toolName: 'read_file' });
+  at(400, { phase: 'tool-done', callId: 'step-1', ok: true });
+  at(500, { phase: 'tool', callId: 'step-5', title: 'Read a.js', serverId: 'Workspace', toolName: 'read_file' });
+  at(550, { phase: 'tool-done', callId: 'step-5', ok: true });
+  at(600, agentStep);
+  at(700, status('running'));
+  at(800, nested({ phase: 'tool', callId: 'step-1', title: 'Searched for "x"', serverId: 'Workspace', toolName: 'search' }));
+  at(1100, nested({ phase: 'tool-done', callId: 'step-1', ok: true }));
+  at(1900, { phase: 'tool-done', callId: 'step-2', ok: true });
+  const fromMain = [
+    { type: 'note', text: 'Looking.' },
+    { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file' },
+    // Main lists a call that never started (cut off): it gets no time and takes no live step.
+    { type: 'tool', title: 'Wrote b.js', ok: false, server: 'Workspace', tool: 'write_file' },
+    { type: 'tool', title: 'Read a.js', ok: true, server: 'Workspace', tool: 'read_file' },
+    { type: 'tool', title: 'Subagent: Find the parser', ok: true, server: 'Agents', tool: 'agent_task', agent: { kind: 'explore', status: 'done', steps: [
+      { type: 'tool', title: 'Searched for "x"', ok: true },
+    ] } },
+  ];
+  const timed = timedSteps(fromMain, reply);
+  assert.deepEqual(timed.map((step) => step.durationMs), [undefined, 300, undefined, 50, 1300]);
+  assert.equal(timed[4].agent.steps[0].durationMs, 300, 'the subagent\'s own steps too');
+  assert.equal(fromMain[1].durationMs, undefined, 'main\'s list is not changed');
+  assert.equal(normalizeSteps(timed)[4].agent.steps[0].durationMs, 300, 'kept with the reply');
+  assert.equal(timedSteps(undefined, reply), undefined);
+  assert.deepEqual(timedSteps(fromMain, null), fromMain);
 });

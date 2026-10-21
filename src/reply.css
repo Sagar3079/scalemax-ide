@@ -1,51 +1,110 @@
 /*
  * Replies as they are written (src/reply-ui.js): the text streams in, every tool call is a step
- * with a spinner, and a command's output shows while it runs. Finished replies keep their steps
- * folded above the answer.
+ * with a state mark, and a command's output shows while it runs. Finished replies keep their
+ * steps folded above the answer.
+ *
+ * Riso Zine Press: a step reads like a line in a printed programme, 13px, with a dotted 1px
+ * leader to its time. Runs of steps hang off a 1px blue rule. Pink is agent activity only (the
+ * spinner, the live caret, the thinking dots); yellow marks what waits for the user.
+ *
+ * The companion beside the status line (.reply-companion) and each subagent's teammate
+ * (.reply-agent-mate) are drawn and sized by src/mascot.css; this file leaves them their room.
  */
+
+/* ---- The live reply: steps and text in order ---------------------------------------------- */
+
 .live-items {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
 }
 .live-items:empty {
   display: none;
 }
-.live-status {
-  margin-top: 2px;
+.live-items > .live-text:not(:first-child) {
+  margin-top: 12px;
+}
+.live-items > .live-text:not(:last-child) {
+  margin-bottom: 12px;
+}
+/* A run of steps hangs off one blue rule. */
+.live-items > .reply-step {
+  padding-left: 16px;
+  border-left: 1px solid color-mix(in srgb, var(--riso-blue, #0078BF) 30%, transparent);
 }
 
-/* One step: an icon for its state, then its title ("Read src/app.js", "Ran npm test"). */
+/* The live caret: a still pink block at the end of the text being written (the text moving is
+   motion enough). */
+.live-reply .live-items[aria-busy="true"] > .live-text:last-child > :is(p, h3, h4, h5, h6):last-child::after,
+.live-reply .live-items[aria-busy="true"] > .live-text:last-child > :is(ul, ol):last-child > li:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background: var(--riso-pink, #FF48B0);
+}
+/* ---- One step: a state mark, its title ("Read src/app.js"), a leader, its time ------------- */
+
 .reply-step {
   display: flex;
   flex-direction: column;
-  gap: 4px;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--sm-text-medium);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .reply-step-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  min-height: 28px;
 }
 .reply-step-title {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
-  font-size: 12px;
+  font-size: 13px;
+  color: var(--riso-ink-2, #4A4D55);
 }
+.reply-step-title code {
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  color: var(--riso-ink, #1A1B1F);
+}
+.reply-step-time {
+  flex: none;
+  order: 2;
+  margin-left: auto;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
+}
+/* The dotted leader between the title and the time. */
+.reply-step-row:has(> .reply-step-time)::after {
+  content: "";
+  flex: 1 1 16px;
+  order: 1;
+  min-width: 16px;
+  height: 0;
+  margin: 8px 4px 0;
+  border-bottom: 1px dotted color-mix(in srgb, var(--riso-ink, #1A1B1F) 32%, transparent);
+}
+
+/* The state mark: a 16px slot. */
 .reply-step-icon {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
 }
 .reply-step-icon svg {
@@ -53,30 +112,52 @@
   height: 12px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2.4;
+  stroke-width: 2.2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.reply-step[data-state="running"] .reply-step-icon {
-  border: 2px solid var(--sm-app-border);
-  border-top-color: var(--sm-brand-primary);
+/* Working: the agent's ink spins. */
+.reply-step[data-state="running"] > .reply-step-row .reply-step-icon,
+.reply-step[data-state="running"] > summary .reply-step-icon,
+.reply-step[data-state="running"] > .reply-agent-group > summary .reply-step-icon {
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+  border: 2px solid color-mix(in srgb, var(--riso-pink, #FF48B0) 22%, transparent);
+  border-top-color: var(--riso-pink, #FF48B0);
   animation: reply-step-spin 0.8s linear infinite;
 }
-.reply-step[data-state="approval"] .reply-step-icon {
-  border: 2px solid var(--sm-color-text-warning-default);
+/* Waiting for you: a highlighter dot under an ink ring. */
+.reply-step[data-state="approval"] > .reply-step-row .reply-step-icon,
+.reply-step[data-state="approval"] > summary .reply-step-icon,
+.reply-step[data-state="approval"] > .reply-agent-group > summary .reply-step-icon {
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+  background: var(--riso-yellow, #FFE800);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--riso-ink-black, #1A1B1F) 45%, transparent);
   animation: reply-step-wait 1.4s ease-in-out infinite;
 }
-.reply-step[data-state="ok"] .reply-step-icon {
-  color: var(--sm-app-text-accent);
+/* Each mark belongs to its own step only (child combinators), never to the steps nested in a
+   subagent's group. */
+.reply-step[data-state="ok"] > .reply-step-row .reply-step-icon,
+.reply-step[data-state="ok"] > summary .reply-step-icon,
+.reply-step[data-state="ok"] > .reply-agent-group > summary .reply-step-icon {
+  color: var(--riso-blue-text, #005E96);
 }
-.reply-step[data-state="error"] .reply-step-icon,
-.reply-step[data-state="error"] .reply-step-title {
-  color: var(--sm-app-text-danger);
+.reply-step[data-state="error"] > .reply-step-row :is(.reply-step-icon, .reply-step-title),
+.reply-step[data-state="error"] > summary :is(.reply-step-icon, .reply-step-title),
+.reply-step[data-state="error"] > .reply-agent-group > summary :is(.reply-step-icon, .reply-step-title) {
+  color: var(--riso-red-text, #B42638);
 }
-.reply-step[data-state="stopped"] .reply-step-icon {
-  color: var(--sm-text-weak);
+.reply-step[data-state="stopped"] > .reply-step-row .reply-step-icon,
+.reply-step[data-state="stopped"] > summary .reply-step-icon,
+.reply-step[data-state="stopped"] > .reply-agent-group > summary .reply-step-icon {
+  color: var(--riso-ink-3, #6B6F78);
 }
-.reply-step[data-state="stopped"] .reply-step-icon svg {
+.reply-step[data-state="stopped"] > .reply-step-row .reply-step-icon svg,
+.reply-step[data-state="stopped"] > summary .reply-step-icon svg,
+.reply-step[data-state="stopped"] > .reply-agent-group > summary .reply-step-icon svg {
   fill: currentColor;
   stroke: none;
 }
@@ -85,45 +166,44 @@
 }
 @keyframes reply-step-wait {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  50% { opacity: 0.45; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .reply-step[data-state="running"] .reply-step-icon,
-  .reply-step[data-state="approval"] .reply-step-icon {
-    animation: none;
+  .reply-step .reply-step-icon {
+    animation: none !important;
   }
 }
 
 /* A command's output: the end stays in view while it runs. */
 .reply-step-output {
-  margin: 0 0 0 22px;
+  margin: 4px 0 8px 24px;
   max-height: 180px;
   overflow: auto;
-  padding: 6px 10px;
-  border: 1px solid var(--sm-app-border);
+  padding: 8px 12px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 6px;
-  background: var(--sm-app-muted);
-  color: var(--sm-text-strong);
-  font-family: var(--sm-font-code-family);
-  font-size: 11.5px;
-  line-height: 1.5;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  line-height: 18px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .reply-step-output:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
 .reply-step-error {
-  margin-left: 22px;
-  font-size: 11.5px;
-  color: var(--sm-app-text-danger);
+  margin: 0 0 4px 24px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-red-text, #B42638);
   overflow-wrap: anywhere;
 }
 details.reply-step > summary {
   list-style: none;
   cursor: pointer;
-  width: fit-content;
   max-width: 100%;
   border-radius: 4px;
 }
@@ -131,35 +211,52 @@ details.reply-step > summary::-webkit-details-marker {
   display: none;
 }
 details.reply-step > summary:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: 2px;
 }
-details.reply-step > summary .reply-step-title {
-  text-decoration: underline dotted var(--sm-text-weak);
-  text-underline-offset: 3px;
+/* A step with output to unfold: its title is underlined in dots. */
+details.reply-step:not(.reply-agent) > summary .reply-step-title {
+  text-decoration: underline dotted color-mix(in srgb, var(--riso-ink, #1A1B1F) 40%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+details.reply-step > summary:hover .reply-step-title {
+  color: var(--riso-ink, #1A1B1F);
 }
 
 /* What the model said between tool calls. */
-.reply-note {
-  font-size: 12.5px;
-  color: var(--sm-text-medium);
-}
+.reply-note,
 .reply-note.md {
-  color: var(--sm-text-medium);
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+.reply-note.md p {
+  margin: 0 0 4px;
+}
+.reply-note.md code {
+  font-size: 12px;
 }
 
-/* A subagent (agent_task): its call is a group, with how it is doing and its own steps under it. */
+/* ---- A subagent (agent_task): its call is a group, with its state and its own steps under it.
+   Its title starts with the teammate (.reply-agent-mate, src/mascot.css), 8px before the row. */
+
 .reply-agent-group > summary,
 details.reply-agent > summary {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px 10px;
+  gap: 0 8px;
+  min-height: 28px;
+}
+.reply-agent-group > summary > .reply-step-row,
+details.reply-agent > summary > .reply-step-row {
+  flex: 1 1 auto;
 }
 .reply-agent-group > summary {
   list-style: none;
   cursor: pointer;
-  width: fit-content;
   max-width: 100%;
   border-radius: 4px;
 }
@@ -167,94 +264,222 @@ details.reply-agent > summary {
   display: none;
 }
 .reply-agent-group > summary:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: 2px;
 }
+.reply-agent-group .reply-step-title,
+details.reply-agent > summary .reply-step-title {
+  color: var(--riso-ink, #1A1B1F);
+}
 .reply-agent-meta {
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .reply-agent-items {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 6px 0 0 6px;
-  padding: 2px 0 2px 12px;
-  border-inline-start: 2px solid var(--sm-color-border-secondary);
+  gap: 0;
+  margin: 0 0 4px 8px;
+  padding: 0 0 0 16px;
+  border-inline-start: 1px solid color-mix(in srgb, var(--riso-blue, #0078BF) 30%, transparent);
 }
 .reply-agent-empty {
+  min-height: 28px;
   font-size: 12px;
-  color: var(--sm-text-weak);
+  line-height: 28px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
-/* A finished reply's steps, folded above the answer. */
+/* ---- A finished reply's steps, folded above the answer ------------------------------------ */
+
 .msg-steps {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 .msg-steps-summary {
-  cursor: pointer;
-  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
   max-width: 100%;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--sm-text-medium);
+  list-style: none;
+  cursor: pointer;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--riso-ink-2, #4A4D55);
+  font-variant-numeric: tabular-nums;
   border-radius: 4px;
 }
+.msg-steps-summary::-webkit-details-marker {
+  display: none;
+}
+.msg-steps-summary::after,
+.msg-reasoning > .msg-reasoning-label::after {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 4px 4px 0;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  opacity: 0.7;
+  transform: rotate(45deg);
+  transition: transform var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+.msg-steps[open] > .msg-steps-summary::after,
+.msg-reasoning[open] > .msg-reasoning-label::after {
+  margin-bottom: 0;
+  transform: rotate(-135deg);
+}
+.msg-steps-summary:hover {
+  color: var(--riso-ink, #1A1B1F);
+}
 .msg-steps-summary:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: 2px;
 }
 .msg-steps-failed {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text, #B42638);
 }
 .msg-steps-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 2px 0 2px 12px;
-  border-inline-start: 2px solid var(--sm-color-border-secondary);
+  gap: 0;
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  border-inline-start: 1px solid color-mix(in srgb, var(--riso-blue, #0078BF) 30%, transparent);
+}
+.msg-steps-list.reply-agent-items {
+  margin: 0 0 4px 8px;
 }
 
-/* The sidebar: a task that is working shows a spinner, one that finished unseen a dot. */
+/* ---- The model's thinking: folded above the answer, quiet -------------------------------- */
+
+.msg-reasoning {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+.msg-reasoning > .msg-reasoning-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  width: fit-content;
+  list-style: none;
+  cursor: pointer;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--riso-ink-2, #4A4D55);
+  border-radius: 4px;
+}
+.msg-reasoning > .msg-reasoning-label::-webkit-details-marker {
+  display: none;
+}
+.msg-reasoning > .msg-reasoning-label:hover {
+  color: var(--riso-ink, #1A1B1F);
+}
+.msg-reasoning > .msg-reasoning-label:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+/* "Thought for 12s" when the thinking itself was not kept. */
+.msg-thought {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
+}
+.msg-reasoning-text {
+  max-height: 320px;
+  margin-top: 4px;
+  padding: 4px 0 4px 16px;
+  overflow-y: auto;
+  border-inline-start: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
+  white-space: pre-wrap;
+}
+
+/* ---- The live status line: dots, what it is doing, elapsed time. It sits in the companion's
+   body (src/mascot.css lays out the 56px companion at its start). ---------------------------- */
+
+.live-status,
+.live-reply .pending-reply-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+.live-reply .pending-reply-time {
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
+}
+.live-reply .thinking-dots {
+  gap: 4px;
+}
+.live-reply .thinking-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--riso-pink, #FF48B0);
+}
+
+/* ---- The sidebar: a task that is working spins in pink; one that finished unseen gets a
+   blue dot. ------------------------------------------------------------------------------ */
+
 .task-status {
   flex-shrink: 0;
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
 }
 .task-status.is-running {
-  border: 1.5px solid var(--sm-app-border);
-  border-top-color: var(--sm-brand-primary);
+  border: 2px solid color-mix(in srgb, var(--riso-pink, #FF48B0) 22%, transparent);
+  border-top-color: var(--riso-pink, #FF48B0);
   animation: reply-step-spin 0.8s linear infinite;
 }
 .task-status.is-unread {
-  width: 7px;
-  height: 7px;
-  background: var(--sm-brand-primary);
+  width: 8px;
+  height: 8px;
+  background: var(--riso-blue, #0078BF);
 }
 @media (prefers-reduced-motion: reduce) {
   .task-status.is-running {
     animation: none;
-    border-color: var(--sm-brand-primary);
+    border-color: var(--riso-pink, #FF48B0);
   }
 }
 
-/* The model's to-do list (todo_write): live above the reply while it works, and under the
-   finished reply as it stood at the end. */
+/* ---- The model's to-do list (todo_write): live above the reply while it works, and under the
+   finished reply as it stood at the end. Flat sheet, rows on rules, marks as printed tags. -- */
+
 .reply-todos {
-  margin: 2px 0 8px;
-  padding: 8px 12px 9px;
-  border: 1px solid var(--sm-app-border);
+  margin: 4px 0 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 8px;
-  background: var(--sm-app-surface);
+  background: var(--riso-paper-raised, #FAFAF8);
   white-space: normal;
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 20px;
 }
 .reply-todos-head {
   margin-bottom: 4px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
   font-weight: 600;
-  color: var(--sm-text-strong);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink, #1A1B1F);
 }
 .reply-todos-list {
   margin: 0;
@@ -265,27 +490,41 @@ details.reply-agent > summary {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 0;
-  line-height: 1.45;
-  color: var(--sm-text-strong);
+  padding: 4px 0;
+  color: var(--riso-ink, #1A1B1F);
+}
+.reply-todo + .reply-todo {
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .reply-todo-mark {
   flex-shrink: 0;
-  min-width: 40px;
-  font-size: 10.5px;
+  min-width: 48px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--riso-ink-3, #6B6F78) 70%, transparent);
+  border-radius: 3px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  text-align: center;
   text-transform: uppercase;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .reply-todo.is-in-progress .reply-todo-mark {
-  color: var(--sm-app-text-accent);
+  border-color: var(--riso-pink, #FF48B0);
+  background: var(--riso-pink, #FF48B0);
+  color: var(--riso-ink-black, #1A1B1F);
+}
+.reply-todo.is-completed .reply-todo-mark {
+  border-color: var(--riso-blue, #0078BF);
+  color: var(--riso-blue-text, #005E96);
 }
 .reply-todo.is-in-progress .reply-todo-text {
   font-weight: 600;
 }
 .reply-todo.is-completed .reply-todo-text {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
 }
@@ -293,102 +532,122 @@ details.reply-agent > summary {
   display: none;
 }
 
-/* Pictures sent with a user message. */
+/* ---- Pictures sent with a user message ---------------------------------------------------- */
+
 .msg-images {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
 }
 .msg-image {
   max-width: 220px;
   max-height: 160px;
-  border: 1px solid var(--sm-app-border);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 6px;
   object-fit: cover;
 }
 
-/* Pictures waiting to go with the next message, and the @-file menu. */
+/* ---- Pictures waiting to go with the next message, and the @-file menu -------------------- */
+
 .image-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px 0;
+  gap: 8px;
+  padding: 8px 12px 0;
 }
 .composer-image {
   position: relative;
 }
 .composer-image-thumb {
   display: block;
-  width: 52px;
-  height: 52px;
-  border: 1px solid var(--sm-app-border);
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 6px;
   object-fit: cover;
 }
 .composer-image-remove {
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: -8px;
+  right: -8px;
   width: 20px;
   height: 20px;
   padding: 0;
-  border: 1px solid var(--sm-app-border);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 50%;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink-2, #4A4D55);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
 }
-.composer-image-remove:hover,
+.composer-image-remove:hover {
+  color: var(--riso-ink, #1A1B1F);
+}
 .composer-image-remove:focus-visible {
-  color: var(--sm-text-strong);
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+  color: var(--riso-ink, #1A1B1F);
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
 .composer-image-busy {
   font-size: 12px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
+
+/* The popover for @-files (and the / menu, src/slash.css): paper-raised, 1px rule, the lifted
+   shadow; the highlighted row is a blue tint. */
 .mention-menu {
   max-height: 240px;
-  margin: 0 10px;
+  margin: 0 12px;
   padding: 4px;
   overflow-y: auto;
-  border: 1px solid var(--sm-color-border-secondary);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 8px;
-  background: var(--sm-bg-modal);
-  box-shadow: var(--sm-shadow-popup-large);
+  background: var(--riso-paper-raised, #FAFAF8);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .mention-option {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 20px;
 }
-.mention-option.is-active,
 .mention-option:hover {
-  background: var(--sm-app-surface-hover);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+}
+.mention-option.is-active {
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
 }
 .mention-name {
-  font-family: var(--sm-font-code-family);
-  color: var(--sm-text-strong);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  color: var(--riso-ink, #1A1B1F);
 }
 .mention-dir {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .mention-empty {
-  padding: 6px 8px;
+  padding: 4px 8px;
   font-size: 12px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-steps-summary::after,
+  .msg-reasoning > .msg-reasoning-label::after {
+    transition: none;
+  }
 }

@@ -125,6 +125,71 @@ function hueOf(hex) {
 }
 
 /* ---------------------------------------------------------------- */
+/* Two-ink riso duotone (applied at render time)                     */
+/* ---------------------------------------------------------------- */
+
+// The press the shell prints on: paper, the blue plate and the fluorescent pink plate. On deep
+// stock the same plates print in the dark theme's lighter inks on a dimmed sheet, so faces, eye
+// whites and outlines stay readable against the dark cards.
+const RISO_PRINTS = Object.freeze({
+  light: Object.freeze({ paper: [243, 244, 241], blue: [0, 120, 191], pink: [255, 72, 176] }),
+  dark: Object.freeze({ paper: [212, 214, 208], blue: [75, 166, 224], pink: [255, 92, 186] }),
+});
+
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/** How close a hue is to `center`: 1 there, 0 from 120 degrees away. */
+function hueNear(hue, center) {
+  const distance = Math.abs(((hue - center + 540) % 360) - 180);
+  return Math.max(0, Math.cos(((distance * Math.PI) / 180) * 0.75));
+}
+
+/**
+ * How much of each riso plate a full-colour fill takes, 0 to 1. The pink plate comes from the
+ * colour's warmth (reds, magentas, oranges, by chroma) and from deep darkness; the blue plate
+ * from its coolness (blues, cyans, greens, violets) and from darkness, less so for saturated warm
+ * colours. Skin reads as a light pink, dark hair and outlines take both plates (navy and purple),
+ * clothes go blue or pink by hue, white stays paper. Null for anything that is not a hex colour.
+ * @param {string} color '#rgb' or '#rrggbb' (alpha ignored)
+ * @returns {{blue: number, pink: number} | null}
+ */
+export function risoPlates(color) {
+  const rgb = parseHex(color);
+  if (!rgb) return null;
+  const [r, g, b] = rgb.map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const chroma = max - Math.min(r, g, b);
+  const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // Halfway between value and luma, so a saturated colour is not mistaken for a dark one.
+  const dark = 1 - (max + luma) / 2;
+  const hue = chroma ? hueOf(color) : 0;
+  const warm = chroma ? hueNear(hue, 345) : 0;
+  const cool = chroma ? hueNear(hue, 215) : 0;
+  const pink = chroma * warm * 1.1 + clamp01((dark - 0.45) / 0.5) * 0.85;
+  // Warm browns (skin, wood) keep to the pink plate; near-blacks still take the full blue.
+  const blue = chroma * cool * 1.1 + clamp01((dark - 0.2) / 0.65) * (1 - 0.55 * warm * Math.min(1, chroma * 3));
+  return { blue: round2(clamp01(blue)), pink: round2(clamp01(pink)) };
+}
+
+/**
+ * A fill colour reprinted as the two riso inks over paper: paper multiplied by the blue screen
+ * and the pink screen at the plate densities risoPlates() gives. `theme` 'dark' prints on the
+ * deep-stock press. Anything that is not a hex colour ('none', 'currentColor') comes back as is.
+ * @param {string} color
+ * @param {'light'|'dark'} [theme]
+ * @returns {string} '#rrggbb'
+ */
+export function risoDuotone(color, theme = 'light') {
+  const plates = risoPlates(color);
+  if (!plates) return color;
+  const print = RISO_PRINTS[theme === 'dark' ? 'dark' : 'light'];
+  return toHex(print.paper.map((paper, i) => paper
+    * (1 - plates.blue * (1 - print.blue[i] / 255))
+    * (1 - plates.pink * (1 - print.pink[i] / 255))));
+}
+
+/* ---------------------------------------------------------------- */
 /* Traits                                                            */
 /* ---------------------------------------------------------------- */
 
@@ -482,9 +547,20 @@ function pixelSize(options) {
   return Number.isFinite(n) && n > 0 ? Math.min(512, Math.max(8, Math.round(n))) : 32;
 }
 
+// Every coloured fill and stroke also carries its two-ink reprint for both presses as CSS custom
+// properties (CSSOM, CSP-safe); experts.css paints with them, so the drawing data keeps its
+// colours and a theme switch needs no redraw.
+const INKED = Object.freeze({ fill: '--riso-fill', stroke: '--riso-stroke' });
+
 function createNode(spec) {
   const node = document.createElementNS(SVG_NS, spec.tag);
-  for (const [name, value] of Object.entries(spec.attrs)) node.setAttribute(name, String(value));
+  for (const [name, value] of Object.entries(spec.attrs)) {
+    node.setAttribute(name, String(value));
+    if (INKED[name] && risoPlates(value)) {
+      node.style.setProperty(INKED[name], risoDuotone(value, 'light'));
+      node.style.setProperty(`${INKED[name]}-dark`, risoDuotone(value, 'dark'));
+    }
+  }
   if (spec.className) node.setAttribute('class', spec.className);
   for (const child of spec.children || []) node.appendChild(createNode(child));
   return node;
