@@ -8,7 +8,8 @@
  * src/markdown.js, which also builds elements.
  */
 import { renderMarkdown } from './markdown.js';
-import { effectivePermission } from './domain.mjs';
+import { effectivePermission, taskFolderStatus } from './domain.mjs';
+import { reloadTabs } from './workspace-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 const DOCS = ['requirements', 'design', 'tasks'];
@@ -61,6 +62,12 @@ function renderList() {
 function renderTabs() {
   const host = $('#specs-tabs');
   if (!host) return;
+  // No spec chosen (or none yet): there are no documents to switch between.
+  host.hidden = !view.slug;
+  if (!view.slug) {
+    host.replaceChildren();
+    return;
+  }
   host.replaceChildren(...DOCS.map((doc) => {
     const written = typeof view.spec?.docs?.[doc] === 'string';
     const tab = element('button', 'specs-tab', DOC_LABELS[doc]);
@@ -107,6 +114,12 @@ function renderTasks() {
 function renderDoc() {
   const host = $('#specs-doc');
   if (!host) return;
+  if (!view.slug) {
+    host.replaceChildren(element('p', 'specs-empty', view.specs.length
+      ? 'Choose a spec on the left to read its requirements, design and tasks.'
+      : 'A spec is what ScaleMax writes before it builds a feature: the requirements, then the design, then the tasks, each for you to read before the next. Choose New spec… to start one.'));
+    return;
+  }
   const text = view.spec?.docs?.[view.doc];
   if (typeof text !== 'string') {
     host.replaceChildren(element('p', 'specs-empty',
@@ -124,7 +137,7 @@ function renderDoc() {
 
 function renderHead() {
   const title = $('#specs-name');
-  if (title) title.textContent = view.slug || 'No spec selected';
+  if (title) title.textContent = view.slug || (view.specs.length ? 'No spec selected' : 'No specs yet');
   const progress = $('#specs-progress');
   if (progress) progress.textContent = view.spec ? progressText(view.specs.find((item) => item.slug === view.slug)?.progress) : '';
   const work = $('#specs-work');
@@ -183,10 +196,13 @@ async function setTask(number, done) {
     await showSpec(view.slug, { focusTask: number });
     return;
   }
+  const slug = result.data?.slug || view.slug;
   await refresh();
   await showSpec(view.slug, { focusTask: number });
-  // The file changed on disk, so the Workspace tree and Git status follow.
+  // The file changed on disk, so the Workspace tree and Git status follow, and an editor tab with
+  // tasks.md open shows the tick (unless it holds unsaved edits of its own).
   if (typeof view.app?.refreshWorkspace === 'function') void view.app.refreshWorkspace();
+  if (view.app && !result.data?.unchanged) void reloadTabs(view.app, [`.scalemax/specs/${slug}/tasks.md`]);
 }
 
 async function refresh() {
@@ -218,7 +234,7 @@ export async function openSpecs(app = view.app, { slug = '', opener = null } = {
   const subtitle = $('#specs-subtitle');
   if (subtitle) {
     subtitle.textContent = view.folder
-      ? `Requirements, design and tasks in ${view.folder.name}/.scalemax/specs`
+      ? `Requirements, design and tasks in ${view.app?.folderLabel?.(view.folder.path) || view.folder.name}/.scalemax/specs`
       : 'Open a project folder to keep specs in it.';
   }
   if (!dialog.open) dialog.showModal();
@@ -345,15 +361,41 @@ export function renderPlanCard(app, message, taskId) {
 
 const RUN_PLAN = 'Run the plan you just proposed. Follow it step by step, verify each step, and tell me if anything turns out differently than planned.';
 
+function chatBusy(app) {
+  return Boolean(app.activeRequestId || app.demoBusy || app.compactingTasks?.has(app.currentTaskId));
+}
+
 async function runPlan(app, taskId) {
   if (app.currentTaskId !== taskId) app.selectTask?.(taskId);
   // Nothing is changed until the request can actually go out: a click while another reply is
-  // running must not drop the user out of Plan or throw their draft away.
-  if (app.activeRequestId || app.demoBusy || app.compactingTasks?.has(app.currentTaskId)) {
+  // running, or while the task's folder is not open, must not drop the user out of Plan or throw
+  // their draft away.
+  if (chatBusy(app)) {
     app.showToast('Wait for the running reply to finish, then run the plan');
     return;
   }
-  const { setPermission } = await import('./composer-ui.js');
+  // The task's folder opens first (selecting the task started that); the send needs it open.
+  const task = app.currentTask?.();
+  const status = () => taskFolderStatus(task, app.workspace?.root);
+  if (status() === 'mismatch') {
+    const outcome = await app.openTaskFolder?.(task);
+    if (status() !== 'ready') {
+      // The switch already said why when it was refused or failed.
+      if (!['unsaved', 'missing', 'failed'].includes(outcome)) app.showToast(`This task works in "${task.folder?.name}". Open it first, then run the plan.`);
+      return;
+    }
+  }
+  if (status() === 'none') {
+    app.showToast('Choose a project folder first.');
+    return;
+  }
+  // The user moved on while the folder opened, or another reply started meanwhile.
+  if (app.currentTaskId !== taskId) return;
+  if (chatBusy(app)) {
+    app.showToast('Wait for the running reply to finish, then run the plan');
+    return;
+  }
+  const { setPermission, renderPermission } = await import('./composer-ui.js');
   const back = app.settings.prePlanPermission === 'manual' ? 'manual' : 'basic';
   const mode = await setPermission(app, back);
   if (mode === 'plan') {
@@ -364,10 +406,19 @@ async function runPlan(app, taskId) {
   const draft = input ? input.value : '';
   if (input) input.value = RUN_PLAN;
   app.updateSendEnabled?.();
-  await app.handleSend?.();
-  // Refused after all (a folder that is not open, for example): give the draft back.
+  // An app-written message: the pictures and attachment in the message box are not taken.
+  const sent = await app.handleSend?.({ internal: true });
+  if (sent) return;
+  // Refused after all (compaction failed, the task was deleted…): give the draft back, and put
+  // the permission back to Plan quietly (the send already said why), unless it was changed since.
   if (input && input.value === RUN_PLAN) {
     input.value = draft;
     app.updateSendEnabled?.();
+  }
+  if (effectivePermission(app.settings) === mode) {
+    app.settings.permission = 'plan';
+    app.settings.bypassConsent = false;
+    await app.persist('settings');
+    renderPermission(app);
   }
 }

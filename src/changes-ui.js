@@ -7,7 +7,8 @@
  * src/domain.mjs). DOM is built with createElement and textContent only (no HTML).
  */
 import { normalizeChanges, changesSummary } from './domain.mjs';
-import { reloadTabs } from './workspace-ui.js';
+import { reloadTabs, reviewReplyChanges } from './workspace-ui.js';
+import { openCommitDialog } from './gitflow-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 function element(tag, className, text) {
@@ -89,6 +90,16 @@ export function renderChangesCard(app, message, taskId) {
     keepAll.disabled = waiting;
     actions.append(keepAll);
     head.append(actions);
+  }
+  // Commit what the reply changed (src/gitflow-ui.js): the dialog ticks this reply's files.
+  if (window.scalemaxAPI?.git?.commit) {
+    const commitButton = actionButton('Commit\u2026', 'changes-action', 'Commit the files this reply changed', (event) => {
+      const { task } = findMessage(app, taskId, id);
+      void openCommitDialog(app, { folder: task?.folder?.path || '', taskId, paths: changes.files.map((file) => file.path), opener: event.currentTarget });
+    });
+    commitButton.dataset.action = 'commit';
+    const actions = head.querySelector('.changes-actions') || head.appendChild(element('div', 'changes-actions'));
+    actions.append(commitButton);
   }
   card.append(head);
   const list = element('ul', 'changes-list');
@@ -386,9 +397,11 @@ export function bindChangesUi(app) {
   $('#changes-keep')?.addEventListener('click', () => void keepFiles(app, review.taskId, review.id, [review.path]));
   $('#changes-open')?.addEventListener('click', async () => {
     const target = review.path;
+    const { message } = findMessage(app, review.taskId, review.id);
     dialog.close();
     app.switchView('workspace');
-    await app.openFile(target);
+    // The editor marks this reply's changes in the file, with Keep and Undo on each.
+    if (await app.openFile(target)) await reviewReplyChanges(app, normalizeChanges(message?.changes), [target]);
   });
   dialog.addEventListener('close', () => {
     review.token += 1;

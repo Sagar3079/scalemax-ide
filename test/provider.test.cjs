@@ -1140,3 +1140,148 @@ test('thinking goes back with the tool calls only to models that ask for it', as
   await provider.complete({ requestId: 'rb-2', messages });
   assert.equal('reasoning_content' in bodies[1].messages[1], false);
 });
+
+// ---- Stream error events, provider changes under running replies -----------------------------
+
+test('an error event in the stream that names a passing failure is retried like the HTTP failure', async () => {
+  const answers = [
+    () => sseResponse([chunk({ content: 'Part' }), { error: { type: 'overloaded_error', message: 'Overloaded' } }]),
+    () => sseResponse([{ error: { code: 429, message: 'slow down' } }]),
+    () => sseResponse([{ error: { status: '503', message: 'busy' } }]),
+    () => sseResponse([chunk({ content: 'The whole answer.' }, { finish_reason: 'stop' }), '[DONE]']),
+  ];
+  const { provider, calls } = await configuredProvider(() => answers.shift()());
+  const heard = [];
+  const result = await provider.complete({ requestId: 'se-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) });
+  assert.equal(result.content, 'The whole answer.');
+  assert.equal(calls.length, 4);
+  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'text']);
+  assert.equal(heard[1].reason, 'NETWORK');
+  // A refusal in the stream keeps its code and type but is not asked again.
+  const refusing = await configuredProvider(() => sseResponse([{ error: { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'too long' } }]));
+  await assert.rejects(() => refusing.provider.complete({ requestId: 'se-2', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    (error) => error.code === 'PROVIDER_ERROR' && error.providerCode === 'context_length_exceeded' && error.status === undefined
+      && error.message === 'The provider stopped the reply: too long');
+  assert.equal(refusing.calls.length, 1);
+});
+
+/** Two custom HTTPS providers with keys; requests wait while `hold` is set. */
+function heldProviders(options = {}) {
+  let hold = null;
+  const store = memoryStore();
+  const { provider, calls } = makeProvider({
+    store,
+    retryDelays: options.retryDelays,
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`enc:${value}`),
+      decryptString: (buffer) => buffer.toString().replace(/^enc:/, ''),
+    },
+    respond: async (url, init) => {
+      if (hold) await hold;
+      return options.respond ? options.respond(url, init) : jsonResponse({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] });
+    },
+  });
+  const holdRequests = () => {
+    let release;
+    hold = new Promise((resolve) => { release = resolve; });
+    return () => { hold = null; release(); };
+  };
+  return { provider, calls, store, holdRequests };
+}
+const A = { kind: 'custom', baseUrl: 'https://a.example/v1', model: 'a-1', apiKey: 'sk-provider-a-key-1234567890' };
+const B = { kind: 'custom', baseUrl: 'https://b.example/v1', model: 'b-1', apiKey: 'sk-provider-b-key-1234567890' };
+const ask = (provider, requestId, snapshot) => provider.complete({ requestId, messages: [{ role: 'user', content: 'Hi' }] }, { snapshot });
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+test('switching provider or model leaves running replies alone; their snapshot keeps its key', async () => {
+  const { provider, calls, holdRequests } = heldProviders();
+  await provider.save(A);
+  const frozen = provider.snapshot();
+  const release = holdRequests();
+  const running = ask(provider, 'keep-1', frozen);
+  await tick();
+  await provider.save({ kind: 'custom', baseUrl: A.baseUrl, model: 'a-2' });
+  await provider.setModel({ model: 'a-3' });
+  await provider.addProfile({ name: 'B' });
+  await provider.save(B);
+  release();
+  assert.equal((await running).content, 'ok');
+  // A later round of that reply still goes to the first provider, with its key and model.
+  await ask(provider, 'keep-2', frozen);
+  assert.equal(calls.at(-1).url, 'https://a.example/v1/chat/completions');
+  assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${A.apiKey}`);
+  assert.equal(JSON.parse(calls.at(-1).options.body).model, 'a-1');
+});
+
+test('removing or clearing a provider, or replacing its key, stops the replies using it', async () => {
+  const { provider, calls, holdRequests } = heldProviders();
+  await provider.save(A);
+  const idA = provider.get().profileId;
+  const frozenA = provider.snapshot();
+  let release = holdRequests();
+  const onA = ask(provider, 'gone-1', frozenA);
+  await provider.addProfile({ name: 'B' });
+  await provider.save(B);
+  const frozenB = provider.snapshot();
+  const onB = ask(provider, 'stay-1', frozenB);
+  await tick();
+  // Removing the (now inactive) first provider stops its reply, not the other provider's.
+  await provider.removeProfile({ id: idA });
+  await assert.rejects(() => onA, (error) => error.code === 'PROVIDER_CHANGED');
+  release();
+  assert.equal((await onB).content, 'ok');
+  // Its next round never goes out with the removed key.
+  const sent = calls.length;
+  await assert.rejects(() => ask(provider, 'gone-2', frozenA), (error) => error.code === 'PROVIDER_CHANGED');
+  assert.equal(calls.length, sent);
+  // A new key for the active provider: replies on the old key stop, new ones use the new key.
+  release = holdRequests();
+  const oldKey = ask(provider, 'gone-3', frozenB);
+  await tick();
+  await provider.save({ ...B, apiKey: 'sk-provider-b-new-key-1234567890' });
+  await assert.rejects(() => oldKey, (error) => error.code === 'PROVIDER_CHANGED');
+  release();
+  await assert.rejects(() => ask(provider, 'gone-4', frozenB), (error) => error.code === 'PROVIDER_CHANGED');
+  const fresh = provider.snapshot();
+  await ask(provider, 'new-1', fresh);
+  assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer sk-provider-b-new-key-1234567890');
+  // Clearing: in flight or later, nothing more goes out with that key.
+  release = holdRequests();
+  const cleared = ask(provider, 'gone-5', fresh);
+  await tick();
+  provider.clear();
+  await assert.rejects(() => cleared, (error) => error.code === 'PROVIDER_CHANGED' && /Send the message again/.test(error.message));
+  release();
+  await assert.rejects(() => ask(provider, 'gone-6', fresh), (error) => error.code === 'PROVIDER_CHANGED');
+});
+
+test('clearing a provider ends a request waiting to be retried at once', async () => {
+  const { provider, calls } = heldProviders({ retryDelays: [5000, 5000, 5000], respond: () => jsonResponse({ error: { message: 'busy' } }, { status: 503 }) });
+  await provider.save(A);
+  const pending = ask(provider, 'wait-1', provider.snapshot());
+  await tick();
+  provider.clear();
+  await assert.rejects(() => pending, (error) => error.code === 'PROVIDER_CHANGED');
+  assert.equal(calls.length, 1);
+});
+
+test('choosing a provider with a model it cannot use changes nothing', async () => {
+  const { provider } = await scalemaxProvider();
+  const scalemaxId = provider.get().profileId;
+  await provider.addProfile({ name: 'Local' });
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3' });
+  const localId = provider.get().profileId;
+  await assert.rejects(() => provider.selectProfile({ id: scalemaxId, model: 'flux-2-pro' }), /does not support chat/);
+  await assert.rejects(() => provider.selectProfile({ id: scalemaxId, model: 'gpt-nope' }), /not in the ScaleMax model list/);
+  assert.deepEqual([provider.get().profileId, provider.get().model], [localId, 'llama3']);
+  // A model it can use: switched and chosen in one step.
+  const listing = await provider.selectProfile({ id: scalemaxId, model: 'space-bunny' });
+  assert.equal(listing.activeId, scalemaxId);
+  assert.equal(provider.get().model, 'space-bunny');
+  assert.deepEqual(provider.get().enabledModels, ['deepseek-v4-flash', 'space-bunny']);
+  // Its current model needs no check; a model for the active provider is checked the same way.
+  await provider.selectProfile({ id: scalemaxId, model: 'space-bunny' });
+  await assert.rejects(() => provider.selectProfile({ id: scalemaxId, model: 'flux-2-pro' }), /does not support chat/);
+  assert.equal(provider.get().model, 'space-bunny');
+});

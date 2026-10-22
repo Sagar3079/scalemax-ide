@@ -53,12 +53,15 @@ function fakeProvider(routes) {
   };
 }
 
-function studio(t, routes) {
+// Polls are spaced 1 ms apart here instead of 3 s, so the video tests stay fast.
+function studio(t, routes, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scalemax-media-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let counter = 0;
   const provider = fakeProvider(routes);
-  const media = createMediaStudio({ provider, dir, randomId: () => (counter++).toString(16).padStart(16, '0'), now: () => 1_700_000_000_000 });
+  const media = createMediaStudio({
+    provider, dir, randomId: () => (counter++).toString(16).padStart(16, '0'), now: () => 1_700_000_000_000, pollIntervalMs: 1, ...options,
+  });
   return { media, provider, dir };
 }
 
@@ -161,6 +164,106 @@ test('a non-image payload is refused and cancel stops a running video', async (t
   await assert.rejects(running, (error) => error.code === 'CANCELLED');
   release?.();
   assert.equal(media.cancel('x2'), false);
+});
+
+test('a failed status check does not lose the video: it is retried with a growing pause', async (t) => {
+  let polls = 0;
+  const { media } = studio(t, {
+    'POST videos/generations': () => json(202, { id: 'vid_flaky', status: 'queued' }),
+    'GET videos/vid_flaky?wait=20': () => {
+      polls += 1;
+      if (polls === 1) return json(503, { error: { message: 'upstream unavailable' } });
+      if (polls === 2) throw new TypeError('fetch failed');
+      if (polls === 3) return json(429, { error: { message: 'slow down' } });
+      return json(200, { id: 'vid_flaky', status: 'completed', url: 'https://api.scalemax.pro/v1/videos/vid_flaky/content' });
+    },
+    'GET https://api.scalemax.pro/v1/videos/vid_flaky/content': () => new Response(MP4, { status: 200 }),
+  });
+  const made = await media.generate({ requestId: 'r1', kind: 'video', model: 'grok-imagine-video', prompt: 'waves' });
+  assert.equal(made.items[0].mime, 'video/mp4');
+  assert.equal(polls, 4);
+});
+
+test('a provider that ignores ?wait is polled at most once per interval', async (t) => {
+  const times = [];
+  const { media } = studio(t, {
+    'POST videos/generations': () => json(202, { id: 'vid_fast', status: 'queued' }),
+    'GET videos/vid_fast?wait=20': () => {
+      times.push(Date.now());
+      return json(200, times.length < 3 ? { status: 'in_progress' } : { status: 'completed', url: 'https://api.scalemax.pro/v1/v.mp4' });
+    },
+    'GET https://api.scalemax.pro/v1/v.mp4': () => new Response(MP4, { status: 200 }),
+  }, { pollIntervalMs: 60 });
+  await media.generate({ requestId: 'p1', kind: 'video', model: 'grok-imagine-video', prompt: 'waves' });
+  assert.equal(times.length, 3);
+  for (let index = 1; index < times.length; index += 1) assert.ok(times[index] - times[index - 1] >= 55, `poll gap ${times[index] - times[index - 1]} ms`);
+});
+
+test('polling gives up at the deadline with the last error, and a cancel ends the pause between checks', async (t) => {
+  let clock = 1_700_000_000_000;
+  const { media } = studio(t, {
+    'POST videos/generations': () => json(202, { id: 'vid_down', status: 'queued' }),
+    'GET videos/vid_down?wait=20': () => json(502, { error: { message: 'bad gateway' } }),
+  }, { now: () => (clock += 4 * 60_000) });
+  await assert.rejects(
+    () => media.generate({ requestId: 'd1', kind: 'video', model: 'grok-imagine-video', prompt: 'waves' }),
+    (error) => error.code === 'TIMEOUT' && /20 minutes\. The last status check failed: The provider refused the request \(HTTP 502\): bad gateway\. Check/.test(error.message),
+  );
+
+  let checks = 0;
+  const slow = studio(t, {
+    'POST videos/generations': () => json(202, { id: 'vid_wait', status: 'queued' }),
+    'GET videos/vid_wait?wait=20': () => { checks += 1; return json(503, {}); },
+  }, { pollIntervalMs: 60_000 });
+  const running = slow.media.generate({ requestId: 'd2', kind: 'video', model: 'grok-imagine-video', prompt: 'waves' });
+  while (checks === 0) await new Promise((resolve) => setImmediate(resolve));
+  const started = Date.now();
+  assert.equal(slow.media.cancel('d2'), true);
+  await assert.rejects(running, (error) => error.code === 'CANCELLED');
+  assert.ok(Date.now() - started < 1000, 'the pause between checks is cut short');
+  assert.equal(checks, 1);
+});
+
+test('307 and 308 redirects repeat the method and body; 301, 302 and 303 become a GET', async (t) => {
+  const moved = (status) => () => new Response(null, { status, headers: { location: `https://api.scalemax.pro/v1/moved-${status}` } });
+  const generated = () => json(200, { data: [{ b64_json: PNG.toString('base64') }] });
+  for (const status of [307, 308]) {
+    const { media, provider } = studio(t, {
+      'POST images/generations': moved(status),
+      [`POST https://api.scalemax.pro/v1/moved-${status}`]: generated,
+    });
+    await media.generate({ requestId: `r${status}`, kind: 'image', model: 'gpt-image-2', prompt: 'a cat' });
+    assert.deepEqual(provider.calls.map((call) => [call.method, call.body]), [
+      ['POST', { model: 'gpt-image-2', prompt: 'a cat' }],
+      ['POST', { model: 'gpt-image-2', prompt: 'a cat' }],
+    ]);
+  }
+  for (const status of [301, 302, 303]) {
+    const { media, provider } = studio(t, {
+      'POST images/generations': moved(status),
+      [`GET https://api.scalemax.pro/v1/moved-${status}`]: generated,
+    });
+    await media.generate({ requestId: `r${status}`, kind: 'image', model: 'gpt-image-2', prompt: 'a cat' });
+    assert.deepEqual(provider.calls.map((call) => [call.method, call.body]), [
+      ['POST', { model: 'gpt-image-2', prompt: 'a cat' }],
+      ['GET', undefined],
+    ]);
+  }
+});
+
+test('a batch where one image fails leaves none of the others on disk', async (t) => {
+  const { media, dir } = studio(t, {
+    'POST images/generations': () => json(200, {
+      data: [{ b64_json: PNG.toString('base64') }, { url: 'https://cdn.example.com/broken.png' }],
+    }),
+    'GET https://cdn.example.com/broken.png': () => json(500, { error: { message: 'storage error' } }),
+  });
+  await assert.rejects(
+    () => media.generate({ requestId: 'b1', kind: 'image', model: 'grok-imagine-image', prompt: 'cats', options: { n: 2 } }),
+    /HTTP 500/,
+  );
+  assert.deepEqual(fs.readdirSync(dir), []);
+  assert.equal(media.item('m-0000000000000000'), null);
 });
 
 test('imported images and saved copies', async (t) => {

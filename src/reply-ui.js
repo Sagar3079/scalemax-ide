@@ -5,9 +5,11 @@
  * and a command's output while it runs. The live bubble is built once and then patched, and the
  * Markdown of the text being written is redrawn at most once per frame.
  * Finished replies keep their steps, folded above the answer (renderMessageSteps).
+ * A subagent (agent_task, lib/subagents.cjs) is a group in the steps: its own steps nest under the
+ * step of its call, live and after the reply is finished.
  */
 import { renderMarkdown } from './markdown.js';
-import { toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos } from './domain.mjs';
+import { toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos, normalizeMetrics, metricsLabel, AGENT_KINDS } from './domain.mjs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // A running command's output kept on screen (the end of it).
@@ -17,6 +19,9 @@ const MAX_LIVE_TEXT = 1024 * 1024;
 const FOLLOW_PX = 48;
 const STATE_TEXT = { running: 'running', approval: 'waiting for approval', ok: 'done', error: 'failed', stopped: 'stopped' };
 const ICON_PATHS = { ok: 'm5 12.5 4.5 4.5L19 7.5', error: 'M7 7l10 10M17 7 7 17', stopped: 'M8 8h8v8H8z' };
+const AGENT_STATUS_TEXT = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' };
+const MAX_AGENT_DESCRIPTION = 80;
+const MAX_AGENT_ERROR = 300;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -64,6 +69,18 @@ export function replyReasoning(reply) {
 }
 function stepFor(reply, callId) {
   return reply.items.find((item) => item.type === 'tool' && item.callId === callId) || null;
+}
+/** A subagent while it works: shaped like a reply, so its own progress events apply to it the same way. */
+function createAgent() {
+  return {
+    description: '', kind: 'general', status: 'running', metrics: null, rounds: 0, error: '',
+    phase: 'thinking', activity: null, items: [], current: null, reasoningDone: '', reasoningRound: '',
+  };
+}
+// Subagents of the reply that are still at work (queued or running).
+function workingAgents(reply) {
+  return reply.items.filter((item) => item.type === 'tool' && item.agent && item.state !== 'ok' && item.state !== 'error'
+    && (item.agent.status === 'queued' || item.agent.status === 'running'));
 }
 
 /**
@@ -149,6 +166,31 @@ export function applyProgress(reply, event) {
       reply.phase = 'retrying';
       reply.activity = null;
       return { kind: 'status' };
+    case 'subagent': {
+      // The subagent of the agent_task step `callId`: how it is doing, or one of its own progress
+      // events (its callIds are its own). Subagents never nest, and changes are the reply's.
+      const step = stepFor(reply, event.callId);
+      if (!step) return null;
+      const nested = event.event && typeof event.event === 'object' && !Array.isArray(event.event) ? event.event : null;
+      if (nested) {
+        if (nested.phase === 'subagent' || nested.phase === 'changes') return null;
+        const agent = step.agent || createAgent();
+        if (!applyProgress(agent, nested)) return null;
+        step.agent = agent;
+        return { kind: 'agent', item: step };
+      }
+      if (!Object.hasOwn(AGENT_STATUS_TEXT, String(event.status))) return null;
+      if (!step.agent) step.agent = createAgent();
+      const agent = step.agent;
+      agent.status = event.status;
+      if (typeof event.description === 'string' && event.description.trim()) agent.description = event.description.trim().slice(0, MAX_AGENT_DESCRIPTION);
+      if (AGENT_KINDS.includes(event.kind)) agent.kind = event.kind;
+      const metrics = normalizeMetrics(event.metrics);
+      if (metrics) agent.metrics = metrics;
+      if (Number.isSafeInteger(event.rounds) && event.rounds >= 0) agent.rounds = event.rounds;
+      if (typeof event.error === 'string') agent.error = event.error.slice(0, MAX_AGENT_ERROR);
+      return { kind: 'agent', item: step };
+    }
     case 'changes': {
       // The files the reply changed so far (kept for review and undo, also when it is stopped);
       // null when it changed every one of them back.
@@ -175,6 +217,11 @@ export function statusText(reply) {
     const progress = Number.isFinite(reply.progress) && reply.progress > 0 ? ` ${reply.progress}%` : '';
     return `Generating ${what}${progress}…`;
   }
+  // Subagents at work: a call of theirs waiting for approval first, then how many run.
+  const agents = reply.phase === 'tool' || reply.phase === 'working' ? workingAgents(reply) : [];
+  const asking = agents.find((item) => item.agent.phase === 'approval');
+  if (asking) return `Waiting for your approval · Subagent: ${asking.agent.description || asking.title}`;
+  if (agents.length) return agents.length === 1 ? 'Running a subagent…' : `Running ${agents.length} subagents…`;
   const activity = reply.activity;
   switch (reply.phase) {
     case 'approval':
@@ -219,8 +266,48 @@ function stepRow(step) {
     element('span', 'sr-only', `, ${STATE_TEXT[step.state] || ''}`));
   return row;
 }
+// "Done · explore · 3.5k in · 109 out · $0.00072"
+function agentMeta(agent) {
+  return [AGENT_STATUS_TEXT[agent.status] || '', AGENT_KINDS.includes(agent.kind) ? agent.kind : '', metricsLabel(agent.metrics)]
+    .filter(Boolean).join(' · ');
+}
+/** What a subagent did so far, in order: what it said as notes, its tool calls as steps. */
+function agentItems(agent) {
+  const list = element('div', 'reply-agent-items');
+  for (const item of agent.items) {
+    if (item.type !== 'text') {
+      list.append(liveStepNode(item));
+    } else if (item.text.trim()) {
+      const note = element('div', 'reply-note md');
+      note.append(renderMarkdown(item.text));
+      list.append(note);
+    }
+  }
+  if (!list.childElementCount && (agent.status === 'queued' || agent.status === 'running')) {
+    list.append(element('div', 'reply-agent-empty', agent.status === 'queued' ? 'Waiting for a free slot…' : 'Starting…'));
+  }
+  if (agent.error && (agent.status === 'failed' || agent.status === 'stopped')) list.append(element('div', 'reply-step-error', agent.error));
+  return list;
+}
+/**
+ * A subagent at work: a group titled with its call, open unless the user folded it, with its
+ * status and its own steps under it.
+ */
+function liveAgentNode(step) {
+  const node = element('div', 'reply-step reply-agent');
+  node.dataset.state = step.state;
+  const group = element('details', 'reply-agent-group');
+  group.open = step.agentOpen !== false;
+  group.addEventListener('toggle', () => { step.agentOpen = group.open; });
+  const summary = element('summary', 'reply-agent-summary');
+  summary.append(stepRow(step), element('span', 'reply-agent-meta', agentMeta(step.agent)));
+  group.append(summary, agentItems(step.agent));
+  node.append(group);
+  return node;
+}
 /** A step of a reply in progress: its title with a spinner, then its output as it arrives. */
 function liveStepNode(step) {
+  if (step.agent) return liveAgentNode(step);
   const node = element('div', 'reply-step');
   node.dataset.state = step.state;
   node.append(stepRow(step));
@@ -258,9 +345,11 @@ export function renderTodoList(todos) {
 export function renderLiveReply(reply) {
   // The bubble it replaces never draws again.
   if (reply.view?.frame) window.cancelAnimationFrame(reply.view.frame);
+  if (reply.view?.agentFrame) window.cancelAnimationFrame(reply.view.agentFrame);
   const bubble = element('div', 'chat-bubble assistant live-reply');
   bubble.dataset.requestId = reply.requestId;
-  const view = { bubble, nodes: new Map(), pending: new Set(), frame: 0 };
+  // `agents`: subagent groups to redraw in the next frame (agentFrame).
+  const view = { bubble, nodes: new Map(), pending: new Set(), frame: 0, agents: new Set(), agentFrame: 0 };
   if (reply.kind === 'chat') {
     view.reasoning = element('details', 'msg-reasoning live-reasoning');
     view.reasoning.append(element('summary', 'msg-reasoning-label', 'Thinking'));
@@ -306,6 +395,22 @@ function drawPending(view, container) {
   follow(container, stick);
 }
 
+// Subagent groups that changed, redrawn once per frame: their status line and their steps.
+function drawAgents(view, container) {
+  view.agentFrame = 0;
+  if (!view.bubble.isConnected) return;
+  const stick = nearBottom(container);
+  for (const step of view.agents) {
+    const node = view.nodes.get(step);
+    if (!node || !step.agent) continue;
+    const meta = node.querySelector('.reply-agent-meta');
+    if (meta) meta.textContent = agentMeta(step.agent);
+    node.querySelector('.reply-agent-items')?.replaceWith(agentItems(step.agent));
+  }
+  view.agents.clear();
+  follow(container, stick);
+}
+
 /**
  * Brings the live bubble up to date after applyProgress. Returns false when the bubble is not on
  * screen (the caller renders the chat again, or not at all for a task in the background).
@@ -330,6 +435,17 @@ export function patchReply(reply, change, container) {
     if (node) {
       node.dataset.state = change.item.state;
       node.querySelector('.reply-step-row')?.replaceWith(stepRow(change.item));
+    }
+  } else if (change.kind === 'agent') {
+    // The step became a subagent's group: drawn as one now; after that its insides once per frame.
+    const node = view.nodes.get(change.item);
+    if (node && !node.classList.contains('reply-agent')) {
+      const group = liveAgentNode(change.item);
+      view.nodes.set(change.item, group);
+      node.replaceWith(group);
+    } else if (node) {
+      view.agents.add(change.item);
+      if (!view.agentFrame) view.agentFrame = window.requestAnimationFrame(() => drawAgents(view, container));
     }
   } else if (change.kind === 'output') {
     const node = view.nodes.get(change.item);
@@ -357,6 +473,18 @@ export function tickReply(reply) {
   view.status.textContent = statusText(reply);
 }
 
+// A subagent of a stopped reply, as kept with its step: one still at work was stopped with it.
+function stoppedAgent(agent) {
+  const steps = agent.items.map((item) => (item.type === 'text'
+    ? { type: 'note', text: item.text }
+    : {
+      type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool,
+      ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
+    }));
+  const status = agent.status === 'queued' || agent.status === 'running' ? 'stopped' : agent.status;
+  return { kind: agent.kind, status, steps, ...(agent.metrics ? { metrics: agent.metrics } : {}), ...(agent.rounds ? { rounds: agent.rounds } : {}) };
+}
+
 /**
  * What a stopped reply leaves behind: the text written so far as the answer, the rest as steps
  * (a call that was still running is marked stopped). Null when nothing was written or done.
@@ -372,12 +500,31 @@ export function partialReply(reply) {
     : {
       type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool, output: item.output,
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
+      ...(item.agent ? { agent: stoppedAgent(item.agent) } : {}),
     })));
   const reasoning = replyReasoning(reply);
   const changes = reply.changes || null;
   const todos = normalizeTodos(reply.todos);
   if (!text && !steps.length && !reasoning && !changes && !todos.length) return null;
   return { text, steps, reasoning, changes, todos };
+}
+
+/**
+ * A finished subagent's step: folded, with how it ended and what it used, and its own steps drawn
+ * like the reply's (they never hold another subagent: normalizeSteps drops those).
+ */
+function finishedAgentNode(step) {
+  const agent = step.agent;
+  const state = step.stopped || agent.status === 'stopped' ? 'stopped' : step.ok ? 'ok' : 'error';
+  const node = element('details', 'reply-step reply-agent');
+  node.dataset.state = state;
+  const head = element('summary', 'reply-step-summary');
+  head.append(stepRow({ ...step, state }), element('span', 'reply-agent-meta', agentMeta(agent)));
+  const list = renderMessageSteps(agent.steps).querySelector('.msg-steps-list') || element('div', 'msg-steps-list');
+  list.classList.add('reply-agent-items');
+  if (!step.ok && step.preview) list.append(element('div', 'reply-step-error', step.preview));
+  node.append(head, list);
+  return node;
 }
 
 /** A finished reply's steps, folded above its answer ("4 steps · Read 3 files · Ran a command"). */
@@ -393,6 +540,10 @@ export function renderMessageSteps(value) {
       const note = element('div', 'reply-note md');
       note.append(renderMarkdown(step.text));
       list.append(note);
+      continue;
+    }
+    if (step.agent) {
+      list.append(finishedAgentNode(step));
       continue;
     }
     const state = step.stopped ? 'stopped' : step.ok ? 'ok' : 'error';

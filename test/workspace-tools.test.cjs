@@ -51,7 +51,10 @@ test('an open folder offers six tools; reads are read-only, writes and commands 
     assert.ok(definition.function.description.length <= 1024);
   }
   assert.deepEqual(tools.resolve('workspace_read'), { serverId: SERVER_ID, toolName: 'read_file', readOnly: true });
-  assert.deepEqual(tools.resolve('workspace_write'), { serverId: SERVER_ID, toolName: 'write_file', readOnly: false });
+  const { alwaysAsk, ...write } = tools.resolve('workspace_write');
+  assert.deepEqual(write, { serverId: SERVER_ID, toolName: 'write_file', readOnly: false });
+  // Only the hooks settings always ask (test/hooks.test.cjs); other files follow the permission.
+  assert.equal(alwaysAsk({ path: 'notes.md' }), '');
   assert.equal(tools.resolve('workspace_run').readOnly, false);
   assert.equal(tools.resolve('mcp_other_tool'), null);
   // The model learns the folder name, never the full path on disk.
@@ -117,7 +120,7 @@ test('write_file creates files and folders, replaces with a backup, and refuses 
   assert.equal(fs.readFileSync(path.join(root, 'docs/notes/todo.md'), 'utf8'), '- ship\n');
   assert.match((await tools.call('write_file', { path: 'README.md', content: '# New\n' })).text, /^Replaced README\.md \(6 bytes\)/);
   assert.equal(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), '# New\n');
-  const backups = fs.readdirSync(path.join(root, '.cache', 'editor-backups'));
+  const backups = fs.readdirSync(path.join(root, '.cache', 'editor-backups')).filter((name) => name.endsWith('.bak'));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(root, '.cache', 'editor-backups', backups[0]), 'utf8'), '# Demo\nHello World\n');
   assert.match((await tools.call('write_file', { path: 'README.md', content: '# New\n' })).text, /nothing changed/);
@@ -245,10 +248,42 @@ test('edit_file replaces exact text once, refuses missing or ambiguous text, and
   assert.equal(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), 'let a = 1;\nlet b = 2;\nexport { a, b };\n');
   await assert.rejects(tools.call('edit_file', { path: 'src/util.js', old_text: 'x', new_text: 'x' }), /the same/);
   await assert.rejects(tools.call('edit_file', { path: 'missing.js', old_text: 'a', new_text: 'b' }), { code: 'ENOENT' });
-  assert.equal(fs.readdirSync(path.join(root, '.cache', 'editor-backups')).length, 2);
+  assert.equal(fs.readdirSync(path.join(root, '.cache', 'editor-backups')).filter((name) => name.endsWith('.bak')).length, 2);
   // "$&" in the new text is inserted literally, not as a replacement pattern.
   await tools.call('edit_file', { path: 'src/util.js', old_text: 'export { a, b };', new_text: 'const price = "$&";' });
   assert.match(fs.readFileSync(path.join(root, 'src', 'util.js'), 'utf8'), /const price = "\$&";/);
+});
+
+test('edit_file matches what read_file showed in CRLF and CR files, and keeps their line breaks', async (t) => {
+  const { root, tools } = await openTools(t);
+  const file = (name) => fs.readFileSync(path.join(root, name), 'utf8');
+  fs.writeFileSync(path.join(root, 'win.txt'), 'one\r\ntwo\r\nthree\r\n');
+  // read_file shows "\n" only, so that is what the model copies.
+  assert.equal((await tools.call('read_file', { path: 'win.txt' })).text, 'win.txt (3 lines)\none\ntwo\nthree');
+  assert.equal((await tools.call('edit_file', { path: 'win.txt', old_text: 'two\nthree\n', new_text: 'TWO\n2.5\nTHREE\n' })).text,
+    'Edited win.txt (at line 2). The previous version was backed up in .cache/editor-backups.');
+  assert.equal(file('win.txt'), 'one\r\nTWO\r\n2.5\r\nTHREE\r\n');
+  // A one-line match still writes new lines in the file's own breaks.
+  await tools.call('edit_file', { path: 'win.txt', old_text: 'one', new_text: 'zero\none' });
+  assert.equal(file('win.txt'), 'zero\r\none\r\nTWO\r\n2.5\r\nTHREE\r\n');
+  fs.writeFileSync(path.join(root, 'mac.txt'), 'a\rb\rc\r');
+  assert.match((await tools.call('edit_file', { path: 'mac.txt', old_text: 'b\nc', new_text: 'B\nC' })).text, /at line 2/);
+  assert.equal(file('mac.txt'), 'a\rB\rC\r');
+  // Text that is not there is still not found, and LF files are untouched by any of this.
+  await assert.rejects(tools.call('edit_file', { path: 'win.txt', old_text: 'two\nfour', new_text: 'x' }), { code: 'NO_MATCH' });
+  await tools.call('edit_file', { path: 'README.md', old_text: '# Demo\nHello', new_text: '# Demo\r\nHi' });
+  assert.equal(file('README.md'), '# Demo\r\nHi World\n');
+});
+
+test('commands get a UTF-8 locale even when the app was started without one (from the Finder)', { skip: process.platform === 'win32' }, async (t) => {
+  const saved = Object.fromEntries(['LANG', 'LC_ALL', 'LC_CTYPE'].map((key) => [key, process.env[key]]));
+  t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  for (const key of Object.keys(saved)) delete process.env[key];
+  const { tools } = await openTools(t);
+  assert.equal((await tools.call('run_command', { command: 'printf "%s|%s" "$LANG" "${LC_ALL-unset}"' })).text, 'Exit code: 0\nstdout:\nen_US.UTF-8|unset');
+  process.env.LANG = 'de_DE.UTF-8';
+  process.env.LC_CTYPE = 'UTF-8';
+  assert.equal((await tools.call('run_command', { command: 'printf "%s|%s" "$LANG" "$LC_CTYPE"' })).text, 'Exit code: 0\nstdout:\nde_DE.UTF-8|UTF-8', 'a locale the app has is passed on');
 });
 
 test('run_command streams its output, honours timeout_seconds and stops with the reply', { skip: process.platform === 'win32' }, async (t) => {

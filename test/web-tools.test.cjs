@@ -131,6 +131,34 @@ test('long pages come in parts', async () => {
   assert.match((await web.call('open_page', { url: 'https://example.com/long', part: 9 })).text, /has only 3 parts/);
 });
 
+test('pages are decoded in the character set they declare, else as UTF-8', async () => {
+  const pages = {
+    // Content-Type charset (windows-1252: 0xe9 is é).
+    'https://example.com/latin': ['text/html; charset=windows-1252', Buffer.from('<title>Caf\xe9</title><p>cr\xe8me br\xfbl\xe9e</p>', 'latin1')],
+    // <meta charset> when the header has none.
+    'https://example.com/meta': ['text/html', Buffer.concat([Buffer.from('<meta charset="windows-1251"><p>'), Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]), Buffer.from('</p>')])],
+    // http-equiv Content-Type.
+    'https://example.com/equiv': ['text/html', Buffer.concat([
+      Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>'), Buffer.from([0x93, 0xfa, 0x96, 0x7b]), Buffer.from('</p>'),
+    ])],
+    // The header wins over the page; an unknown label and no label read as UTF-8.
+    'https://example.com/header-wins': ['text/html; charset=utf-8', Buffer.from('<meta charset="windows-1251"><p>naïve ✓</p>')],
+    'https://example.com/unknown': ['text/html; charset=x-not-a-charset', Buffer.from('<p>naïve ✓</p>')],
+    'https://example.com/plain': ['text/html', Buffer.from('<p>naïve ✓</p>')],
+  };
+  const fetchImpl = async (url) => new Response(pages[url][1], { status: 200, headers: { 'content-type': pages[url][0] } });
+  const web = createWebTools({ fetchImpl, lookup: async () => [{ address: '93.184.216.34' }] });
+  const read = async (url) => (await web.call('open_page', { url })).text;
+  const latin = await read('https://example.com/latin');
+  assert.match(latin, /^Café\n/);
+  assert.match(latin, /crème brûlée/);
+  assert.match(await read('https://example.com/meta'), /Привет/);
+  assert.match(await read('https://example.com/equiv'), /日本/);
+  for (const url of ['https://example.com/header-wins', 'https://example.com/unknown', 'https://example.com/plain']) {
+    assert.match(await read(url), /naïve ✓/, url);
+  }
+});
+
 test('JSON answers are passed through as they are', async () => {
   const { web } = tools({ 'https://api.example.com/v1/items': { body: '{"items":[1,2,3]}', headers: { 'content-type': 'application/json' } } });
   const { text } = await web.call('open_page', { url: 'https://api.example.com/v1/items' });

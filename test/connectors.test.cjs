@@ -173,6 +173,41 @@ test('test() records a clean failure when the provider rejects the token', async
   assert.equal(entry.lastError, result.message);
 });
 
+test('saveVerified() replaces the stored token only after the provider accepted the new one', async () => {
+  const NEW_TOKEN = 'ghp_newtokennewtokennewtokennewtoken';
+  let answer = () => { throw new TypeError('fetch failed'); };
+  const { connectors, calls } = makeConnectors({ safeStorage: ENCRYPTING_STORAGE, respond: () => answer() });
+  connectors.save({ id: 'github', token: TOKEN });
+  const storedHint = connectors.list().github.hint;
+  // Network failure, 5xx and a rejected token: the working connection stays exactly as it was.
+  for (const [respond, status] of [
+    [() => { throw new TypeError('fetch failed'); }, undefined],
+    [() => jsonResponse({ message: 'Server Error' }, { status: 502 }), 502],
+    [() => jsonResponse({ message: 'Bad credentials' }, { status: 401 }), 401],
+  ]) {
+    answer = respond;
+    const outcome = await connectors.saveVerified({ id: 'github', token: NEW_TOKEN });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.status, status);
+    assert.equal(connectors.list().github.hint, storedHint);
+    assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${NEW_TOKEN}`);
+  }
+  answer = () => jsonResponse({ login: 'octocat' });
+  assert.equal((await connectors.test({ id: 'github' })).ok, true);
+  assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${TOKEN}`, 'the old token is still the stored one');
+
+  assert.deepEqual(await connectors.saveVerified({ id: 'github', token: NEW_TOKEN }), {
+    ok: true, supported: true, status: 200, message: 'Connector token verified.',
+  });
+  const entry = connectors.list().github;
+  assert.equal(entry.hint, `••••${NEW_TOKEN.slice(-4)}`);
+  assert.equal(entry.lastStatus, 'ok');
+  await connectors.test({ id: 'github' });
+  assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${NEW_TOKEN}`);
+  assert.equal((await connectors.saveVerified({ id: 'docker-hub', token: NEW_TOKEN })).supported, false);
+  assert.equal(connectors.list()['docker-hub'], undefined);
+});
+
 test('test() reports unsupported connectors without calling the network', async () => {
   const { connectors, calls } = makeConnectors();
   connectors.save({ id: 'docker-hub', token: TOKEN });

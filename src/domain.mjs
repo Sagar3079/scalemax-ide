@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sandboxNetwork: true,
   // When a model publishes a context window, summarize old turns before they crowd it out.
   autoCompact: true,
+  // Automations fire while no window is open too (lib/automations.cjs; Preferences > Automations).
+  automationsInBackground: true,
   // The permission to return to after a plan is run (Plan is read-only, so it cannot carry it out).
   prePlanPermission: 'basic',
   // What the composer sends: chat, or an image / video generation with the chosen model.
@@ -188,7 +190,7 @@ export function normalizeSettings(value) {
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
   if (typeof own(value, 'projectNotes') === 'boolean') result.projectNotes = value.projectNotes;
-  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact']) {
+  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact', 'automationsInBackground']) {
     if (typeof own(value, key) === 'boolean') result[key] = value[key];
   }
   // Where "Run this plan" puts the permission back; never Plan itself, never unconsented Bypass.
@@ -197,6 +199,14 @@ export function normalizeSettings(value) {
   if (['chat', 'image', 'video'].includes(own(value, 'composerMode'))) result.composerMode = value.composerMode;
   for (const key of ['imageModel', 'videoModel']) {
     if (typeof own(value, key) === 'string' && MODEL_ID.test(value[key])) result[key] = value[key];
+  }
+  // Another chat model of the same provider for a kind of subagent (lib/subagents.cjs); without
+  // one a subagent uses the reply's own model.
+  const subagentModels = own(value, 'subagentModels');
+  if (isRecord(subagentModels)) {
+    const models = {};
+    for (const kind of AGENT_KINDS) if (typeof own(subagentModels, kind) === 'string' && MODEL_ID.test(subagentModels[kind])) models[kind] = subagentModels[kind];
+    if (Object.keys(models).length) result.subagentModels = models;
   }
   result.imageOptions = mediaOptions(own(value, 'imageOptions'), 'image');
   result.videoOptions = mediaOptions(own(value, 'videoOptions'), 'video');
@@ -317,25 +327,34 @@ export function taskTime(time, now = Date.now()) {
 // what a reply did (one call, several calls) and what it is doing right now.
 const TOOL_LABELS = {
   Workspace: {
-    list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder' },
-    read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file' },
-    search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project' },
-    write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file' },
-    edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file' },
-    run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command' },
+    list_files: { one: 'Listed a folder', many: (n) => `Listed ${n} folders`, doing: 'Looking through the folder', tried: (n) => (n === 1 ? 'Tried to list a folder' : `Tried to list ${n} folders`) },
+    read_file: { one: 'Read a file', many: (n) => `Read ${n} files`, doing: 'Reading a file', tried: (n) => (n === 1 ? 'Tried to read a file' : `Tried to read ${n} files`) },
+    search: { one: 'Searched the project', many: (n) => `Searched ${n} times`, doing: 'Searching the project', tried: (n) => (n === 1 ? 'Tried to search the project' : `Tried to search ${n} times`) },
+    write_file: { one: 'Wrote a file', many: (n) => `Wrote ${n} files`, doing: 'Writing a file', tried: (n) => (n === 1 ? 'Tried to write a file' : `Tried to write ${n} files`) },
+    edit_file: { one: 'Edited a file', many: (n) => `Made ${n} edits`, doing: 'Editing a file', tried: (n) => (n === 1 ? 'Tried to edit a file' : `Tried ${n} edits`) },
+    run_command: { one: 'Ran a command', many: (n) => `Ran ${n} commands`, doing: 'Running a command', tried: (n) => (n === 1 ? 'Tried to run a command' : `Tried to run ${n} commands`) },
   },
   Web: {
-    search: { one: 'Searched the web', many: (n) => `Searched the web ${n} times`, doing: 'Searching the web' },
-    open_page: { one: 'Read a web page', many: (n) => `Read ${n} web pages`, doing: 'Reading a web page' },
+    search: { one: 'Searched the web', many: (n) => `Searched the web ${n} times`, doing: 'Searching the web', tried: (n) => (n === 1 ? 'Tried to search the web' : `Tried to search the web ${n} times`) },
+    open_page: { one: 'Read a web page', many: (n) => `Read ${n} web pages`, doing: 'Reading a web page', tried: (n) => (n === 1 ? 'Tried to read a web page' : `Tried to read ${n} web pages`) },
   },
   Computer: {
-    read_clipboard: { one: 'Read the clipboard', many: (n) => `Read the clipboard ${n} times`, doing: 'Reading the clipboard' },
-    write_clipboard: { one: 'Copied to the clipboard', many: (n) => `Copied to the clipboard ${n} times`, doing: 'Copying to the clipboard' },
-    open: { one: 'Opened it in its app', many: (n) => `Opened ${n} things`, doing: 'Opening it in its app' },
-    reveal: { one: 'Showed it in the Finder', many: (n) => `Showed ${n} items in the Finder`, doing: 'Showing it in the Finder' },
+    read_clipboard: { one: 'Read the clipboard', many: (n) => `Read the clipboard ${n} times`, doing: 'Reading the clipboard', tried: (n) => (n === 1 ? 'Tried to read the clipboard' : `Tried to read the clipboard ${n} times`) },
+    write_clipboard: { one: 'Copied to the clipboard', many: (n) => `Copied to the clipboard ${n} times`, doing: 'Copying to the clipboard', tried: (n) => (n === 1 ? 'Tried to copy to the clipboard' : `Tried to copy to the clipboard ${n} times`) },
+    open: { one: 'Opened it in its app', many: (n) => `Opened ${n} things`, doing: 'Opening it in its app', tried: (n) => (n === 1 ? 'Tried to open it in its app' : `Tried to open ${n} things`) },
+    reveal: { one: 'Showed it in the Finder', many: (n) => `Showed ${n} items in the Finder`, doing: 'Showing it in the Finder', tried: (n) => (n === 1 ? 'Tried to show it in the Finder' : `Tried to show ${n} items in the Finder`) },
   },
   Todos: {
-    todo_write: { one: 'Updated the to-do list', many: (n) => `Updated the to-do list ${n} times`, doing: 'Updating the to-do list' },
+    todo_write: { one: 'Updated the to-do list', many: (n) => `Updated the to-do list ${n} times`, doing: 'Updating the to-do list', tried: (n) => (n === 1 ? 'Tried to update the to-do list' : `Tried to update the to-do list ${n} times`) },
+  },
+  // Work handed to a subagent (lib/subagents.cjs).
+  Agents: {
+    agent_task: { one: 'Ran a subagent', many: (n) => `Ran ${n} subagents`, doing: 'Running a subagent', tried: (n) => (n === 1 ? 'Tried to run a subagent' : `Tried to run ${n} subagents`) },
+  },
+  // The resources MCP servers offer (lib/mcp.cjs: mcp_list_resources, mcp_read_resource).
+  MCP: {
+    list_resources: { one: 'Listed MCP resources', many: (n) => `Listed MCP resources ${n} times`, doing: 'Listing MCP resources', tried: (n) => (n === 1 ? 'Tried to list MCP resources' : `Tried to list MCP resources ${n} times`) },
+    read_resource: { one: 'Read an MCP resource', many: (n) => `Read ${n} MCP resources`, doing: 'Reading an MCP resource', tried: (n) => (n === 1 ? 'Tried to read an MCP resource' : `Tried to read ${n} MCP resources`) },
   },
 };
 
@@ -364,7 +383,12 @@ export function toolCallGroups(calls) {
   return groups.map((group) => {
     const known = toolLabel(group.server, group.tool);
     const name = `${group.server ? `${group.server} · ` : ''}${group.tool}`;
-    const base = known ? (group.count === 1 ? known.one : known.many(group.count)) : `${name}${group.count > 1 ? ` ×${group.count}` : ''}`;
+    // The verb counts what worked ("Edited a file · 1 failed"); when nothing worked it says what
+    // was tried ("Tried 2 edits · failed"), never "Made 2 edits".
+    const done = group.count - group.failed;
+    const base = !known ? `${name}${group.count > 1 ? ` ×${group.count}` : ''}`
+      : done === 0 ? known.tried(group.count)
+        : done === 1 ? known.one : known.many(done);
     const failure = !group.failed ? '' : group.failed === group.count ? ' · failed' : ` · ${group.failed} failed`;
     const calls = `${group.count} call${group.count === 1 ? '' : 's'}${group.failed ? `, ${group.failed} failed` : ''}`;
     return { ...group, ok: group.failed === 0, label: `${base}${failure}`, title: `${name}: ${calls}` };
@@ -378,6 +402,13 @@ const MAX_STEP_TITLE = 160;
 const MAX_STEP_NOTE = 8192;
 const MAX_STEP_OUTPUT = 4096;
 const MAX_STEP_PREVIEW = 200;
+// A subagent's own steps, kept with the step of its call: small (no command output, shorter
+// notes, never another subagent).
+const MAX_AGENT_STEPS = 50;
+const MAX_AGENT_NOTE = 2000;
+const MAX_AGENT_ROUNDS = 1000;
+export const AGENT_KINDS = Object.freeze(['explore', 'general']);
+const AGENT_STATUSES = ['done', 'failed', 'stopped'];
 const MAX_USAGE_ROUNDS = 64;
 const MAX_TOKEN_VALUE = 1_000_000_000;
 const MAX_COST_MICRO_USD = Number.MAX_SAFE_INTEGER;
@@ -389,27 +420,46 @@ const MAX_COMPACTION_SOURCE_BYTES = 512 * 1024;
 const MAX_COMPACTION_TURN_BYTES = 64 * 1024;
 const COMPACTION_SUMMARY_TOKEN_RESERVE = 2_048;
 export const COMPACTION_TAIL_MESSAGES = 8;
-/** Steps as they are kept with a reply; anything malformed is dropped. */
-export function normalizeSteps(value) {
+/**
+ * Steps as they are kept with a reply; anything malformed is dropped. `nested`: a subagent's own
+ * steps (see normalizeAgent).
+ */
+export function normalizeSteps(value, { nested = false } = {}) {
   if (!Array.isArray(value)) return [];
   const steps = [];
   for (const step of value) {
-    if (steps.length >= MAX_STEPS) break;
+    if (steps.length >= (nested ? MAX_AGENT_STEPS : MAX_STEPS)) break;
     if (!isRecord(step)) continue;
     if (step.type === 'note' && typeof step.text === 'string' && step.text.trim()) {
-      steps.push({ type: 'note', text: step.text.trim().slice(0, MAX_STEP_NOTE) });
+      steps.push({ type: 'note', text: step.text.trim().slice(0, nested ? MAX_AGENT_NOTE : MAX_STEP_NOTE) });
     } else if (step.type === 'tool' && typeof step.title === 'string' && step.title.trim()) {
       const entry = { type: 'tool', title: step.title.replace(/\s+/g, ' ').trim().slice(0, MAX_STEP_TITLE), ok: step.ok === true };
       if (typeof step.server === 'string' && step.server) entry.server = step.server.slice(0, 64);
       if (typeof step.tool === 'string' && step.tool) entry.tool = step.tool.slice(0, 128);
       if (typeof step.preview === 'string' && step.preview) entry.preview = step.preview.slice(0, MAX_STEP_PREVIEW);
       // The end of a command's output: errors and summaries are printed last.
-      if (typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
+      if (!nested && typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
       if (step.stopped === true) entry.stopped = true;
+      const agent = nested ? null : normalizeAgent(step.agent, entry.ok);
+      if (agent) entry.agent = agent;
       steps.push(entry);
     }
   }
   return steps;
+}
+/** The subagent of an agent_task step (lib/subagents.cjs): its kind, how it ended, its steps and usage. */
+function normalizeAgent(value, ok) {
+  if (!isRecord(value)) return null;
+  const agent = {
+    kind: AGENT_KINDS.includes(own(value, 'kind')) ? value.kind : 'general',
+    status: AGENT_STATUSES.includes(own(value, 'status')) ? value.status : (ok ? 'done' : 'failed'),
+    steps: normalizeSteps(own(value, 'steps'), { nested: true }),
+  };
+  const metrics = normalizeMetrics(own(value, 'metrics'));
+  if (metrics) agent.metrics = metrics;
+  const rounds = own(value, 'rounds');
+  if (Number.isSafeInteger(rounds) && rounds >= 0 && rounds <= MAX_AGENT_ROUNDS) agent.rounds = rounds;
+  return agent;
 }
 
 // ---- Token usage, USD snapshots and compacted context -------------------------------------
@@ -699,8 +749,9 @@ export function taskMetricsLabel(task) {
     : totals.unavailablePrice ? 'Price unavailable' : '';
   return [tokens, price].filter(Boolean).join(' · ');
 }
-// A reply that ended before it was finished: 'stopped' by the user, or 'failed' on an error.
-export const INTERRUPTIONS = Object.freeze(['stopped', 'failed']);
+// A reply that ended before it was finished: 'stopped' by the user, 'failed' on an error, or
+// 'closed' when the window was closed or reloaded while it worked (src/app.js keepRunningReplies).
+export const INTERRUPTIONS = Object.freeze(['stopped', 'failed', 'closed']);
 const MAX_NOTE_STEPS = 20;
 /**
  * The conversation as the model gets it, one { role, content } per message. A reply that was
@@ -741,7 +792,9 @@ export function historyMessages(messages, { images = false, pictureNote = false 
         ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
       notes.push(message.interrupted === 'stopped'
         ? `the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.${steps}`
-        : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
+        : message.interrupted === 'closed'
+          ? `the app window was closed or reloaded while you were writing your previous reply, so it ends where the window went away.${steps}`
+          : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
     }
     if (undone.length) {
       const names = undone.slice(0, MAX_NOTE_STEPS).join(', ') + (undone.length > MAX_NOTE_STEPS ? ', …' : '');
@@ -873,7 +926,7 @@ export function normalizeTasks(value, now = Date.now()) {
       updatedAt: Math.max(createdAt, latestMessage, timestamp(own(task, 'updatedAt'), fallbackTime)),
       ...(folder ? { folder } : {}),
       ...(compaction && compaction.through < messages.length ? { compaction } : {}),
-      // The automation whose runs this task collects (src/scheduler.js).
+      // The automation whose runs this task collects (lib/automations.cjs).
       ...(validId(own(task, 'automationId')) ? { automationId: task.automationId } : {}),
     });
     ids.add(task.id);
@@ -882,7 +935,12 @@ export function normalizeTasks(value, now = Date.now()) {
   return result;
 }
 
-export function nextRunAt(automation, afterMs = Date.now()) {
+// The main process fires automations with a copy of this function (lib/automations.cjs), and
+// test/automations.test.cjs requires both to give identical results: change one, change the other.
+// `from`: the slot that just came due (lib/automations.cjs). An interval schedule steps from it rather
+// than from when the due run was noticed, so a run found by the 30 s poll does not push every later
+// run back; slots that passed meanwhile are skipped, never queued. Other schedules ignore it.
+export function nextRunAt(automation, afterMs = Date.now(), { from = null } = {}) {
   if (!isRecord(automation) || !SCHEDULES.includes(own(automation, 'schedule'))) {
     throw new RangeError(`Schedule must be one of ${SCHEDULES.join(', ')}.`);
   }
@@ -894,7 +952,9 @@ export function nextRunAt(automation, afterMs = Date.now()) {
     if (!integerIn(own(automation, 'intervalMinutes'), MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)) {
       throw new RangeError(`Interval schedules require intervalMinutes from ${MIN_INTERVAL_MINUTES} through ${MAX_INTERVAL_MINUTES}.`);
     }
-    return afterMs + automation.intervalMinutes * 60000;
+    const step = automation.intervalMinutes * 60000;
+    if (validTimestamp(from) && from <= afterMs) return from + (Math.floor((afterMs - from) / step) + 1) * step;
+    return afterMs + step;
   }
   if (schedule === 'once') {
     const runAt = own(automation, 'runAt');
@@ -1039,6 +1099,9 @@ export function normalizeAutomations(value, now = Date.now()) {
       // remembered their folder; it runs in the open folder until it is edited (src/app.js).
       ...(own(automation, 'folder') !== undefined ? { folder: normalizeTaskFolder(own(automation, 'folder')) } : {}),
       mode: MODE_IDS.includes(own(automation, 'mode')) ? automation.mode : null,
+      // When the user last made, edited, paused or resumed it: main keeps its own schedule state
+      // over an older copy from the window (lib/automations.cjs mergeAutomations).
+      ...(validTimestamp(own(automation, 'editedAt')) ? { editedAt: automation.editedAt } : {}),
       schemaVersion: 2,
     };
     if (interrupted && !normalized.lastError) {
