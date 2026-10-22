@@ -6,11 +6,13 @@ import {
   toolCallGroups, normalizeSteps, taskHistoryMessages, normalizeMetrics, normalizeCompaction, effectivePermission,
   normalizeTodos, normalizeMessageImages, openTodos,
   automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
-  INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS,
+  INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps, renderTodoList,
+  renderReplyCompanion, timedSteps,
 } from './reply-ui.js';
+import { renderMascot, mascotSpec, setMascotState, companionStateFor, taskMascotState, taskStateTag } from './mascot.js';
 import { bindComposerContext, takeComposerContext, renderMessageImages, mentionBlocks, composerBusy, picturesAllowed } from './context-ui.js';
 import { bindSlashUi, runSlashCommand } from './slash-ui.js';
 import { bindHooksUi, reviewProjectHooks } from './hooks-ui.js';
@@ -72,6 +74,15 @@ const UNSAVED_FILES = 'Save or close your unsaved files first.';
 const FOLDER_GONE = ['ENOENT', 'NOT_DIRECTORY'];
 // Recent folders offered by the chat's folder picker.
 const PICKER_RECENT = 4;
+// How long the companion under a reply that just ended shows how it ended (inks snapped into
+// register and happy eyes, or out of register on a failure) before it rests.
+const COMPANION_MOMENT_MS = 3000;
+// How the companion's caption names the way a finished reply ended.
+const REPLY_OUTCOMES = { stopped: 'stopped', failed: 'failed', closed: 'cut off' };
+// What a sidebar task row's mark says for each mini mascot state.
+const TASK_MOOD_LABELS = {
+  thinking: 'Working', working: 'Working', waiting: 'Waiting for you', done: 'New reply', error: 'Reply failed',
+};
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -154,6 +165,12 @@ function thoughtLabel(message) {
   return `Thought for ${elapsedText(Math.max(1000, message.thinkingMs))}`;
 }
 
+/** The newest message of a task when it is an assistant reply, else null. */
+function lastAssistant(task) {
+  const last = task?.messages?.[task.messages.length - 1];
+  return last?.role === 'assistant' ? last : null;
+}
+
 function normalizeMediaItems(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => isRecord(item) && /^m-[a-f0-9]{16}$/.test(item.id) && ['image', 'video'].includes(item.kind))
@@ -212,6 +229,11 @@ const app = {
   compactingTasks: new Set(),
   // Tasks whose reply finished while another task was on screen (a dot in the sidebar).
   unreadTasks: new Set(),
+  // The reply that just ended in each task (endReply): when, how long it took, and the message
+  // that holds it once it is in the task (appendMessage), for the companion's moment.
+  companionMoments: new Map(),
+  // The mini mascot state each sidebar task row shows (taskMascotState), by task id.
+  taskMoods: new Map(),
   replyTimer: 0,
   // Which task the transcript shows (renderChat keeps the scroll position within one task).
   renderedTaskId: null,
@@ -236,9 +258,12 @@ const app = {
   },
 
   async init() {
+    this.renderBrandMarks();
     window.addEventListener('error', (event) => this.showGlobalError(event.message || 'Unexpected error'));
     window.addEventListener('unhandledrejection', (event) =>
       this.showGlobalError(event.reason?.message || 'Unexpected error'));
+    // Mascots hold still while the window cannot be seen (mascot.css).
+    document.addEventListener('visibilitychange', () => document.body?.classList.toggle('mascots-paused', document.hidden === true));
     await this.loadState();
     await this.loadProvider();
     this.bindEvents();
@@ -382,6 +407,9 @@ const app = {
         if (message.role === 'assistant' && Number.isSafeInteger(message.thinkingMs) && message.thinkingMs >= 0) {
           normalized.thinkingMs = message.thinkingMs;
         }
+        // How long the reply took, from Send to its end.
+        const elapsedMs = message.role === 'assistant' ? normalizeElapsed(message.elapsedMs) : null;
+        if (elapsedMs !== null) normalized.elapsedMs = elapsedMs;
         if (message.role === 'assistant' && typeof message.reasoning === 'string' && message.reasoning.trim()) {
           normalized.reasoning = message.reasoning.slice(0, 65536);
         }
@@ -781,6 +809,37 @@ const app = {
     const next = open ?? list.hidden;
     list.hidden = !next;
     button.setAttribute('aria-expanded', String(next));
+    // The list opens in the top layer (a manual popover), so the Assistant page's scrolling and
+    // main's overflow never cut it off; placeModelPicker pins it to the button.
+    if (typeof list.showPopover === 'function' && list.hasAttribute('popover')) {
+      const shown = list.matches(':popover-open');
+      if (next && !shown) list.showPopover();
+      else if (!next && shown) list.hidePopover();
+    }
+    if (next) this.placeModelPicker();
+  },
+
+  // Under the button, or above it when there is more room there; never past the window, scrolling
+  // instead. Follows the button while the page scrolls or the window resizes, and closes once the
+  // button has left the window.
+  placeModelPicker() {
+    const list = $('#model-picker-list');
+    const button = $('#model-picker-button');
+    if (!list || !button || list.hidden || !list.matches?.(':popover-open')) return;
+    const rect = button.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight) { this.toggleModelPicker(false); return; }
+    const margin = 8;
+    const gap = 4;
+    const cap = 240;
+    for (const side of ['top', 'bottom', 'max-height']) list.style.removeProperty(side);
+    const below = window.innerHeight - rect.bottom - gap - margin;
+    const above = rect.top - gap - margin;
+    const down = Math.min(list.scrollHeight, cap) <= below || below >= above;
+    list.style.setProperty('max-height', `${Math.round(Math.max(96, Math.min(cap, down ? below : above)))}px`);
+    if (down) list.style.setProperty('top', `${Math.round(rect.bottom + gap)}px`);
+    else list.style.setProperty('bottom', `${Math.round(window.innerHeight - rect.top + gap)}px`);
+    list.style.setProperty('left', `${Math.round(rect.left)}px`);
+    list.style.setProperty('width', `${Math.round(rect.width)}px`);
   },
 
   async saveProvider() {
@@ -930,6 +989,8 @@ const app = {
     document.addEventListener('click', (event) => {
       if (!event.target.closest('#model-picker')) this.toggleModelPicker(false);
     });
+    document.addEventListener('scroll', () => this.placeModelPicker(), { capture: true, passive: true });
+    window.addEventListener('resize', () => this.placeModelPicker());
     $('#cancel-btn')?.addEventListener('click', () => this.cancelResponse());
   },
 
@@ -1444,6 +1505,19 @@ const app = {
       this.renderAutoCompactToggle();
       await this.persist('settings');
     });
+    // Preferences > Appearance: the companion (src/mascot.js). Listened for on the document, so
+    // the switch works whether it is a checkbox or a switch button, and whenever it is added.
+    const companionSwitch = async (event) => {
+      const toggle = event.target?.closest?.('#companion-toggle');
+      if (!toggle) return;
+      const checkbox = toggle.type === 'checkbox';
+      if ((event.type === 'change') !== checkbox) return;
+      this.settings.companion = checkbox ? toggle.checked === true : this.settings.companion === false;
+      this.renderCompanionToggle();
+      await this.persist('settings');
+    };
+    document.addEventListener('change', companionSwitch);
+    document.addEventListener('click', companionSwitch);
     $('#attach-btn')?.addEventListener('click', (event) => {
       event.preventDefault();
       void this.attachFile();
@@ -1688,20 +1762,81 @@ const app = {
     const title = task.messages.length ? task.title : 'New task';
     row.classList.toggle('is-draft', !task.messages.length);
     row.title = title;
-    row.append(element('span', 'task-title', title));
-    // A task that is working shows a spinner; one that finished while away, a dot.
-    const running = this.replies.has(task.id);
-    const unread = !running && this.unreadTasks.has(task.id);
-    if (running || unread) {
-      const status = element('span', `task-status ${running ? 'is-running' : 'is-unread'}`);
+    const titleNode = element('span', 'task-title', title);
+    // A task that is working shows a spinner; one that finished while away, a dot. With the
+    // companion on, a mini mascot prints in their place: working, waiting for you (an approval),
+    // done (registered) or failed. Idle tasks show their time.
+    const reply = this.replies.get(task.id) || null;
+    const unread = !reply && this.unreadTasks.has(task.id);
+    const mood = taskMascotState({ reply, unread, failed: lastAssistant(task)?.interrupted === 'failed' });
+    const before = this.taskMoods.get(task.id);
+    if (mood) this.taskMoods.set(task.id, mood);
+    else this.taskMoods.delete(task.id);
+    if (reply || unread) {
+      const status = element('span', `task-status ${reply ? 'is-running' : 'is-unread'}${mood ? ' has-mascot' : ''}`);
+      const label = TASK_MOOD_LABELS[mood] || (reply ? 'Working' : 'New reply');
       status.setAttribute('role', 'img');
-      status.setAttribute('aria-label', running ? 'Working' : 'New reply');
-      status.title = running ? 'Working' : 'New reply';
-      row.append(status);
+      status.setAttribute('aria-label', label);
+      status.title = label;
+      if (mood) {
+        status.dataset.mood = mood;
+        // A row drawn again in the same state does not replay its entrance (the snap into register).
+        status.append(renderMascot(mascotSpec({ state: mood, variant: 'mini', settled: before === undefined || before === mood })));
+      }
+      // The mark leads the row (the slot under the folder icon); the state prints on a second
+      // line: its tag, then how long the reply has run (ticking, tickTaskRows) or when it ended.
+      // The words stay when the companion is off; the status already names the state for
+      // screen readers, so the tag is not read twice.
+      const tag = taskStateTag(mood) || taskStateTag(reply ? 'working' : 'done');
+      const line = element('span', 'task-state-line');
+      const tagNode = element('span', 'sm-state-tag task-state-tag', tag.label);
+      tagNode.dataset.state = tag.state;
+      tagNode.setAttribute('aria-hidden', 'true');
+      const time = element('span', 'task-time task-state-time', reply
+        ? durationText(Math.max(0, Date.now() - reply.startedAt), { live: true }) : taskTime(task.updatedAt));
+      if (reply && Number.isFinite(reply.startedAt)) time.dataset.startedAt = String(reply.startedAt);
+      line.append(tagNode, time);
+      row.classList.add('has-state');
+      row.append(status, titleNode, line);
     } else {
-      row.append(element('span', 'task-time', taskTime(task.updatedAt)));
+      row.append(titleNode, element('span', 'task-time', taskTime(task.updatedAt)));
     }
     return row;
+  },
+
+  // A running reply changed what it is doing: its task row's mini mascot and label follow in place
+  // (the sidebar is not drawn again for progress events).
+  updateTaskMood(reply) {
+    const mood = taskMascotState({ reply });
+    if (!mood || this.taskMoods.get(reply.taskId) === mood) return;
+    this.taskMoods.set(reply.taskId, mood);
+    const escape = globalThis.CSS?.escape;
+    if (typeof escape !== 'function') return;
+    const row = document.querySelector(`.task-item[data-task-id="${escape(reply.taskId)}"]`);
+    const status = row?.querySelector('.task-status');
+    if (!status) return;
+    const mascot = status.querySelector('.mascot');
+    if (mascot) setMascotState(mascot, mood);
+    status.dataset.mood = mood;
+    const label = TASK_MOOD_LABELS[mood] || 'Working';
+    status.setAttribute('aria-label', label);
+    status.title = label;
+    // The printed tag on the row's second line follows too.
+    const tag = taskStateTag(mood);
+    const tagNode = row.querySelector('.task-state-tag');
+    if (tag && tagNode) {
+      tagNode.dataset.state = tag.state;
+      tagNode.textContent = tag.label;
+    }
+  },
+
+  // The running time on the sidebar rows of working tasks, each second with the reply's clock.
+  tickTaskRows() {
+    const now = Date.now();
+    for (const node of document.querySelectorAll('.task-state-time[data-started-at]')) {
+      const started = Number(node.dataset.startedAt);
+      if (Number.isFinite(started)) node.textContent = durationText(Math.max(0, now - started), { live: true });
+    }
   },
 
   // Folds a project in place, so keyboard focus stays on its button.
@@ -1720,6 +1855,7 @@ const app = {
   // (a reply finished, a step arrived) keeps the reader's place when they had scrolled up; a
   // task that was just opened starts at its end.
   renderChat({ toBottom = false } = {}) {
+    this.renderContextMeter();
     const container = $('#chat-messages');
     if (!container) return;
     const task = this.tasks.find((item) => item.id === this.currentTaskId);
@@ -1728,6 +1864,9 @@ const app = {
     const fromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const keepAt = !toBottom && sameTask && fromBottom > 48 ? container.scrollTop : null;
     this.renderedTaskId = this.currentTaskId;
+    const reply = this.currentReply();
+    // The companion rests under the newest reply when none is running (a running one has its own).
+    const companionAt = !reply && messages[messages.length - 1]?.role === 'assistant' ? messages.length - 1 : -1;
     container.replaceChildren(...messages.map((message, index) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
@@ -1789,6 +1928,7 @@ const app = {
         notice.setAttribute('role', 'note');
         bubble.append(notice);
       }
+      if (index === companionAt) bubble.append(this.renderCompanionMoment(task, message));
       // A reply that was stopped or failed can still carry billed usage, so the footer shows for
       // any assistant message with text or metrics.
       const usage = message.role === 'assistant' ? metricsLabel(message.metrics) : '';
@@ -1797,7 +1937,20 @@ const app = {
         if (usage) {
           const metric = element('span', 'msg-metrics', usage);
           metric.title = message.metrics?.rounds?.length > 1 ? `${usage} across ${message.metrics.rounds.length} model calls` : usage;
+          // How much of the model's context window the reply filled, when the model publishes one.
+          const share = contextShareLabel(message.metrics, this.contextWindowOf(message.metrics?.model));
+          if (share) {
+            metric.append(element('span', 'msg-context-share', ` · ${share}`));
+            metric.title = `${metric.title} · ${share} window`;
+          }
           footer.append(metric);
+        }
+        // How long the reply took.
+        const took = durationText(message.elapsedMs);
+        if (took) {
+          const duration = element('span', 'msg-duration', `took ${took}`);
+          duration.title = `This reply took ${took}, from Send to its end`;
+          footer.append(duration);
         }
         footer.append(element('span', 'msg-time', clock(message.time)));
         if (message.text) {
@@ -1815,12 +1968,74 @@ const app = {
       if (actions) bubble.append(actions);
       return bubble;
     }));
-    const reply = this.currentReply();
     if (reply) container.append(renderLiveReply(reply));
     container.scrollTop = keepAt === null ? container.scrollHeight : keepAt;
     // The welcome hero and starter controls are a first-run surface: once the
     // task has messages the view becomes a plain transcript.
     $('.sm-home-page')?.classList.toggle('has-transcript', messages.length > 0 || Boolean(reply));
+  },
+
+  // The composer's context meter, left of the model button: how full the model's context window
+  // was when the task's newest reply ended (taskContextShare), that reply's own part overprinted
+  // in the agent's pink. Hidden while the model publishes
+  // no window or nothing reported usage yet. renderChat (a reply ending included) and
+  // renderModelButton (catalog or model changes) keep it current.
+  renderContextMeter() {
+    const meter = $('#context-meter');
+    if (!meter) return;
+    const info = taskContextShare(this.currentTask(), (model) => this.contextWindowOf(model), this.provider?.model || '');
+    meter.hidden = !info;
+    if (!info) return;
+    const label = $('#context-meter-label');
+    if (label) label.textContent = info.label;
+    // The window filled so far in blue; the newest reply's own part overprinted in pink from where
+    // the reply before it left off (styles.css .sm-meter).
+    $('#context-meter-bar')?.style.setProperty('--sm-meter-value', String(info.percent / 100));
+    const part = $('#context-meter-reply');
+    if (part) {
+      const start = info.start ?? info.percent;
+      part.style.setProperty('--sm-meter-start', String(start / 100));
+      part.style.setProperty('--sm-meter-value', String((info.percent - start) / 100));
+    }
+    meter.classList.toggle('is-full', info.share >= 85);
+    meter.setAttribute('aria-valuenow', String(Math.round(info.percent)));
+    meter.setAttribute('aria-valuetext', `${info.label} window`);
+    meter.title = `${info.label} window when the last reply ended`;
+  },
+
+  /** The context window the catalog publishes for a model id, or null. */
+  contextWindowOf(model) {
+    if (typeof model !== 'string' || !model) return null;
+    const entry = (this.providerCatalog || []).find((item) => item?.id === model);
+    return Number.isSafeInteger(entry?.contextWindow) && entry.contextWindow > 0 ? entry.contextWindow : null;
+  },
+
+  /**
+   * The companion under the newest reply of the task on screen. Right after that reply ended it
+   * shows how (the inks snap into register with happy eyes, or stay out of register on a failure)
+   * for COMPANION_MOMENT_MS, then rests (idle); drawn again later, it is at rest. The caption says
+   * how the reply ended and how long it took ("done · 1m 12s").
+   */
+  renderCompanionMoment(task, message) {
+    const ended = REPLY_OUTCOMES[message.interrupted] || 'done';
+    const took = durationText(message.elapsedMs);
+    const caption = took ? `${ended} · ${took}` : ended;
+    const moment = this.companionMoments.get(task?.id);
+    const since = moment?.message === message ? Date.now() - moment.at : Infinity;
+    if (since >= COMPANION_MOMENT_MS) {
+      return renderReplyCompanion({ state: 'idle', outcome: ended.replace(' ', '-'), caption, settled: true });
+    }
+    const state = companionStateFor({ outcome: message.interrupted || 'done' });
+    // Its entrance plays once; a redraw within the moment shows the state without replaying it.
+    const row = renderReplyCompanion({ state, outcome: ended.replace(' ', '-'), caption, settled: moment.shown === true });
+    moment.shown = true;
+    const mascot = row.querySelector('.mascot');
+    window.setTimeout(() => {
+      if (!mascot?.isConnected) return;
+      setMascotState(mascot, 'idle');
+      row.dataset.state = 'idle';
+    }, COMPANION_MOMENT_MS - since);
+    return row;
   },
 
   // ---- Replies in progress (src/reply-ui.js): one per task, several tasks at once ----------
@@ -1843,7 +2058,13 @@ const app = {
     const reply = createReply({ taskId, requestId, thinking, ...extra });
     this.replies.set(taskId, reply);
     this.unreadTasks.delete(taskId);
-    if (!this.replyTimer) this.replyTimer = window.setInterval(() => tickReply(this.currentReply()), 1000);
+    this.companionMoments.delete(taskId);
+    if (!this.replyTimer) {
+      this.replyTimer = window.setInterval(() => {
+        tickReply(this.currentReply());
+        this.tickTaskRows();
+      }, 1000);
+    }
     this.renderReplyState();
     if (taskId === this.currentTaskId) this.renderChat();
     return reply;
@@ -1858,6 +2079,10 @@ const app = {
     this.replies.delete(taskId);
     if (reply.view?.frame) window.cancelAnimationFrame(reply.view.frame);
     reply.view = null;
+    // The reply that the next assistant message of this task holds (appendMessage): its time, and
+    // the companion's moment under it.
+    const now = Date.now();
+    this.companionMoments.set(taskId, { at: now, elapsedMs: Math.max(0, now - reply.startedAt), message: null, shown: false });
     if (!this.replies.size) {
       window.clearInterval(this.replyTimer);
       this.replyTimer = 0;
@@ -1883,6 +2108,8 @@ const app = {
       const reply = this.replyFor(event?.requestId);
       if (!reply || reply.kind !== 'chat') return;
       const change = applyProgress(reply, event);
+      // The task's row in the sidebar follows too, also for a task in the background.
+      if (change) this.updateTaskMood(reply);
       if (!change || reply.taskId !== this.currentTaskId) return;
       // The bubble was replaced (the chat was drawn again): patch the new one next time.
       if (!patchReply(reply, change, $('#chat-messages'))) this.renderChat();
@@ -1944,6 +2171,17 @@ const app = {
     if (changes) message.changes = changes;
     if (typeof extra.reasoning === 'string' && extra.reasoning.trim()) message.reasoning = extra.reasoning.slice(0, 65536);
     if (Number.isSafeInteger(extra.thinkingMs) && extra.thinkingMs >= 0) message.thinkingMs = extra.thinkingMs;
+    // The reply that just ended in this task (endReply) is this message: it keeps how long the
+    // reply took, and the companion shows its moment under it. A reply that ended without a message
+    // (nothing written) leaves the moment to the next reply.
+    const moment = role === 'assistant' ? this.companionMoments.get(taskId) : null;
+    if (moment && !moment.message && Date.now() - moment.at < 10_000) {
+      moment.message = message;
+      moment.at = Date.now();
+      message.elapsedMs = moment.elapsedMs;
+    }
+    const elapsedMs = role === 'assistant' ? normalizeElapsed(extra.elapsedMs) : null;
+    if (elapsedMs !== null) message.elapsedMs = elapsedMs;
     const metrics = role === 'assistant' ? normalizeMetrics(extra.metrics) : null;
     if (metrics) message.metrics = metrics;
     // The request ran in Plan permission: main refused every changing tool, so the reply is a
@@ -2297,7 +2535,8 @@ const app = {
     const notesPath = typeof notes?.path === 'string' && notes.path ? notes.path : '.scalemax/SCALEMAX.md';
     this.appendMessage('assistant', result.data.text, taskId, {
       tools: result.data.toolCalls,
-      steps: result.data.steps,
+      // main's steps with the running time the window measured for each call.
+      steps: timedSteps(result.data.steps, reply),
       changes: result.data.changes,
       reasoning: result.data.reasoning,
       metrics: result.data.metrics,
@@ -2492,6 +2731,7 @@ const app = {
     this.renderTemperatureValue();
     this.renderProjectNotesToggle();
     this.renderAutoCompactToggle();
+    this.renderCompanionToggle();
     renderCommandSettings(this);
     renderPermission(this);
     renderModelButton(this);
@@ -2506,6 +2746,31 @@ const app = {
   // context limit; explicit /compact remains available with this setting off.
   renderAutoCompactToggle() {
     $('#auto-compact-toggle')?.setAttribute('aria-checked', String(this.settings.autoCompact !== false));
+  },
+
+  // The sidebar and About marks are the companion printed still: idle, both inks in register,
+  // no motion (mascot.css .brand-mascot). The one-ink agent mark in index.html stays as the
+  // fallback until this runs.
+  renderBrandMarks() {
+    for (const mark of document.querySelectorAll('.brand-mark')) {
+      const size = mark.closest('.about-card') ? 48 : 28;
+      mark.classList.add('brand-mascot');
+      mark.replaceChildren(renderMascot(mascotSpec({ state: 'idle', variant: 'companion', settled: true, size })));
+    }
+  },
+
+  // Preferences > Appearance: off hides every mascot (body.companion-off, mascot.css); the status
+  // line, the sidebar marks and the step states still say everything they show.
+  renderCompanionToggle() {
+    const on = this.settings.companion !== false;
+    document.body?.classList?.toggle('companion-off', !on);
+    // The companion that greets on an empty task: idle, it only blinks and breathes.
+    const home = $('#home-companion');
+    if (home && !home.firstChild) home.append(renderMascot(mascotSpec({ state: 'idle', variant: 'companion' })));
+    const toggle = $('#companion-toggle');
+    if (!toggle) return;
+    if (toggle.type === 'checkbox') toggle.checked = on;
+    else toggle.setAttribute('aria-checked', String(on));
   },
 
   renderExperts() {

@@ -619,3 +619,95 @@ test('normalizeSettings keeps a model per kind of subagent, and nothing else und
   assert.equal('subagentModels' in normalizeSettings({ subagentModels: { explore: 42 } }), false);
   assert.equal('subagentModels' in normalizeSettings({ subagentModels: 'deepseek' }), false);
 });
+
+test('durations read as running times, live and finished', async () => {
+  const { durationText } = await import('../src/domain.mjs');
+  assert.equal(durationText(40), '<0.1s');
+  assert.equal(durationText(420), '0.4s');
+  assert.equal(durationText(9_990), '9.9s');
+  assert.equal(durationText(42_700), '42s');
+  assert.equal(durationText(63_000), '1m 3s');
+  assert.equal(durationText(2 * 3600_000 + 5 * 60_000), '2h 5m');
+  assert.equal(durationText(420, { live: true }), '0s');
+  assert.equal(durationText(72_000, { live: true }), '1m 12s');
+  for (const bad of [undefined, null, -1, NaN, Infinity, '12']) assert.equal(durationText(bad), '');
+});
+
+test('a reply\'s share of the context window comes from its last model call', async () => {
+  const { contextShare, contextShareLabel } = await import('../src/domain.mjs');
+  const single = { model: 'm', usage: { inputTokens: 30_000, outputTokens: 8_000 }, costStatus: 'unpriced' };
+  assert.equal(contextShare(single, 100_000), 38);
+  assert.equal(contextShareLabel(single, 100_000), '38% of context');
+  // Several calls: only the last one of the reply's own model counts (its context at the end).
+  const rounds = {
+    model: 'm', usage: { inputTokens: 90_000, outputTokens: 3_000 },
+    rounds: [
+      { model: 'm', usage: { inputTokens: 20_000, outputTokens: 1_000 } },
+      { model: 'm', usage: { inputTokens: 40_000, outputTokens: 2_000 } },
+      { model: 'small', usage: { inputTokens: 30_000, outputTokens: 0 } },
+    ],
+  };
+  assert.equal(contextShareLabel(rounds, 200_000), '21% of context');
+  assert.equal(contextShareLabel({ usage: { totalTokens: 500 } }, 200_000), '<1% of context');
+  assert.equal(contextShareLabel({ usage: { totalTokens: 0 } }, 200_000), '0% of context');
+  // Skipped without a published window or usage.
+  for (const window of [undefined, null, 0, -5, 1.5, '100000']) assert.equal(contextShareLabel(single, window), '');
+  assert.equal(contextShareLabel({ model: 'm', costStatus: 'unreported' }, 100_000), '');
+  assert.equal(contextShareLabel(null, 100_000), '');
+  assert.equal(contextShare({ model: 'm', rounds: [{ model: 'm' }] }, 100_000), null);
+});
+
+test('the composer\'s context meter reads the task\'s newest reply that reported usage', async () => {
+  const { taskContextShare } = await import('../src/domain.mjs');
+  const windows = { big: 200_000, small: 100_000 };
+  const windowOf = (model) => windows[model] ?? null;
+  const reply = (model, input, output, time) => ({ role: 'assistant', text: 'ok', time, metrics: { model, usage: { inputTokens: input, outputTokens: output }, costStatus: 'unpriced' } });
+  const task = { messages: [
+    { role: 'user', text: 'a', time: 1 },
+    reply('big', 10_000, 2_000, 2),
+    { role: 'user', text: 'b', time: 3 },
+    reply('small', 30_000, 8_000, 4),
+    { role: 'user', text: 'c', time: 5 },
+  ] };
+  // The reply before ran on another model, so there is no earlier mark to overprint from.
+  assert.deepEqual(taskContextShare(task, windowOf), { share: 38, percent: 38, label: '38% of context', start: null });
+  // Same model: the meter starts the newest reply's own part where the one before left off.
+  task.messages.push(reply('small', 40_000, 2_000, 4.5));
+  assert.deepEqual(taskContextShare(task, windowOf), { share: 42, percent: 42, label: '42% of context', start: 38 });
+  task.messages.pop();
+  // A newer reply without usage is skipped; one whose model publishes no window hides the meter.
+  task.messages.push({ role: 'assistant', text: 'no usage', time: 6 });
+  assert.equal(taskContextShare(task, windowOf).label, '38% of context');
+  task.messages.push(reply('unknown', 1_000, 0, 7));
+  assert.equal(taskContextShare(task, windowOf), null);
+  // Metrics without a model id use the fallback model (the one picked for the chat).
+  task.messages.push({ role: 'assistant', text: 'x', time: 8, metrics: { usage: { totalTokens: 50_000 }, costStatus: 'unpriced' } });
+  assert.equal(taskContextShare(task, windowOf, 'big').label, '25% of context');
+  assert.equal(taskContextShare(task, windowOf, ''), null);
+  // Over the window clamps the bar, not the words.
+  assert.deepEqual(taskContextShare({ messages: [reply('small', 120_000, 0, 1)] }, windowOf), { share: 120, percent: 100, label: '120% of context', start: null });
+  assert.equal(taskContextShare({ messages: [reply('small', 120_000, 0, 1), reply('small', 50_000, 0, 2)] }, windowOf).start, 50, 'start never passes the end');
+  // Compacted after that reply: its figure is stale, so nothing shows until the next reply.
+  const compacted = { messages: [reply('big', 100_000, 0, 10), { role: 'user', text: 'd', time: 11 }], compaction: { summary: 'sum', through: 1, time: 12 } };
+  assert.equal(taskContextShare(compacted, windowOf), null);
+  compacted.messages.push(reply('big', 20_000, 0, 13));
+  assert.equal(taskContextShare(compacted, windowOf).label, '10% of context');
+  assert.equal(taskContextShare(compacted, windowOf).start, null, 'nothing to compare with across a compaction');
+  assert.equal(taskContextShare({ messages: [reply('big', 100_000, 0)], compaction: { summary: 'sum', through: 1 } }, windowOf), null);
+  // No usage yet, odd input, a throwing lookup.
+  for (const bad of [null, undefined, {}, { messages: 'x' }, { messages: [{ role: 'user', text: 'hi' }] }]) assert.equal(taskContextShare(bad, windowOf), null);
+  assert.equal(taskContextShare(task, null), null);
+  assert.equal(taskContextShare({ messages: [reply('big', 1, 0, 1)] }, () => { throw new Error('no'); }), null);
+});
+
+test('the companion is on unless turned off, and a reply keeps how long it took', () => {
+  assert.equal(normalizeSettings({}).companion, true);
+  assert.equal(normalizeSettings({ companion: false }).companion, false);
+  assert.equal(normalizeSettings({ companion: 'no' }).companion, true);
+  const [task] = normalizeTasks([{ id: 'task-1', title: 'T', messages: [
+    { role: 'user', text: 'go', elapsedMs: 5 },
+    { role: 'assistant', text: 'done', elapsedMs: 72_000 },
+    { role: 'assistant', text: 'odd', elapsedMs: -3 },
+  ] }]);
+  assert.deepEqual(task.messages.map((message) => message.elapsedMs), [undefined, 72_000, undefined]);
+});

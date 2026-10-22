@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  avatarSpec, renderAvatar, AVATAR_STYLES, AVATAR_COLORS, AVATAR_ACCESSORY_PRESETS, ACCESSORY_IDS,
+  avatarSpec, renderAvatar, risoPlates, risoDuotone, AVATAR_STYLES, AVATAR_COLORS, AVATAR_ACCESSORY_PRESETS, ACCESSORY_IDS,
 } from '../src/avatars.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -242,6 +242,20 @@ test('renderAvatar creates namespaced nodes with setAttribute only', () => {
     assert.equal(created.length, flatten(spec.shapes).length + 1, 'one node per shape');
     const torso = created.find((node) => node.attributes.get('class') === 'avatar-torso');
     assert.equal(torso.attributes.get('fill'), '#ec4899');
+    // The two-ink reprint rides along as CSS custom properties; the drawing keeps its colours.
+    assert.equal(torso.styles.get('--riso-fill'), risoDuotone('#ec4899'));
+    assert.equal(torso.styles.get('--riso-fill-dark'), risoDuotone('#ec4899', 'dark'));
+    for (const node of created) {
+      for (const [attr, prop] of [['fill', '--riso-fill'], ['stroke', '--riso-stroke']]) {
+        const value = node.attributes.get(attr);
+        if (typeof value === 'string' && value.startsWith('#')) {
+          assert.match(node.styles.get(prop), /^#[0-9a-f]{6}$/, `${attr} ${value} is reprinted`);
+          assert.match(node.styles.get(`${prop}-dark`), /^#[0-9a-f]{6}$/);
+        } else {
+          assert.equal(node.styles.has(prop), false, `${attr} ${value} is left alone`);
+        }
+      }
+    }
 
     assert.equal(renderAvatar('data-analyst').attributes.get('width'), '32', 'default size');
     assert.equal(renderAvatar('data-analyst', { size: 42 }).attributes.get('width'), '42');
@@ -252,6 +266,58 @@ test('renderAvatar creates namespaced nodes with setAttribute only', () => {
   } finally {
     if (hadDocument) globalThis.document = previous;
     else delete globalThis.document;
+  }
+});
+
+test('the two-ink duotone prints skin light pink, dark hair navy-purple and clothes blue or pink by hue', () => {
+  const rgb = (hex) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  const luma = (hex) => { const [r, g, b] = rgb(hex); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
+  // White is unprinted paper on either press.
+  assert.deepEqual(risoPlates('#ffffff'), { blue: 0, pink: 0 });
+  assert.equal(risoDuotone('#fff'), '#f3f4f1');
+  assert.equal(risoDuotone('#ffffff', 'dark'), '#d4d6d0');
+  // Skin: mostly the pink plate, light.
+  for (const skin of ['#ffe3cc', '#f6cba4', '#e8b088', '#d09565']) {
+    const plates = risoPlates(skin);
+    assert.ok(plates.pink > plates.blue && plates.pink >= 0.15 && plates.pink <= 0.45, `${skin} ${JSON.stringify(plates)}`);
+    assert.ok(luma(risoDuotone(skin)) > 0.7, `${skin} stays light`);
+    const [r, , b] = rgb(risoDuotone(skin));
+    assert.ok(r > b, `${skin} reads pink`);
+  }
+  // Dark hair and outlines take both plates: a dark blue-purple, blue over red.
+  for (const dark of ['#2b2227', '#2a2530']) {
+    const plates = risoPlates(dark);
+    assert.ok(plates.blue > 0.9 && plates.pink > 0.6, `${dark} ${JSON.stringify(plates)}`);
+    const [r, , b] = rgb(risoDuotone(dark));
+    assert.ok(luma(risoDuotone(dark)) < 0.3 && b > r, `${dark} prints navy`);
+  }
+  // Clothes by hue: cool colours on the blue plate, warm ones on the pink plate.
+  for (const cool of ['#3b82f6', '#06b6d4', '#10b981']) {
+    const plates = risoPlates(cool);
+    assert.ok(plates.blue >= 0.7 && plates.pink === 0, `${cool} ${JSON.stringify(plates)}`);
+  }
+  for (const warm of ['#ec4899', '#ef4444', '#f59e0b']) {
+    const plates = risoPlates(warm);
+    assert.ok(plates.pink >= 0.6 && plates.pink > plates.blue * 3, `${warm} ${JSON.stringify(plates)}`);
+  }
+  // Violets overprint both.
+  const violet = risoPlates('#a855f7');
+  assert.ok(violet.blue > 0.3 && violet.pink > 0.3);
+  // Every reprint is a colour the press can make: never past the paper.
+  for (const color of [...AVATAR_COLORS, '#2a2530', '#ffe3cc', '#dcb462', '#8d929c']) {
+    for (const theme of ['light', 'dark']) {
+      const out = risoDuotone(color, theme);
+      assert.match(out, /^#[0-9a-f]{6}$/);
+      const paper = theme === 'dark' ? [212, 214, 208] : [243, 244, 241];
+      rgb(out).forEach((channel, i) => assert.ok(channel <= paper[i], `${color} ${theme}`));
+    }
+  }
+  // On deep stock dark parts print lighter, so they stay readable on the dark cards.
+  assert.ok(luma(risoDuotone('#2b2227', 'dark')) > luma(risoDuotone('#2b2227')) + 0.05);
+  // Not a hex colour: no plates, passed through.
+  for (const odd of ['none', 'currentColor', '', '#12', '#12345', 'red', null, undefined, 7]) {
+    assert.equal(risoPlates(odd), null);
+    assert.equal(risoDuotone(odd), odd);
   }
 });
 

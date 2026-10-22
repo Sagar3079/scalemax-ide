@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="specs.css" />
   <link rel="stylesheet" href="gitflow.css" />
   <link rel="stylesheet" href="slash.css" />
+  <link rel="stylesheet" href="mascot.css" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -103,7 +104,7 @@
 
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
-            <span id="chat-crumb" class="eyebrow chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
+            <span id="chat-crumb" class="chat-crumb">Workspace <span aria-hidden="true">/</span> Chat</span>
             <!-- Three controls, so the toolbar stays one line in the narrowest window. -->
             <div class="button-row chat-actions">
               <button id="sessions-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="sessions-dialog" title="Recent sessions (⌘⇧O)">Recent sessions</button>
@@ -132,6 +133,8 @@
           <div class="sm-home-page">
             <header class="sm-home-header">
               <div class="sm-home-header__title-wrap">
+                <!-- The companion greets on an empty task (src/mascot.js; Preferences turns it off). -->
+                <span id="home-companion" class="home-companion" aria-hidden="true"></span>
                 <h1 id="welcome-title" class="sm-home-header__title">What will you work on next?</h1>
                 <p class="sm-home-header__slogan">Think it through. Build it out. Work with AI on your terms.</p>
               </div>
@@ -227,14 +230,19 @@
                   <span id="context-chips" class="context-chips"></span>
                   <span id="active-settings-indicator" class="status-text active-settings-indicator" hidden></span>
                   <div class="button-row send-actions">
+                    <!-- How full the model's context window is for this task (app.js renderContextMeter). -->
+                    <span id="context-meter" class="context-meter" role="meter" aria-label="Context window used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+                      <span id="context-meter-label" class="context-meter-label"></span>
+                      <span id="context-meter-bar" class="sm-meter context-meter-bar" aria-hidden="true"><span class="sm-meter__fill"></span><span id="context-meter-reply" class="sm-meter__reply"></span></span>
+                    </span>
                     <button id="model-button" class="composer-chip model-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-menu">
                       <span id="model-button-name" class="model-button-name">No model selected</span>
                       <span id="model-button-reasoning" class="model-button-reasoning" hidden></span>
                       <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
                     <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
-                    <button id="send-btn" class="button primary" type="button">
-                      <span id="send-label">Send message</span>
+                    <button id="send-btn" class="button primary" type="button" aria-label="Send message">
+                      <span id="send-label">Send</span>
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                     </button>
                   </div>
@@ -415,10 +423,10 @@
         <section id="view-assistant" class="view" aria-labelledby="assistant-title">
           <div class="page">
             <header class="page-header">
-              <div><span class="eyebrow">Make it your own</span><h1 id="assistant-title" class="page-title">One assistant. Your provider.</h1><p class="page-sub">Connect an OpenAI-compatible endpoint and choose how your assistant works.</p></div>
+              <div><h1 id="assistant-title" class="page-title">One assistant. Your provider.</h1><p class="page-sub">Connect an OpenAI-compatible endpoint and choose how your assistant works.</p></div>
             </header>
             <form id="provider-form" class="settings-card" aria-labelledby="provider-title">
-              <div class="card-heading"><span class="section-number" aria-hidden="true">01</span><div><h2 id="provider-title">Provider connection</h2></div></div>
+              <div class="card-heading"><div><h2 id="provider-title">Provider connection</h2></div></div>
 
               <div class="form-group">
                 <label for="profile-select">Saved providers</label>
@@ -462,7 +470,7 @@
                 <label id="model-picker-label">Model for chat</label>
                 <div class="picker" id="model-picker">
                   <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label">Choose a model</button>
-                  <div id="model-picker-list" class="picker-list" role="listbox" aria-labelledby="model-picker-label" hidden></div>
+                  <div id="model-picker-list" class="picker-list" role="listbox" aria-labelledby="model-picker-label" popover="manual" hidden></div>
                 </div>
               </div>
 
@@ -479,7 +487,7 @@
             </form>
 
             <form id="assistant-form" class="settings-card" aria-labelledby="behavior-title">
-              <div class="card-heading"><span class="section-number" aria-hidden="true">02</span><div><h2 id="behavior-title">Assistant behavior</h2></div></div>
+              <div class="card-heading"><div><h2 id="behavior-title">Assistant behavior</h2></div></div>
               <div class="form-group">
                 <label for="system-prompt">System prompt</label>
                 <textarea id="system-prompt" rows="5" placeholder="Describe how you want the assistant to respond."></textarea>
@@ -503,7 +511,6 @@
 
             <section id="mcp-card" class="settings-card" aria-labelledby="mcp-title">
               <div class="card-heading mcp-heading">
-                <span class="section-number" aria-hidden="true">03</span>
                 <div class="mcp-heading-text"><h2 id="mcp-title">Tools from MCP servers</h2><p class="status-text">Enabled Model Context Protocol servers offer their tools to the model in chat. ScaleMax runs each tool call and lists it under the reply. The permission chip next to the message box decides which tool calls ask first (Manual, Basic or Bypass all).</p></div>
                 <button id="mcp-add-btn" class="button secondary" type="button" aria-haspopup="dialog" aria-controls="mcp-dialog">Custom server</button>
               </div>
@@ -524,7 +531,7 @@
 
         <section id="view-experts" class="view" aria-labelledby="catalog-title">
           <div class="page page-wide">
-            <header class="page-header"><div><span class="eyebrow">A useful starting point</span><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Explore roles, prompt templates, reference repositories, and setup guides.</p></div></header>
+            <header class="page-header"><div><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Explore roles, prompt templates, reference repositories, and setup guides.</p></div></header>
             <div class="catalog-filters">
               <div class="form-group"><label for="catalog-search">Search the catalog</label><input id="catalog-search" type="search" placeholder="Search by name or purpose" autocomplete="off" /></div>
               <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
@@ -552,11 +559,11 @@
 
         <section id="view-automation" class="view" aria-labelledby="automation-title">
           <div class="page">
-            <header class="page-header"><div><span class="eyebrow">A rhythm for recurring work</span><h1 id="automation-title" class="page-title">Put your prompts on a schedule.</h1><p class="page-sub">Create recurring AI tasks with clear, explicit consent.</p></div></header>
+            <header class="page-header"><div><h1 id="automation-title" class="page-title">Put your prompts on a schedule.</h1><p class="page-sub">Create recurring AI tasks with clear, explicit consent.</p></div></header>
             <div class="notice warning-notice" id="automation-consent"><strong>Runs in the background.</strong> Schedules fire on time while ScaleMax is running, also with its window closed (Preferences → Automations). They send prompts to your configured provider and may incur charges. A tool call that needs your approval while no window is open is denied, and the run says so. Creating a schedule consents to these recurring requests. Existing schedules from earlier versions remain paused until you explicitly enable them.</div>
             <p id="scheduler-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Schedules run while ScaleMax is running, also with this window closed.</p>
             <form id="automation-form" class="settings-card" aria-labelledby="automation-form-title" aria-describedby="automation-consent">
-              <div class="card-heading"><span class="section-number" aria-hidden="true">+</span><div><h2 id="automation-form-title">New schedule</h2></div></div>
+              <div class="card-heading"><div><h2 id="automation-form-title">New schedule</h2></div></div>
               <div class="form-group"><label for="automation-name">Schedule name</label><input id="automation-name" type="text" placeholder="Give this recurring task a name" required /></div>
               <div class="form-group"><label for="automation-prompt">Prompt to send</label><textarea id="automation-prompt" rows="4" placeholder="Write the instructions to send to your provider." required></textarea></div>
               <div class="form-row">
@@ -578,10 +585,18 @@
 
         <section id="view-more" class="view" aria-labelledby="more-title">
           <div class="page">
-            <header class="page-header"><div><span class="eyebrow">The workspace details</span><h1 id="more-title" class="page-title">Simple by design. Yours by default.</h1><p class="page-sub">Appearance, local data, and a little about ScaleMax.</p></div></header>
+            <header class="page-header"><div><h1 id="more-title" class="page-title">Simple by design. Yours by default.</h1><p class="page-sub">Appearance, local data, and a little about ScaleMax.</p></div></header>
             <section class="settings-card" aria-labelledby="appearance-title">
               <h2 id="appearance-title">Appearance</h2>
               <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></div>
+              <!-- The companion character beside a running reply and in the task rows (src/mascot.js). -->
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="companion-label" for="companion-toggle">Show the companion</label>
+                  <p id="companion-desc" class="status-text">A small character shows what the assistant is doing. It goes still with Reduce Motion.</p>
+                </div>
+                <button id="companion-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="companion-label" aria-describedby="companion-desc"><span class="switch-thumb"></span></button>
+              </div>
             </section>
             <section class="settings-card" aria-labelledby="projects-title">
               <h2 id="projects-title">Projects</h2>
@@ -663,14 +678,14 @@
   </div>
 
   <dialog id="search-dialog" aria-labelledby="search-title">
-    <div class="dialog-header"><div><span class="eyebrow">Find your next step</span><h2 id="search-title">Search workspace</h2></div><button id="search-close" class="button secondary" type="button">Close</button></div>
+    <div class="dialog-header"><div><h2 id="search-title">Search workspace</h2></div><button id="search-close" class="button secondary" type="button">Close</button></div>
     <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus /></div>
     <div id="search-results" aria-label="Search results" aria-live="polite"></div>
   </dialog>
 
   <dialog id="connector-dialog" aria-labelledby="connector-dialog-title">
     <div class="dialog-header">
-      <div><span class="eyebrow">Connect a service</span><h2 id="connector-dialog-title">Connect</h2></div>
+      <div><h2 id="connector-dialog-title">Connect</h2></div>
       <button id="connector-dialog-close" class="button secondary" type="button">Close</button>
     </div>
     <div class="dialog-body">
@@ -742,7 +757,7 @@
 
   <dialog id="custom-dialog" aria-labelledby="custom-dialog-title">
     <div class="dialog-header">
-      <div><span id="custom-dialog-kind" class="eyebrow">Your own expert</span><h2 id="custom-dialog-title">New expert</h2></div>
+      <div><span id="custom-dialog-kind" class="eyebrow hidden">Your own expert</span><h2 id="custom-dialog-title">New expert</h2></div>
       <button id="custom-close" class="button secondary" type="button">Close</button>
     </div>
     <form id="custom-form" class="dialog-body" novalidate>
@@ -780,7 +795,7 @@
 
   <dialog id="mcp-dialog" aria-labelledby="mcp-dialog-title">
     <div class="dialog-header">
-      <div><span class="eyebrow">Model Context Protocol</span><h2 id="mcp-dialog-title">Add MCP server</h2></div>
+      <div><h2 id="mcp-dialog-title">Add MCP server</h2></div>
       <button id="mcp-close" class="button secondary" type="button">Close</button>
     </div>
     <form id="mcp-form" class="dialog-body" novalidate>
@@ -814,7 +829,7 @@
 
   <dialog id="detail-dialog" aria-labelledby="detail-title">
     <div class="dialog-header">
-      <div><span id="detail-kind" class="eyebrow">Details</span><h2 id="detail-title">Details</h2></div>
+      <div><span id="detail-kind" class="eyebrow hidden">Details</span><h2 id="detail-title">Details</h2></div>
       <button id="detail-close" class="button secondary" type="button">Close</button>
     </div>
     <div class="dialog-body">
@@ -824,7 +839,7 @@
   </dialog>
   <dialog id="bypass-dialog" class="consent-dialog" aria-labelledby="bypass-title" aria-describedby="bypass-description">
     <div class="dialog-header">
-      <div><span class="eyebrow">Tool permissions</span><h2 id="bypass-title">Bypass all permissions?</h2></div>
+      <div><h2 id="bypass-title">Bypass all permissions?</h2></div>
     </div>
     <div class="dialog-body">
       <div id="bypass-description">
@@ -845,7 +860,7 @@
 
   <dialog id="tool-approval-dialog" class="consent-dialog" aria-labelledby="approval-title" aria-describedby="approval-summary">
     <div class="dialog-header">
-      <div><span id="approval-eyebrow" class="eyebrow">Tool call</span><h2 id="approval-title">Allow this tool call?</h2></div>
+      <div><span id="approval-eyebrow" class="dialog-context">Tool call</span><h2 id="approval-title">Allow this tool call?</h2></div>
       <span id="approval-queue" class="badge" hidden></span>
     </div>
     <div class="dialog-body">
@@ -863,7 +878,7 @@
   <!-- What a reply changed: its files on the left, the selected file's diff on the right (src/changes-ui.js). -->
   <dialog id="changes-dialog" aria-labelledby="changes-title" aria-describedby="changes-subtitle">
     <div class="dialog-header">
-      <div><span class="eyebrow">Review</span><h2 id="changes-title">Changes of this reply</h2><p id="changes-subtitle" class="changes-subtitle"></p></div>
+      <div><h2 id="changes-title">Changes of this reply</h2><p id="changes-subtitle" class="changes-subtitle"></p></div>
       <button id="changes-close" class="changes-close" type="button" aria-label="Close the review">×</button>
     </div>
     <div class="changes-dialog-body">
@@ -888,7 +903,7 @@
        design and tasks on the right (src/specs-ui.js). -->
   <dialog id="specs-dialog" aria-labelledby="specs-title" aria-describedby="specs-subtitle">
     <div class="dialog-header">
-      <div><span class="eyebrow">Before you build</span><h2 id="specs-title">Feature specs</h2><p id="specs-subtitle" class="specs-subtitle"></p></div>
+      <div><h2 id="specs-title">Feature specs</h2><p id="specs-subtitle" class="specs-subtitle"></p></div>
       <button id="specs-close" class="specs-close" type="button" aria-label="Close the specs">×</button>
     </div>
     <div class="specs-body">
@@ -915,7 +930,7 @@
        to type into it and Stop (src/jobs-ui.js). -->
   <dialog id="jobs-dialog" aria-labelledby="jobs-title" aria-describedby="jobs-subtitle">
     <div class="dialog-header">
-      <div><span class="eyebrow">Background</span><h2 id="jobs-title">Background commands</h2><p id="jobs-subtitle" class="jobs-subtitle">Servers, watchers and long builds the model left running. They stop when ScaleMax quits.</p></div>
+      <div><h2 id="jobs-title">Background commands</h2><p id="jobs-subtitle" class="jobs-subtitle">Servers, watchers and long builds the model left running. They stop when ScaleMax quits.</p></div>
       <button id="jobs-close" class="jobs-close" type="button" aria-label="Close background commands">×</button>
     </div>
     <div class="jobs-body">
@@ -942,7 +957,7 @@
   <!-- A project's own hooks wait for the user's approval (src/hooks-ui.js; lib/hooks.cjs runs them). -->
   <dialog id="hooks-dialog" class="consent-dialog" aria-labelledby="hooks-dialog-title" aria-describedby="hooks-dialog-description">
     <div class="dialog-header">
-      <div><span id="hooks-dialog-folder" class="eyebrow">Hooks</span><h2 id="hooks-dialog-title">Allow this project's hooks?</h2></div>
+      <div><span id="hooks-dialog-folder" class="dialog-context">Hooks</span><h2 id="hooks-dialog-title">Allow this project's hooks?</h2></div>
     </div>
     <div class="dialog-body">
       <p id="hooks-dialog-description" class="body-copy">This folder's .scalemax/settings.json asks ScaleMax to run these commands on your Mac, outside the sandbox, around the assistant's tool calls and replies. Allow them only if you trust this project. They are asked about again whenever they change.</p>
@@ -957,7 +972,7 @@
   <!-- Commit what changed, then push and open a pull request (src/gitflow-ui.js). -->
   <dialog id="commit-dialog" aria-labelledby="commit-title" aria-describedby="commit-subtitle">
     <div class="dialog-header">
-      <div><span class="eyebrow">Git</span><h2 id="commit-title">Commit changes</h2><p id="commit-subtitle" class="changes-subtitle"></p></div>
+      <div><h2 id="commit-title">Commit changes</h2><p id="commit-subtitle" class="changes-subtitle"></p></div>
       <button id="commit-close" class="changes-close" type="button" aria-label="Close the commit dialog">×</button>
     </div>
     <div class="commit-body">
@@ -1013,7 +1028,7 @@
   <!-- Switch the open folder to another local branch (src/gitflow-ui.js). -->
   <dialog id="branch-dialog" class="consent-dialog" aria-labelledby="branch-title" aria-describedby="branch-subtitle">
     <div class="dialog-header">
-      <div><span class="eyebrow">Git</span><h2 id="branch-title">Switch branch</h2><p id="branch-subtitle" class="changes-subtitle"></p></div>
+      <div><h2 id="branch-title">Switch branch</h2><p id="branch-subtitle" class="changes-subtitle"></p></div>
       <button id="branch-close" class="changes-close" type="button" aria-label="Close">×</button>
     </div>
     <div class="dialog-body">
@@ -1030,7 +1045,7 @@
   <!-- Rewind a conversation to before one of the user's messages (src/sessions-ui.js). -->
   <dialog id="rewind-dialog" class="consent-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-text">
     <div class="dialog-header">
-      <div><span class="eyebrow">Rewind</span><h2 id="rewind-title">Rewind to this message?</h2></div>
+      <div><h2 id="rewind-title">Rewind to this message?</h2></div>
       <button id="rewind-close" class="changes-close" type="button" aria-label="Close">×</button>
     </div>
     <div class="dialog-body">
@@ -1050,7 +1065,7 @@
   <!-- Find a task again by its title or its words (src/sessions-ui.js, ⌘⇧O). -->
   <dialog id="sessions-dialog" aria-labelledby="sessions-title">
     <div class="dialog-header">
-      <div><span class="eyebrow">Sessions</span><h2 id="sessions-title">Recent sessions</h2></div>
+      <div><h2 id="sessions-title">Recent sessions</h2></div>
       <button id="sessions-close" class="changes-close" type="button" aria-label="Close recent sessions">×</button>
     </div>
     <div class="dialog-search"><label for="sessions-search">Search task titles and messages</label><input id="sessions-search" type="search" placeholder="Type to search" autocomplete="off" spellcheck="false" role="combobox" aria-controls="sessions-list" aria-expanded="true" aria-autocomplete="list" /></div>

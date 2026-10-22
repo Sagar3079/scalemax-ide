@@ -1,11 +1,15 @@
 /*
- * ScaleMax IDE — Workspace tab (IDE layout).
+ * ScaleMax IDE — Workspace tab (IDE layout), Riso Zine Press.
  *
  * Toolbar, resizable explorer, tabbed code editor (CodeMirror, set up in
  * src/editor.js, coloured by the --ws-editor-*, --ws-diff-* and --tok-*
  * variables below) with the review bar for a reply's changes, resizable
  * bottom panel (Terminal / Git changes / Diff) and a statusbar.
- * Shell surfaces use the --sm-app-* aliases (see styles.css section 01).
+ *
+ * Colours come from the riso inks defined in styles.css (--riso-*); every
+ * var() carries the light value as a fallback. The page ground is paper, the
+ * code surfaces (editor, panel) are the raised sheet with no grain. Rules are
+ * 1px --riso-rule; spacing sits on a 4px module.
  * Sizes that the splitters change live in --ws-explorer-width and
  * --ws-panel-height, set on .ws by workspace-ui.js.
  */
@@ -17,85 +21,99 @@
 .ws {
   --ws-explorer-width: 260px;
   --ws-panel-height: 220px;
-  --ws-code-font: var(--sm-font-code-family);
+  --ws-code-font: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   --ws-code-size: 12px;
   --ws-code-line: 20px;
-  --ws-code-pad-y: 10px;
-  --ws-code-pad-x: 14px;
-  --ws-ui-font: Assistant, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --tok-keyword: #7c3aed;
-  --tok-string: #0f7b4a;
-  --tok-comment: #8a8f98;
-  --tok-number: #b45309;
-  --tok-tag: #1d4ed8;
-  --tok-attr: #0e7490;
-  --tok-heading: #0f172a;
-  --tok-function: #795e26;
-  --tok-type: #267f99;
-  --tok-regexp: #b91c1c;
-  --tok-meta: #6b7280;
-  --tok-invalid: #dc2626;
-  --ws-editor-bg: var(--sm-app-surface);
-  --ws-editor-fg: var(--sm-text-strong);
-  --ws-editor-caret: var(--sm-text-strong);
-  --ws-editor-selection: rgba(59, 130, 246, 0.16);
-  --ws-editor-selection-focused: rgba(59, 130, 246, 0.28);
-  --ws-editor-selection-match: rgba(59, 130, 246, 0.1);
-  --ws-editor-active-line: rgba(0, 0, 0, 0.035);
-  --ws-editor-gutter-fg: var(--sm-text-weak);
-  --ws-editor-gutter-active-fg: var(--sm-text-strong);
-  --ws-editor-bracket: rgba(0, 194, 154, 0.16);
-  --ws-editor-bracket-border: rgba(0, 146, 115, 0.55);
-  --ws-editor-bracket-bad: rgba(246, 64, 65, 0.22);
-  --ws-editor-match: rgba(255, 184, 0, 0.26);
-  --ws-editor-match-border: rgba(192, 65, 0, 0.35);
-  --ws-editor-match-current: rgba(255, 120, 0, 0.4);
-  --ws-editor-completion: #2563eb;
-  --ws-editor-completion-fg: #ffffff;
-  --ws-diff-add-line: rgba(12, 191, 91, 0.1);
-  --ws-diff-add-text: rgba(12, 191, 91, 0.26);
-  --ws-diff-add-bar: #0cbf5b;
-  --ws-diff-del-line: rgba(246, 64, 65, 0.08);
-  --ws-diff-del-text: rgba(246, 64, 65, 0.24);
-  --ws-diff-del-bar: #f64041;
+  --ws-code-pad-y: 12px;
+  --ws-code-pad-x: 16px;
+  --ws-ui-font: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
+
+  /* Syntax: drawn from the inks at code-legible strengths (all >= 4.5:1 on paper-raised). */
+  --tok-keyword: var(--riso-blue, #0078BF);
+  --tok-string: var(--riso-green-text, #0A7A46);
+  --tok-comment: var(--riso-ink-3, #6B6F78);
+  --tok-number: var(--riso-pink-text, #B8126F);
+  --tok-tag: var(--riso-blue, #0078BF);
+  --tok-attr: var(--riso-ink-2, #4A4D55);
+  --tok-heading: var(--riso-ink, #1A1B1F);
+  --tok-function: var(--riso-ink, #1A1B1F);
+  --tok-type: var(--riso-blue-text, #005E96);
+  --tok-regexp: var(--riso-pink-text, #B8126F);
+  --tok-meta: var(--riso-ink-3, #6B6F78);
+  --tok-invalid: var(--riso-red-text, #B42638);
+
+  /* The code surface. */
+  --ws-editor-bg: var(--riso-paper-raised, #FAFAF8);
+  --ws-editor-fg: var(--riso-ink, #1A1B1F);
+  --ws-editor-caret: var(--riso-blue, #0078BF);
+  /* Selection is a yellow highlighter pass under the ink. */
+  --ws-editor-selection: color-mix(in srgb, var(--riso-yellow, #FFE800) 28%, transparent);
+  --ws-editor-selection-focused: color-mix(in srgb, var(--riso-yellow, #FFE800) 45%, transparent);
+  --ws-editor-selection-match: color-mix(in srgb, var(--riso-yellow, #FFE800) 20%, transparent);
+  --ws-editor-active-line: color-mix(in srgb, var(--riso-blue, #0078BF) 5%, transparent);
+  --ws-editor-gutter-fg: var(--riso-ink-3, #6B6F78);
+  --ws-editor-gutter-active-fg: var(--riso-ink, #1A1B1F);
+  --ws-editor-bracket: transparent;
+  --ws-editor-bracket-border: var(--riso-blue, #0078BF);
+  --ws-editor-bracket-bad: color-mix(in srgb, var(--riso-red, #F15060) 24%, transparent);
+  --ws-editor-match: color-mix(in srgb, var(--riso-yellow, #FFE800) 50%, transparent);
+  --ws-editor-match-border: transparent;
+  --ws-editor-match-current: var(--riso-yellow, #FFE800);
+  --ws-editor-completion: color-mix(in srgb, var(--riso-blue, #0078BF) 14%, var(--riso-paper-raised, #FAFAF8));
+  --ws-editor-completion-fg: var(--riso-ink, #1A1B1F);
+
+  /* Inline review of a reply's changes. */
+  --ws-diff-add-line: var(--riso-diff-add-bg, color-mix(in srgb, #00A95C 14%, transparent));
+  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #0A7A46) 22%, transparent);
+  --ws-diff-add-bar: var(--riso-green, #00A95C);
+  --ws-diff-del-line: var(--riso-diff-del-bg, color-mix(in srgb, #F15060 14%, transparent));
+  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #F15060) 28%, transparent);
+  --ws-diff-del-bar: var(--riso-red, #F15060);
+
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   flex: 1;
   min-height: 0;
   height: 100%;
-  background: var(--sm-app-page);
+  background: var(--riso-paper, #F3F4F1);
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--ws-ui-font);
 }
 
+/* Same inks on deep stock: the tokens resolve to their dark values; the
+   fallbacks here are the dark ones. Highlighter strengths drop so light text
+   stays readable over yellow. */
 [data-theme="dark"] .ws {
-  --tok-keyword: #c4a7ff;
-  --tok-string: #7ee2a8;
-  --tok-comment: #7d8590;
-  --tok-number: #f5b871;
-  --tok-tag: #7fb4ff;
-  --tok-attr: #67d4e8;
-  --tok-heading: #f1f5f9;
-  --tok-function: #dcdcaa;
-  --tok-type: #4ec9b0;
-  --tok-regexp: #f2898b;
-  --tok-meta: #9ca3af;
-  --tok-invalid: #f87171;
-  --ws-editor-selection: rgba(100, 150, 255, 0.22);
-  --ws-editor-selection-focused: rgba(100, 150, 255, 0.34);
-  --ws-editor-selection-match: rgba(100, 150, 255, 0.14);
-  --ws-editor-active-line: rgba(255, 255, 255, 0.04);
-  --ws-editor-bracket: rgba(76, 240, 206, 0.14);
-  --ws-editor-bracket-border: rgba(76, 240, 206, 0.5);
-  --ws-editor-bracket-bad: rgba(255, 110, 110, 0.25);
-  --ws-editor-match: rgba(255, 200, 80, 0.2);
-  --ws-editor-match-border: rgba(255, 200, 80, 0.45);
-  --ws-editor-match-current: rgba(255, 150, 50, 0.4);
-  --ws-editor-completion: #2f5fbf;
-  --ws-diff-add-line: rgba(76, 240, 160, 0.09);
-  --ws-diff-add-text: rgba(76, 240, 160, 0.24);
-  --ws-diff-add-bar: #3fcf7f;
-  --ws-diff-del-line: rgba(255, 100, 100, 0.09);
-  --ws-diff-del-text: rgba(255, 100, 100, 0.26);
-  --ws-diff-del-bar: #ff6b6b;
+  --tok-keyword: var(--riso-blue, #4BA6E0);
+  --tok-string: var(--riso-green-text, #4FD08A);
+  --tok-comment: var(--riso-ink-3, #8D919A);
+  --tok-number: var(--riso-pink-text, #FF8FD0);
+  --tok-tag: var(--riso-blue, #4BA6E0);
+  --tok-attr: var(--riso-ink-2, #B4B7BE);
+  --tok-heading: var(--riso-ink, #E9EAE6);
+  --tok-function: var(--riso-ink, #E9EAE6);
+  --tok-type: var(--riso-blue-text, #7CC0EC);
+  --tok-regexp: var(--riso-pink-text, #FF8FD0);
+  --tok-meta: var(--riso-ink-3, #8D919A);
+  --tok-invalid: var(--riso-red-text, #FF8C96);
+  --ws-editor-bg: var(--riso-paper-raised, #1B1E24);
+  --ws-editor-fg: var(--riso-ink, #E9EAE6);
+  --ws-editor-caret: var(--riso-blue, #4BA6E0);
+  --ws-editor-selection: color-mix(in srgb, var(--riso-yellow, #FFE800) 20%, transparent);
+  --ws-editor-selection-focused: color-mix(in srgb, var(--riso-yellow, #FFE800) 30%, transparent);
+  --ws-editor-selection-match: color-mix(in srgb, var(--riso-yellow, #FFE800) 14%, transparent);
+  --ws-editor-active-line: color-mix(in srgb, var(--riso-blue, #4BA6E0) 8%, transparent);
+  --ws-editor-gutter-fg: var(--riso-ink-3, #8D919A);
+  --ws-editor-gutter-active-fg: var(--riso-ink, #E9EAE6);
+  --ws-editor-bracket-border: var(--riso-blue, #4BA6E0);
+  --ws-editor-bracket-bad: color-mix(in srgb, var(--riso-red, #FF6B78) 28%, transparent);
+  --ws-editor-match: color-mix(in srgb, var(--riso-yellow, #FFE800) 28%, transparent);
+  --ws-editor-completion: color-mix(in srgb, var(--riso-blue, #4BA6E0) 22%, var(--riso-paper-raised, #1B1E24));
+  --ws-editor-completion-fg: var(--riso-ink, #E9EAE6);
+  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #4FD08A) 24%, transparent);
+  --ws-diff-add-bar: var(--riso-green, #2FC57A);
+  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #FF6B78) 30%, transparent);
+  --ws-diff-del-bar: var(--riso-red, #FF6B78);
 }
 
 /* ---- Toolbar -------------------------------------------------------- */
@@ -106,26 +124,26 @@
   gap: 12px;
   min-width: 0;
   height: 40px;
-  padding: 0 12px 0 14px;
-  border-bottom: 1px solid var(--sm-app-border);
-  background: var(--sm-app-page);
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper, #F3F4F1);
 }
 
 .ws-crumb {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   flex: 0 1 auto;
 }
 
 .ws-crumb-icon {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   fill: none;
-  stroke: var(--sm-palette-orange-8);
-  stroke-width: 1.6;
+  stroke: var(--riso-blue, #0078BF);
+  stroke-width: 1.5;
   stroke-linejoin: round;
 }
 
@@ -135,7 +153,7 @@
   gap: 8px;
   min-width: 0;
   font-size: 13px;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
   white-space: nowrap;
 }
 
@@ -154,7 +172,7 @@
   text-align: left;
   font-family: var(--ws-code-font);
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 .ws-toolbar-status {
@@ -163,20 +181,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
-  color: var(--sm-text-weak);
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 .ws-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .ws-toolbar .button.compact {
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 12px;
   font-size: 12px;
 }
 
@@ -196,24 +214,23 @@
   min-width: 160px;
   max-width: 480px;
   min-height: 0;
-  background: var(--sm-app-sidebar);
+  background: var(--riso-paper, #F3F4F1);
 }
 
 .ws-pane-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 32px;
-  padding: 0 6px 0 14px;
+  height: 36px;
+  padding: 0 8px 0 16px;
   flex-shrink: 0;
 }
 
 .ws-pane-header h2 {
-  font-size: 11px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-2, #4A4D55);
 }
 
 .ws-icon-button {
@@ -223,22 +240,27 @@
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 6px;
   background: transparent;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
 }
 
 .ws-icon-button:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws-icon-button:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
 
 .ws-icon-button svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.6;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -246,7 +268,7 @@
 .ws-filter {
   position: relative;
   flex-shrink: 0;
-  margin: 0 10px 6px;
+  margin: 0 8px 8px;
 }
 
 .ws-filter svg {
@@ -257,16 +279,16 @@
   height: 12px;
   transform: translateY(-50%);
   fill: none;
-  stroke: var(--sm-text-weak);
+  stroke: var(--riso-ink-3, #6B6F78);
   stroke-width: 1.6;
   stroke-linecap: round;
   pointer-events: none;
 }
 
 .ws-filter input[type="search"] {
-  min-height: 26px;
-  padding: 3px 8px 3px 26px;
-  border-radius: var(--sm-radius-md);
+  min-height: 28px;
+  padding: 4px 8px 4px 28px;
+  border-radius: 6px;
   font-size: 12px;
 }
 
@@ -276,10 +298,11 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 2px 0 12px;
+  padding: 0 0 12px;
 }
 
 .ws-tree:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: -2px;
 }
 
@@ -288,38 +311,40 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   width: 100%;
   height: 24px;
-  padding: 0 10px 0 calc(8px + var(--depth) * 14px);
+  padding: 0 12px 0 calc(8px + var(--depth) * 16px);
   border: none;
   background: none;
-  /* Indent guides: one hairline per nesting level. */
+  /* Indent guides: one 1px rule per nesting level, under the parent's chevron. */
   background-image: repeating-linear-gradient(to right,
-    transparent 0, transparent 14px, var(--sm-app-border) 14px, var(--sm-app-border) 15px);
-  background-size: calc(var(--depth) * 14px) 100%;
+    transparent 0 6px,
+    var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent)) 6px 7px,
+    transparent 7px 16px);
+  background-size: calc(var(--depth) * 16px) 100%;
   background-position: 8px 0;
   background-repeat: no-repeat;
-  color: var(--sm-text-medium);
-  font-size: 12px;
+  color: var(--riso-ink-2, #4A4D55);
+  font-size: 13px;
   text-align: left;
   white-space: nowrap;
   cursor: default;
 }
 
 .tree-row:hover {
-  background-color: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background-color: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .tree-row.active {
-  background-color: var(--sm-bg-active);
-  color: var(--sm-text-strong);
+  background-color: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .tree-row:focus-visible {
-  outline: 1px solid var(--sm-color-border-focus);
-  outline-offset: -1px;
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
 }
 
 .tree-row .file-name {
@@ -327,9 +352,10 @@
   min-width: 0;
 }
 
+/* Filter hits: a highlighter pass under ink-black text. */
 .tree-row mark {
-  background: var(--sm-palette-orange-2);
-  color: inherit;
+  background: color-mix(in srgb, var(--riso-yellow, #FFE800) 85%, transparent);
+  color: var(--riso-ink-black, #1A1B1F);
   border-radius: 2px;
 }
 
@@ -346,10 +372,10 @@
   content: '';
   width: 5px;
   height: 5px;
-  border: solid var(--sm-text-weak);
+  border: solid var(--riso-ink-3, #6B6F78);
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(-45deg);
-  transition: transform var(--sm-motion-duration-fast, 120ms) ease;
+  transition: transform var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .tree-row[aria-expanded="true"] .tree-chevron::before {
@@ -360,10 +386,11 @@
   display: none;
 }
 
-/* CSS-drawn icons: a folder, or a folded page tinted by file type. */
+/* CSS-drawn icons: a folder in blue ink, or a folded page tinted by kind:
+   code in blue, markup and styles in blue-text, data and docs in ink. */
 .tree-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   position: relative;
 }
@@ -371,66 +398,74 @@
 .tree-icon.is-folder::before {
   content: '';
   position: absolute;
-  inset: 3px 0 1px;
+  inset: 5px 1px 2px;
   border-radius: 2px;
-  background: var(--sm-palette-orange-5);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 55%, var(--riso-paper, #F3F4F1));
 }
 
 .tree-icon.is-folder::after {
   content: '';
   position: absolute;
-  top: 1px;
-  left: 0;
+  top: 3px;
+  left: 1px;
   width: 6px;
   height: 4px;
   border-radius: 2px 2px 0 0;
-  background: var(--sm-palette-orange-5);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 55%, var(--riso-paper, #F3F4F1));
 }
 
 .tree-row[aria-expanded="true"] .tree-icon.is-folder::before {
-  background: var(--sm-palette-orange-4);
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 35%, var(--riso-paper, #F3F4F1));
 }
 
 .tree-icon.is-file::before {
   content: '';
   position: absolute;
-  inset: 1px 2px;
+  inset: 2px 3px 1px;
   border-radius: 1.5px;
-  background: var(--ws-icon, var(--sm-icon-tertiary, #9aa0a6));
+  background: var(--ws-icon, color-mix(in srgb, var(--riso-ink-3, #6B6F78) 60%, transparent));
   clip-path: polygon(0 0, 66% 0, 100% 30%, 100% 100%, 0 100%);
 }
 
-.tree-icon[data-ext="js"], .tree-icon[data-ext="mjs"], .tree-icon[data-ext="cjs"], .tree-icon[data-ext="jsx"] { --ws-icon: #e2b100; }
-.tree-icon[data-ext="ts"], .tree-icon[data-ext="tsx"], .tree-icon[data-ext="mts"], .tree-icon[data-ext="cts"] { --ws-icon: #3178c6; }
-.tree-icon[data-ext="json"] { --ws-icon: #c08b00; }
-.tree-icon[data-ext="md"], .tree-icon[data-ext="mdx"], .tree-icon[data-ext="txt"] { --ws-icon: #64748b; }
-.tree-icon[data-ext="css"], .tree-icon[data-ext="scss"], .tree-icon[data-ext="less"] { --ws-icon: #7c4dff; }
-.tree-icon[data-ext="html"], .tree-icon[data-ext="htm"], .tree-icon[data-ext="xml"] { --ws-icon: #e44d26; }
-.tree-icon[data-ext="py"] { --ws-icon: #3572a5; }
-.tree-icon[data-ext="sh"], .tree-icon[data-ext="zsh"], .tree-icon[data-ext="bash"] { --ws-icon: #3fa34d; }
-.tree-icon[data-ext="yml"], .tree-icon[data-ext="yaml"], .tree-icon[data-ext="toml"] { --ws-icon: #cb3b3b; }
+.tree-icon[data-ext="js"], .tree-icon[data-ext="mjs"], .tree-icon[data-ext="cjs"], .tree-icon[data-ext="jsx"],
+.tree-icon[data-ext="ts"], .tree-icon[data-ext="tsx"], .tree-icon[data-ext="mts"], .tree-icon[data-ext="cts"],
+.tree-icon[data-ext="py"], .tree-icon[data-ext="sh"], .tree-icon[data-ext="zsh"], .tree-icon[data-ext="bash"] {
+  --ws-icon: var(--riso-blue, #0078BF);
+}
+.tree-icon[data-ext="css"], .tree-icon[data-ext="scss"], .tree-icon[data-ext="less"],
+.tree-icon[data-ext="html"], .tree-icon[data-ext="htm"], .tree-icon[data-ext="xml"] {
+  --ws-icon: var(--riso-blue-text, #005E96);
+}
+.tree-icon[data-ext="json"], .tree-icon[data-ext="yml"], .tree-icon[data-ext="yaml"], .tree-icon[data-ext="toml"] {
+  --ws-icon: var(--riso-ink-2, #4A4D55);
+}
+.tree-icon[data-ext="md"], .tree-icon[data-ext="mdx"], .tree-icon[data-ext="txt"], .tree-icon[data-ext="lock"] {
+  --ws-icon: color-mix(in srgb, var(--riso-ink-3, #6B6F78) 70%, transparent);
+}
 .tree-icon[data-ext="svg"], .tree-icon[data-ext="png"], .tree-icon[data-ext="jpg"], .tree-icon[data-ext="jpeg"],
-.tree-icon[data-ext="gif"], .tree-icon[data-ext="webp"], .tree-icon[data-ext="ico"], .tree-icon[data-ext="icns"] { --ws-icon: #c04fd8; }
-.tree-icon[data-ext="lock"] { --ws-icon: #8a8f98; }
+.tree-icon[data-ext="gif"], .tree-icon[data-ext="webp"], .tree-icon[data-ext="ico"], .tree-icon[data-ext="icns"] {
+  --ws-icon: color-mix(in srgb, var(--riso-blue, #0078BF) 45%, var(--riso-paper, #F3F4F1));
+}
 
+/* Git decorations: M blue-text, A green-text, D red-text, U ink-2. */
 .tree-git {
   flex-shrink: 0;
-  min-width: 10px;
+  min-width: 12px;
   font-family: var(--ws-code-font);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-align: right;
 }
 
-.tree-git.is-modified { color: var(--sm-palette-orange-8); }
-.tree-git.is-added { color: var(--sm-palette-green-8); }
-.tree-git.is-deleted { color: var(--sm-palette-red-8); }
-.tree-git.is-untracked { color: var(--sm-palette-blue-8); }
+.tree-git.is-modified { color: var(--riso-blue-text, #005E96); }
+.tree-git.is-added { color: var(--riso-green-text, #0A7A46); }
+.tree-git.is-deleted { color: var(--riso-red-text, #B42638); }
+.tree-git.is-untracked { color: var(--riso-ink-2, #4A4D55); }
 
 .tree-message {
-  padding: 4px 10px 4px calc(26px + var(--depth, 0) * 14px);
-  font-size: 11px;
-  color: var(--sm-text-weak);
+  padding: 4px 12px 4px calc(24px + var(--depth, 0) * 16px);
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 /* ---- Splitters ------------------------------------------------------- */
@@ -438,7 +473,7 @@
 .ws-splitter {
   position: relative;
   flex-shrink: 0;
-  background: var(--sm-app-border);
+  background: var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   z-index: 2;
 }
 
@@ -453,7 +488,7 @@
 }
 
 .ws-splitter-v::after {
-  inset: 0 -3px;
+  inset: 0 -4px;
 }
 
 .ws-splitter-h {
@@ -462,13 +497,13 @@
 }
 
 .ws-splitter-h::after {
-  inset: -3px 0;
+  inset: -4px 0;
 }
 
 .ws-splitter:hover,
 .ws-splitter.is-dragging,
 .ws-splitter:focus-visible {
-  background: var(--sm-color-border-focus);
+  background: var(--riso-blue, #0078BF);
   outline: none;
 }
 
@@ -492,18 +527,18 @@
   flex-direction: column;
   flex: 1;
   min-height: 120px;
-  background: var(--sm-app-surface);
+  background: var(--riso-paper-raised, #FAFAF8);
 }
 
 .ws-tabs {
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
-  height: 34px;
+  height: 36px;
   overflow-x: auto;
   overflow-y: hidden;
-  background: var(--sm-app-chrome);
-  border-bottom: 1px solid var(--sm-app-border);
+  background: var(--riso-paper, #F3F4F1);
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   scrollbar-width: thin;
 }
 
@@ -519,28 +554,31 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
   max-width: 220px;
-  padding: 0 6px 0 12px;
+  padding: 0 4px 0 12px;
   border: none;
-  border-right: 1px solid var(--sm-app-border);
+  border-right: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   background: transparent;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   font-size: 12px;
   cursor: default;
+  transition: background-color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .ws-tab:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 4%, transparent);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-tab[aria-selected="true"] {
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  font-weight: 500;
 }
 
+/* The selected tab carries a blue ink stripe on its top edge. */
 .ws-tab[aria-selected="true"]::before {
   content: '';
   position: absolute;
@@ -548,17 +586,21 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--sm-brand-primary);
+  background: var(--riso-blue, #0078BF);
 }
 
 .ws-tab:focus-visible {
-  outline: 1px solid var(--sm-color-border-focus);
+  outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: -2px;
 }
 
 .ws-tab .tree-icon {
   width: 12px;
   height: 12px;
+}
+
+.ws-tab .tree-icon.is-file::before {
+  inset: 1px 2px;
 }
 
 .ws-tab-name {
@@ -568,30 +610,37 @@
 }
 
 .ws-tab-close {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 4px;
   background: transparent;
-  color: var(--sm-text-weak);
-  font-size: 14px;
+  color: var(--riso-ink-3, #6B6F78);
+  font-size: 15px;
   line-height: 1;
 }
 
 .ws-tab-close:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint-strong, color-mix(in srgb, #1A1B1F 9%, transparent));
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws-tab-close:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 0;
 }
 
 /* A dirty tab shows a dot until the close button is hovered or focused. */
 .ws-tab.is-dirty .ws-tab-close::before {
-  content: '●';
-  font-size: 10px;
-  color: var(--sm-text-medium);
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--riso-ink-2, #4A4D55);
 }
 
 .ws-tab.is-dirty .ws-tab-close .ws-tab-x {
@@ -614,9 +663,9 @@
   justify-content: space-between;
   gap: 12px;
   flex-shrink: 0;
-  height: 30px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  height: 32px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
 .ws-editor-file {
@@ -628,9 +677,9 @@
 
 .ws-editor-file h2 {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-editor-path {
@@ -639,11 +688,13 @@
   white-space: nowrap;
   font-family: var(--ws-code-font);
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 .ws-editor-head .button.compact {
-  height: 22px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .ws-editor-body {
@@ -654,25 +705,27 @@
 }
 
 /* A reply's changes under review in the shown file: count and actions
-   (workspace-ui.js renderReview). */
+   (workspace-ui.js renderReview). It waits for the user, so its mark is the
+   yellow highlighter. */
 .ws-review {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-shrink: 0;
-  min-height: 30px;
-  padding: 3px 10px 3px 14px;
-  border-bottom: 1px solid var(--sm-color-border-tertiary);
-  background: var(--sm-app-chrome);
+  min-height: 36px;
+  padding: 4px 8px 4px 16px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper, #F3F4F1);
 }
 
 .ws-review-label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -682,10 +735,11 @@
   display: inline-block;
   width: 8px;
   height: 8px;
-  margin-right: 7px;
-  border-radius: 50%;
-  background: var(--ws-diff-add-bar);
-  vertical-align: middle;
+  margin-right: 8px;
+  border-radius: 2px;
+  background: var(--riso-yellow, #FFE800);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--riso-ink-black, #1A1B1F) 30%, transparent);
+  vertical-align: 1px;
 }
 
 .ws-review-actions {
@@ -695,10 +749,11 @@
   gap: 4px;
 }
 
+/* Keep / Undo and friends: standard small buttons. */
 .ws-review .button.compact {
-  height: 22px;
+  height: 24px;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* CodeMirror (src/editor.js) fills the code area; the textarea is the plain
@@ -718,6 +773,74 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+/* The in-editor Keep / Undo on each change: small standard buttons. Keep is
+   the blue-ink one; Undo stays neutral. These selectors outrank the theme in
+   src/editor.js on purpose. */
+.ws-code .cm-editor .cm-deletedChunk .cm-chunkButtons button {
+  height: 20px;
+  margin: 0 0 0 4px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--ws-ui-font);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  cursor: default;
+}
+
+.ws-code .cm-editor .cm-deletedChunk .cm-chunkButtons button:hover {
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 6%, var(--riso-paper-raised, #FAFAF8));
+}
+
+.ws-code .cm-editor .cm-deletedChunk .cm-chunkButtons button[name="accept"] {
+  border-color: color-mix(in srgb, var(--riso-blue, #0078BF) 55%, transparent);
+  color: var(--riso-blue-text, #005E96);
+}
+
+.ws-code .cm-editor .cm-deletedChunk .cm-chunkButtons button[name="accept"]:hover {
+  background: color-mix(in srgb, var(--riso-blue, #0078BF) 10%, var(--riso-paper-raised, #FAFAF8));
+}
+
+.ws-code .cm-editor .cm-deletedChunk .cm-chunkButtons button:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+
+/* CodeMirror draws the selection itself (the yellow layer above); the shell's ::selection rule
+   must not repaint the selected code in ink-black, so selected tokens keep their colours. */
+.ws-code .cm-content ::selection,
+.ws-code .cm-content::selection {
+  color: currentColor;
+}
+
+/* The current search hit is a full highlighter pass, always under ink-black. */
+.ws-code .cm-editor .cm-searchMatch.cm-searchMatch-selected,
+.ws-code .cm-editor .cm-searchMatch.cm-searchMatch-selected * {
+  color: var(--riso-ink-black, #1A1B1F);
+}
+
+/* Matching brackets: outlined in blue, no fill. */
+.ws-code .cm-editor.cm-focused .cm-matchingBracket {
+  border-radius: 2px;
+}
+
+/* Popovers in the editor (autocomplete, hover info): the shell's popover. */
+.ws-code .cm-editor .cm-tooltip {
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+
+.ws-code .cm-editor .cm-panels {
+  background: var(--riso-paper, #F3F4F1);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-input {
@@ -768,52 +891,57 @@
   justify-content: center;
   gap: 8px;
   padding: 24px;
-  background: var(--sm-app-surface);
+  background: var(--riso-paper-raised, #FAFAF8);
   text-align: center;
 }
 
 .ws-empty h3 {
-  font-size: 15px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 20px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  letter-spacing: -0.01em;
+  line-height: 28px;
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-empty p {
   max-width: 380px;
-  font-size: 12px;
-  color: var(--sm-text-medium);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2, #4A4D55);
 }
 
 .ws-empty-icon {
   width: 36px;
   height: 36px;
   margin-bottom: 4px;
-  fill: var(--sm-palette-orange-1);
-  stroke: var(--sm-palette-orange-8);
+  fill: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  stroke: var(--riso-blue, #0078BF);
   stroke-width: 1.2;
   stroke-linejoin: round;
 }
 
 .ws-empty .button {
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .ws-empty .ws-empty-keys {
-  margin-top: 10px;
-  color: var(--sm-text-weak);
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 .ws-empty kbd,
 .ws-empty-keys kbd {
   display: inline-block;
-  min-width: 18px;
+  min-width: 20px;
   padding: 0 4px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-bottom-width: 2px;
-  border-radius: var(--sm-radius-sm);
-  background: var(--sm-app-surface-hover);
-  font-family: inherit;
-  font-size: 10px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 3px;
+  background: var(--riso-paper, #F3F4F1);
+  color: var(--riso-ink-2, #4A4D55);
+  font-family: var(--ws-code-font);
+  font-size: 11px;
   line-height: 16px;
 }
 
@@ -825,7 +953,7 @@
   flex: 0 0 var(--ws-panel-height);
   height: var(--ws-panel-height);
   min-height: 96px;
-  background: var(--sm-app-surface);
+  background: var(--riso-paper-raised, #FAFAF8);
 }
 
 .ws-panel-tabs {
@@ -834,9 +962,15 @@
   justify-content: space-between;
   gap: 8px;
   flex-shrink: 0;
-  height: 32px;
-  padding: 0 8px 0 6px;
-  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  height: 36px;
+  padding: 0 8px 0 4px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+
+.ws-panel-tabs .button.compact {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .ws-panel-tablist {
@@ -849,51 +983,51 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 0 12px;
   border: none;
   background: none;
-  color: var(--sm-text-weak);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  color: var(--riso-ink-3, #6B6F78);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .ws-panel-tab:hover {
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-panel-tab[aria-selected="true"] {
-  color: var(--sm-text-strong);
+  color: var(--riso-ink, #1A1B1F);
 }
 
 .ws-panel-tab[aria-selected="true"]::after {
   content: '';
   position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 0;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
   height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--sm-brand-primary);
+  background: var(--riso-blue, #0078BF);
 }
 
 .ws-panel-tab:focus-visible {
-  outline: 1px solid var(--sm-color-border-focus);
-  outline-offset: -3px;
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -4px;
 }
 
 .ws-count {
   min-width: 16px;
   height: 16px;
-  padding: 0 5px;
-  border-radius: 100px;
-  background: var(--sm-app-muted);
-  color: var(--sm-text-medium);
-  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--riso-ink-tint-strong, color-mix(in srgb, #1A1B1F 9%, transparent));
+  color: var(--riso-ink-2, #4A4D55);
+  font-family: var(--ws-code-font);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 16px;
-  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
@@ -908,8 +1042,8 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 10px;
+  gap: 8px;
+  padding: 8px 12px;
   overflow: hidden;
 }
 
@@ -917,21 +1051,27 @@
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 8px 10px;
+  padding: 4px;
   overflow: auto;
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-chrome);
+  border-radius: 0;
+  background: transparent;
   font-family: var(--ws-code-font);
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--sm-text-medium);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--riso-ink, #1A1B1F);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.ws-terminal-output:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
+}
+
 .ws-terminal-output:empty::before {
   content: 'Output appears here. Commands run in the project folder with a 30 s limit.';
-  color: var(--sm-text-weak);
+  font-family: var(--ws-ui-font);
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 .ws-terminal-form {
@@ -939,33 +1079,36 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
 .ws-prompt {
   font-family: var(--ws-code-font);
   font-size: 13px;
   font-weight: 600;
-  color: var(--sm-app-text-accent);
+  color: var(--riso-blue-text, #005E96);
 }
 
 .ws-terminal-form input {
   flex: 1;
   min-width: 0;
-  min-height: 26px;
-  padding: 3px 8px;
-  border-radius: var(--sm-radius-md);
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
   font-family: var(--ws-code-font);
   font-size: 12px;
 }
 
 .ws-terminal-form .button.compact {
-  height: 26px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
 }
 
 .ws-git-files {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   min-height: 0;
   overflow-y: auto;
 }
@@ -975,40 +1118,86 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 3px 6px;
+  min-height: 28px;
+  padding: 4px 8px;
   border: none;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 4px;
   background: none;
-  color: var(--sm-text-medium);
-  font-size: 12px;
+  color: var(--riso-ink-2, #4A4D55);
+  font-size: 13px;
   text-align: left;
 }
 
-.git-row:hover,
+.git-row + .git-row {
+  margin-top: 0;
+}
+
+.git-row:hover {
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
+}
+
 .git-row.active {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.git-row:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
 }
 
 .git-status-code {
   flex-shrink: 0;
-  width: 14px;
+  width: 16px;
   font-family: var(--ws-code-font);
   font-size: 11px;
   font-weight: 600;
   text-align: center;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 
-.git-status-code.is-modified { color: var(--sm-palette-orange-8); }
-.git-status-code.is-added { color: var(--sm-palette-green-8); }
-.git-status-code.is-deleted { color: var(--sm-palette-red-8); }
-.git-status-code.is-untracked { color: var(--sm-palette-blue-8); }
+.git-status-code.is-modified { color: var(--riso-blue-text, #005E96); }
+.git-status-code.is-added { color: var(--riso-green-text, #0A7A46); }
+.git-status-code.is-deleted { color: var(--riso-red-text, #B42638); }
+.git-status-code.is-untracked { color: var(--riso-ink-2, #4A4D55); }
 
+/* The Git panel's diff: no inner box, mono 12px, add/del lines on the diff
+   backgrounds, hunk headers in blue-text. */
 .ws-diff {
   flex: 1;
   min-height: 0;
   margin: 0;
+  padding: 4px 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--ws-code-font);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws-diff:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
+}
+
+.ws-diff .diff-line {
+  display: block;
+  padding: 0 4px;
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws-diff .diff-line.is-add {
+  background: var(--riso-diff-add-bg, color-mix(in srgb, #00A95C 14%, transparent));
+}
+
+.ws-diff .diff-line.is-del {
+  background: var(--riso-diff-del-bg, color-mix(in srgb, #F15060 14%, transparent));
+}
+
+.ws-diff .diff-line.is-meta {
+  color: var(--riso-blue-text, #005E96);
 }
 
 .ws-diff:empty {
@@ -1017,8 +1206,9 @@
 
 .ws-diff:empty::before {
   content: 'Choose a changed file in Git changes to see its diff.';
-  color: var(--sm-text-weak);
-  font-family: inherit;
+  color: var(--riso-ink-3, #6B6F78);
+  font-family: var(--ws-ui-font);
+  font-size: 13px;
 }
 
 /* ---- Statusbar ------------------------------------------------------ */
@@ -1026,13 +1216,13 @@
 .ws-statusbar {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   height: 24px;
   padding: 0 12px;
-  border-top: 1px solid var(--sm-app-border);
-  background: var(--sm-app-chrome);
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper, #F3F4F1);
   font-size: 11px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   white-space: nowrap;
 }
 
@@ -1048,14 +1238,24 @@
 
 .ws-status-item {
   flex-shrink: 0;
-  color: var(--sm-text-weak);
+  font-family: var(--ws-code-font);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
 }
 
 #editor-branch::before {
   content: '⎇ ';
 }
 
-/* ---- Narrow windows ------------------------------------------------- */
+/* ---- Motion and narrow windows ------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-chevron::before,
+  .ws-tab,
+  .ws-panel-tab {
+    transition: none;
+  }
+}
 
 @media (max-width: 900px) {
   .ws {

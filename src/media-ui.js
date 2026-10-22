@@ -216,7 +216,10 @@ export function renderMediaBar(app) {
   const kind = mediaMode(app);
   const input = $('#chat-input');
   const label = $('#send-label');
-  if (label) label.textContent = kind ? `Generate ${kind}` : 'Send message';
+  if (label) label.textContent = kind ? `Generate ${kind}` : 'Send';
+  // The button's name says what it does in full; the visible label stays short so the composer's
+  // controls fit on one line.
+  $('#send-btn')?.setAttribute('aria-label', kind ? `Generate ${kind}` : 'Send message');
   if (input) {
     input.placeholder = kind === 'image' ? 'Describe the image to create, or the change to make…'
       : kind === 'video' ? 'Describe the video: scene, motion, camera, style…'

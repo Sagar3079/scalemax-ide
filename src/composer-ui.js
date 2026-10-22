@@ -90,6 +90,8 @@ export function renderModelButton(app) {
     if ($('#model-menu')?.matches(':popover-open')) renderModelMenu(app);
     return;
   }
+  // The context meter beside this button reads the model's published window.
+  app.renderContextMeter?.();
   const model = currentModel(app);
   const configured = Boolean(app.provider?.configured);
   const id = app.provider?.model || '';

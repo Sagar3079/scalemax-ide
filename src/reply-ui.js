@@ -7,9 +7,18 @@
  * Finished replies keep their steps, folded above the answer (renderMessageSteps).
  * A subagent (agent_task, lib/subagents.cjs) is a group in the steps: its own steps nest under the
  * step of its call, live and after the reply is finished.
+ * Every step shows how long it ran. The window measures it from the progress events (main sends
+ * no durations): a call runs from its 'tool' event (after any approval) to its 'tool-done'.
+ * Finished replies keep those times with their steps (timedSteps, partialReply), so they show
+ * again after a reload.
+ * The companion (src/mascot.js) sits beside the status line and shows what the reply is doing;
+ * each subagent's group has a teammate.
  */
 import { renderMarkdown } from './markdown.js';
-import { toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos, normalizeMetrics, metricsLabel, AGENT_KINDS } from './domain.mjs';
+import {
+  toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos, normalizeMetrics, metricsLabel, durationText, AGENT_KINDS,
+} from './domain.mjs';
+import { renderMascot, mascotSpec, setMascotState, companionStateFor, mascotCaption } from './mascot.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 // A running command's output kept on screen (the end of it).
@@ -31,8 +40,13 @@ function element(tag, className, text) {
   return node;
 }
 function elapsedText(ms) {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return durationText(Math.max(0, ms), { live: true });
+}
+// How long a step ran: measured when it finished, or until `now` for one still running or waiting
+// (a stopped reply keeps the time it had run). Null when it never ran (an approval was refused).
+function stepDuration(step, now) {
+  if (Number.isSafeInteger(step.durationMs) && step.durationMs >= 0) return step.durationMs;
+  return step.state === 'running' && Number.isFinite(step.startedAt) ? Math.max(0, Math.round(now - step.startedAt)) : null;
 }
 function stepIcon(state) {
   const holder = element('span', 'reply-step-icon');
@@ -87,8 +101,9 @@ function workingAgents(reply) {
  * Applies one progress event from main to the reply. Returns what changed, for patchReply:
  * { kind: 'status' | 'text' | 'reasoning' | 'step' | 'output', item?, added? }, or null.
  */
-export function applyProgress(reply, event) {
+export function applyProgress(reply, event, now = Date.now()) {
   if (!reply || !event || typeof event !== 'object') return null;
+  const at = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
   switch (event.phase) {
     case 'thinking':
       // A new model round: its text is a new block, its thinking follows the earlier thinking.
@@ -135,6 +150,8 @@ export function applyProgress(reply, event) {
       if (!step.title) step.title = typeof event.toolName === 'string' ? event.toolName : 'Tool call';
       if (typeof event.serverId === 'string') step.server = event.serverId;
       if (typeof event.toolName === 'string') step.tool = event.toolName;
+      // It runs from now: waiting for the user's approval does not count as running time.
+      if (event.phase === 'tool' && step.state !== 'running') step.startedAt = at;
       step.state = event.phase === 'approval' ? 'approval' : 'running';
       reply.phase = event.phase;
       reply.activity = toolActivity(event.serverId, event.toolName);
@@ -151,6 +168,8 @@ export function applyProgress(reply, event) {
     case 'tool-done': {
       const step = stepFor(reply, event.callId);
       if (!step) return null;
+      const duration = stepDuration(step, at);
+      if (duration !== null) step.durationMs = duration;
       step.state = event.ok === true ? 'ok' : 'error';
       reply.phase = 'working';
       reply.activity = null;
@@ -175,7 +194,7 @@ export function applyProgress(reply, event) {
       if (nested) {
         if (nested.phase === 'subagent' || nested.phase === 'changes') return null;
         const agent = step.agent || createAgent();
-        if (!applyProgress(agent, nested)) return null;
+        if (!applyProgress(agent, nested, at)) return null;
         step.agent = agent;
         return { kind: 'agent', item: step };
       }
@@ -260,11 +279,31 @@ function outputNode(text) {
   pre.setAttribute('aria-label', 'Command output');
   return pre;
 }
+// "0.4s" after a step's title; a running step's clock ticks (tickReply).
+function stepTime(step) {
+  if (step.state === 'running' && Number.isFinite(step.startedAt)) {
+    const node = element('span', 'reply-step-time is-running', elapsedText(Date.now() - step.startedAt));
+    node.dataset.startedAt = String(step.startedAt);
+    return node;
+  }
+  const text = Number.isSafeInteger(step.durationMs) ? durationText(step.durationMs) : '';
+  return text ? element('span', 'reply-step-time', text) : null;
+}
 function stepRow(step) {
   const row = element('div', 'reply-step-row');
   row.append(stepIcon(step.state), element('span', 'reply-step-title', step.title),
     element('span', 'sr-only', `, ${STATE_TEXT[step.state] || ''}`));
+  const time = stepTime(step);
+  if (time) row.append(time);
   return row;
+}
+// A subagent's teammate: a small head printed like the companion, in the subagent's state.
+// `settled`: drawn again in a state it already had, so no entrance motion.
+function teammate(agent, settled = true) {
+  const holder = element('span', 'reply-agent-mate');
+  holder.setAttribute('aria-hidden', 'true');
+  holder.append(renderMascot(mascotSpec({ state: companionStateFor(agent), variant: 'teammate', settled })));
+  return holder;
 }
 // "Done · explore · 3.5k in · 109 out · $0.00072"
 function agentMeta(agent) {
@@ -300,7 +339,7 @@ function liveAgentNode(step) {
   group.open = step.agentOpen !== false;
   group.addEventListener('toggle', () => { step.agentOpen = group.open; });
   const summary = element('summary', 'reply-agent-summary');
-  summary.append(stepRow(step), element('span', 'reply-agent-meta', agentMeta(step.agent)));
+  summary.append(teammate(step.agent), stepRow(step), element('span', 'reply-agent-meta', agentMeta(step.agent)));
   group.append(summary, agentItems(step.agent));
   node.append(group);
   return node;
@@ -371,9 +410,52 @@ export function renderLiveReply(reply) {
   view.status = element('span', 'pending-reply-text', statusText(reply));
   view.time = element('span', 'pending-reply-time', elapsedText(Date.now() - reply.startedAt));
   status.append(dots, view.status, view.time);
-  bubble.append(status);
+  // The companion beside the status line, with "working · 1m 12s" under the status. With the
+  // companion off (body.companion-off, mascot.css) the status line shows its dots and time again.
+  view.mood = companionStateFor(reply);
+  view.mascot = renderMascot(mascotSpec({ state: view.mood, variant: 'companion', settled: true }));
+  const figure = element('span', 'reply-companion-figure');
+  figure.setAttribute('aria-hidden', 'true');
+  figure.append(view.mascot);
+  view.caption = element('span', 'reply-companion-caption', mascotCaption(view.mood, elapsedText(Date.now() - reply.startedAt)));
+  const body = element('div', 'reply-companion-body');
+  body.append(status, view.caption);
+  view.companion = element('div', 'reply-companion');
+  view.companion.dataset.state = view.mood;
+  view.companion.append(figure, body);
+  bubble.append(view.companion);
   reply.view = view;
   return bubble;
+}
+
+// The companion follows the reply: its state when that changed, and the time in its caption.
+function updateCompanion(reply, now = Date.now()) {
+  const view = reply.view;
+  if (!view?.mascot) return;
+  const mood = companionStateFor(reply);
+  if (mood !== view.mood) {
+    setMascotState(view.mascot, mood);
+    view.mood = mood;
+    view.companion.dataset.state = mood;
+  }
+  view.caption.textContent = mascotCaption(mood, elapsedText(now - reply.startedAt));
+}
+
+/**
+ * The companion under a finished reply (src/app.js puts it under the newest one): `state` is how
+ * it looks ('done' or 'error' for a moment after the reply ended, then 'idle'), `outcome` and
+ * `caption` say how the reply ended ("done · 1m 12s").
+ */
+export function renderReplyCompanion({ state = 'idle', outcome = 'done', caption = '', settled = true } = {}) {
+  const row = element('div', 'reply-companion is-finished');
+  row.dataset.state = state;
+  row.dataset.outcome = outcome;
+  const figure = element('span', 'reply-companion-figure');
+  figure.setAttribute('aria-hidden', 'true');
+  figure.append(renderMascot(mascotSpec({ state, variant: 'companion', settled })));
+  row.append(figure);
+  if (caption) row.append(element('span', 'reply-companion-caption', caption));
+  return row;
 }
 
 function nearBottom(container) {
@@ -405,6 +487,8 @@ function drawAgents(view, container) {
     if (!node || !step.agent) continue;
     const meta = node.querySelector('.reply-agent-meta');
     if (meta) meta.textContent = agentMeta(step.agent);
+    const mate = node.querySelector('.reply-agent-mate .mascot');
+    if (mate) setMascotState(mate, companionStateFor(step.agent));
     node.querySelector('.reply-agent-items')?.replaceWith(agentItems(step.agent));
   }
   view.agents.clear();
@@ -461,6 +545,7 @@ export function patchReply(reply, change, container) {
     }
   }
   view.status.textContent = statusText(reply);
+  updateCompanion(reply);
   follow(container, stick);
   return true;
 }
@@ -469,17 +554,31 @@ export function patchReply(reply, change, container) {
 export function tickReply(reply) {
   const view = reply?.view;
   if (!view || !view.bubble.isConnected) return;
-  view.time.textContent = elapsedText(Date.now() - reply.startedAt);
+  const now = Date.now();
+  view.time.textContent = elapsedText(now - reply.startedAt);
   view.status.textContent = statusText(reply);
+  updateCompanion(reply, now);
+  // The clocks of the steps that are running, the subagents' own included.
+  for (const node of view.bubble.querySelectorAll('.reply-step-time.is-running')) {
+    const started = Number(node.dataset.startedAt);
+    if (Number.isFinite(started)) node.textContent = elapsedText(now - started);
+  }
+}
+
+// The running time a stopped step keeps, as a field to spread into it.
+function durationField(item, now) {
+  const duration = stepDuration(item, now);
+  return duration === null ? {} : { durationMs: duration };
 }
 
 // A subagent of a stopped reply, as kept with its step: one still at work was stopped with it.
-function stoppedAgent(agent) {
+function stoppedAgent(agent, now) {
   const steps = agent.items.map((item) => (item.type === 'text'
     ? { type: 'note', text: item.text }
     : {
       type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool,
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
+      ...durationField(item, now),
     }));
   const status = agent.status === 'queued' || agent.status === 'running' ? 'stopped' : agent.status;
   return { kind: agent.kind, status, steps, ...(agent.metrics ? { metrics: agent.metrics } : {}), ...(agent.rounds ? { rounds: agent.rounds } : {}) };
@@ -489,7 +588,7 @@ function stoppedAgent(agent) {
  * What a stopped reply leaves behind: the text written so far as the answer, the rest as steps
  * (a call that was still running is marked stopped). Null when nothing was written or done.
  */
-export function partialReply(reply) {
+export function partialReply(reply, now = Date.now()) {
   if (!reply || reply.kind !== 'chat') return null;
   const items = reply.items;
   const last = items[items.length - 1];
@@ -500,13 +599,42 @@ export function partialReply(reply) {
     : {
       type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool, output: item.output,
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
-      ...(item.agent ? { agent: stoppedAgent(item.agent) } : {}),
+      ...durationField(item, now),
+      ...(item.agent ? { agent: stoppedAgent(item.agent, now) } : {}),
     })));
   const reasoning = replyReasoning(reply);
   const changes = reply.changes || null;
   const todos = normalizeTodos(reply.todos);
   if (!text && !steps.length && !reasoning && !changes && !todos.length) return null;
   return { text, steps, reasoning, changes, todos };
+}
+
+const sameTitle = (a, b) => typeof a === 'string' && typeof b === 'string'
+  && a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
+
+/**
+ * Main's steps of a finished reply (they carry no times) with the running time the window measured
+ * for each call. Main's steps and the live ones are in the same order, but main also lists calls
+ * that never started (skipped, refused before running), so each of main's calls takes the next live
+ * step with the same title. A subagent's own steps are matched the same way.
+ */
+export function timedSteps(steps, reply, now = Date.now()) {
+  if (!Array.isArray(steps) || !reply || !Array.isArray(reply.items)) return steps;
+  const live = reply.items.filter((item) => item && item.type === 'tool');
+  let next = 0;
+  return steps.map((step) => {
+    if (!step || typeof step !== 'object' || step.type !== 'tool') return step;
+    let index = next;
+    while (index < live.length && !sameTitle(live[index].title, step.title)) index += 1;
+    if (index >= live.length) return step;
+    next = index + 1;
+    const item = live[index];
+    const timed = { ...step, ...durationField(item, now) };
+    if (item.agent && step.agent && typeof step.agent === 'object' && Array.isArray(step.agent.steps)) {
+      timed.agent = { ...step.agent, steps: timedSteps(step.agent.steps, item.agent, now) };
+    }
+    return timed;
+  });
 }
 
 /**
@@ -519,7 +647,8 @@ function finishedAgentNode(step) {
   const node = element('details', 'reply-step reply-agent');
   node.dataset.state = state;
   const head = element('summary', 'reply-step-summary');
-  head.append(stepRow({ ...step, state }), element('span', 'reply-agent-meta', agentMeta(agent)));
+  head.append(teammate({ status: state === 'stopped' ? 'stopped' : agent.status }), stepRow({ ...step, state }),
+    element('span', 'reply-agent-meta', agentMeta(agent)));
   const list = renderMessageSteps(agent.steps).querySelector('.msg-steps-list') || element('div', 'msg-steps-list');
   list.classList.add('reply-agent-items');
   if (!step.ok && step.preview) list.append(element('div', 'reply-step-error', step.preview));

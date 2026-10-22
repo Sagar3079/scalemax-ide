@@ -29,6 +29,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoCompact: true,
   // Automations fire while no window is open too (lib/automations.cjs; Preferences > Automations).
   automationsInBackground: true,
+  // The animated companion beside replies, teammates and sidebar marks (src/mascot.js;
+  // Preferences > Appearance). Off hides every mascot.
+  companion: true,
   // The permission to return to after a plan is run (Plan is read-only, so it cannot carry it out).
   prePlanPermission: 'basic',
   // What the composer sends: chat, or an image / video generation with the chosen model.
@@ -190,7 +193,7 @@ export function normalizeSettings(value) {
   if (result.permission === 'bypass' && !result.bypassConsent) result.permission = 'basic';
   if (typeof own(value, 'thinking') === 'boolean') result.thinking = value.thinking;
   if (typeof own(value, 'projectNotes') === 'boolean') result.projectNotes = value.projectNotes;
-  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact', 'automationsInBackground']) {
+  for (const key of ['sandbox', 'sandboxNetwork', 'autoCompact', 'automationsInBackground', 'companion']) {
     if (typeof own(value, key) === 'boolean') result[key] = value[key];
   }
   // Where "Run this plan" puts the permission back; never Plan itself, never unconsented Bypass.
@@ -402,6 +405,8 @@ const MAX_STEP_TITLE = 160;
 const MAX_STEP_NOTE = 8192;
 const MAX_STEP_OUTPUT = 4096;
 const MAX_STEP_PREVIEW = 200;
+// A step's or a reply's running time is kept up to a week; anything longer is not a measurement.
+const MAX_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 // A subagent's own steps, kept with the step of its call: small (no command output, shorter
 // notes, never another subagent).
 const MAX_AGENT_STEPS = 50;
@@ -440,6 +445,8 @@ export function normalizeSteps(value, { nested = false } = {}) {
       // The end of a command's output: errors and summaries are printed last.
       if (!nested && typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
       if (step.stopped === true) entry.stopped = true;
+      // How long the call ran, measured in the window from its progress events (src/reply-ui.js).
+      if (Number.isSafeInteger(step.durationMs) && step.durationMs >= 0 && step.durationMs <= MAX_DURATION_MS) entry.durationMs = step.durationMs;
       const agent = nested ? null : normalizeAgent(step.agent, entry.ok);
       if (agent) entry.agent = agent;
       steps.push(entry);
@@ -749,6 +756,93 @@ export function taskMetricsLabel(task) {
     : totals.unavailablePrice ? 'Price unavailable' : '';
   return [tokens, price].filter(Boolean).join(' · ');
 }
+/** A reply's running time as kept with it, or null (src/app.js and the task state). */
+export function normalizeElapsed(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_DURATION_MS ? value : null;
+}
+
+/**
+ * How long something ran, for steps and replies. Finished: "<0.1s", "0.4s", "9.8s", "42s",
+ * "1m 3s", "2h 5m". `live` (a clock that ticks once a second): whole seconds, "0s", "12s",
+ * "1m 3s". '' for anything that is not a duration.
+ */
+export function durationText(ms, { live = false } = {}) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  if (!live && ms < 100) return '<0.1s';
+  if (!live && ms < 10_000) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+/**
+ * The share of the model's context window a reply filled when it ended, in percent: the tokens of
+ * its last model call (input plus output) over the window the model publishes. Several calls
+ * (tool rounds, subagents) are each kept in `metrics.rounds`, and only the last one counts; a
+ * reply with no rounds was one call. Null without a published window or reported usage.
+ */
+export function contextShare(value, contextWindow) {
+  if (!Number.isSafeInteger(contextWindow) || contextWindow < 1) return null;
+  const metrics = normalizeMetrics(value);
+  if (!metrics) return null;
+  const rounds = (metrics.rounds || []).filter((round) => !round.model || !metrics.model || round.model === metrics.model);
+  const usage = metrics.rounds?.length ? rounds[rounds.length - 1]?.usage : metrics.usage;
+  if (!usage) return null;
+  const used = Number.isInteger(usage.inputTokens)
+    ? usage.inputTokens + (Number.isInteger(usage.outputTokens) ? usage.outputTokens : 0)
+    : Number.isInteger(usage.totalTokens) ? usage.totalTokens : null;
+  return used === null ? null : (used / contextWindow) * 100;
+}
+
+/** "38% of context" (or "<1% of context") for a reply's footer; '' when it cannot be known. */
+export function contextShareLabel(value, contextWindow) {
+  const share = contextShare(value, contextWindow);
+  if (share === null) return '';
+  return share > 0 && share < 1 ? '<1% of context' : `${Math.round(share)}% of context`;
+}
+
+/**
+ * The composer's context meter for a task: how full the model's context window was when the task's
+ * newest reply that reported usage ended (contextShare of its metrics, against the window of the
+ * model it ran on, or `fallbackModel` when the metrics name none). `windowOf(model)` gives a model's
+ * published window or null (app.contextWindowOf). Null without a window or usage, and once the
+ * conversation was compacted after that reply (its figure no longer says how full the context is).
+ * `start` is where the reply before it left the window (same model, not compacted since), so the
+ * meter can overprint the newest reply's own part; null when there is none to compare with.
+ * @returns {{share: number, percent: number, label: string, start: number|null} | null}
+ */
+export function taskContextShare(task, windowOf, fallbackModel = '') {
+  const messages = Array.isArray(task?.messages) ? task.messages : [];
+  const compaction = normalizeCompaction(task?.compaction);
+  const stale = (message, index) => Boolean(compaction) && (compaction.time && validTimestamp(message.time)
+    ? message.time < compaction.time : index < compaction.through);
+  const lookup = (model) => {
+    try {
+      return typeof windowOf === 'function' ? windowOf(model) : null;
+    } catch {
+      return null;
+    }
+  };
+  const measured = [];
+  for (let index = messages.length - 1; index >= 0 && measured.length < 2; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role !== 'assistant') continue;
+    const metrics = normalizeMetrics(message.metrics);
+    if (metrics) measured.push({ message, index, metrics, model: metrics.model || fallbackModel });
+  }
+  const [newest, before] = measured;
+  if (!newest || stale(newest.message, newest.index)) return null;
+  const contextWindow = lookup(newest.model);
+  const share = contextShare(newest.metrics, contextWindow);
+  if (share === null) return null;
+  const percent = Math.min(100, Math.max(0, share));
+  const earlier = before && before.model === newest.model && !stale(before.message, before.index)
+    ? contextShare(before.metrics, contextWindow) : null;
+  const start = earlier === null ? null : Math.min(percent, Math.max(0, earlier));
+  return { share, percent, label: contextShareLabel(newest.metrics, contextWindow), start };
+}
+
 // A reply that ended before it was finished: 'stopped' by the user, 'failed' on an error, or
 // 'closed' when the window was closed or reloaded while it worked (src/app.js keepRunningReplies).
 export const INTERRUPTIONS = Object.freeze(['stopped', 'failed', 'closed']);
@@ -898,6 +992,9 @@ export function normalizeTasks(value, now = Date.now()) {
         // How long the model thought (and any thinking text it returned) survive a reload.
         const thinkingMs = own(message, 'thinkingMs');
         if (message.role === 'assistant' && Number.isSafeInteger(thinkingMs) && thinkingMs >= 0) entry.thinkingMs = thinkingMs;
+        // How long the whole reply took, from Send to its end (src/app.js).
+        const elapsedMs = own(message, 'elapsedMs');
+        if (message.role === 'assistant' && Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= MAX_DURATION_MS) entry.elapsedMs = elapsedMs;
         const reasoning = own(message, 'reasoning');
         if (message.role === 'assistant' && typeof reasoning === 'string' && reasoning.trim()) {
           entry.reasoning = boundedText(reasoning, MAX_REASONING);

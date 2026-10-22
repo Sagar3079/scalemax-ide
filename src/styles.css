@@ -1,60 +1,351 @@
 /*
- * ScaleMax IDE — renderer styles.
+ * ScaleMax IDE — renderer styles: "Riso Zine Press".
  *
- * Built on the ScaleMax design tokens in sm-tokens.css. Shell metrics: 38px
- * titlebar, 220px sidebar, 22px statusbar, 8px control radius, Assistant as the
- * UI typeface.
+ * The shell is a calm two-ink riso print on cool paper stock. The inks
+ * (--riso-*) are defined first, then every older token the components use
+ * (--sm-app-*, --sm-text-*, --sm-brand-*, --sm-bg-*, --sm-color-border-*,
+ * --sm-palette-*, --sm-button-*, ...) is remapped onto them, so the component
+ * files follow the theme without per-rule edits. sm-tokens.css still holds the
+ * full generated token set underneath; this file wins because it loads later.
+ *
+ * Inks: paper (ground), ink (text), blue (structure: active nav, selection,
+ * primary buttons, focus, links), pink (agent activity only), yellow (a
+ * highlighter pass for "waiting for you" and search hits, always under
+ * ink-black text), red (failed and danger), green (additions only).
+ * Type: Bricolage Grotesque for headings, labels and state tags; the system UI
+ * face for body copy; a mono for code, paths and numbers in tables and meters.
+ * Strict scale 11 / 12 / 13 / 15 / 20 / 28 px. One 4px module, 1px rules,
+ * 6px control radius, 8px card and dialog radius.
  *
  * Sections
+ *   00. Inks, fonts and the token remap
  *   01. Base and accessibility
  *   02. Shell: titlebar, sidebar, statusbar
- *   03. Controls: buttons, inputs, badges
+ *   03. Controls: buttons, inputs, badges, state tags
  *   04. Views and page structure
  *   05. Chat workspace (home layout)
  *   06. Workspace: shared output styles (layout lives in workspace.css)
  *   07. Catalog: experts, skills, connectors
  *   08. Automation
  *   09. Assistant and provider settings
- *   10. Overlays: search, toast
+ *   10. Overlays: dialogs, search, toast
  *   11. Responsive layout
  */
 
 /* ------------------------------------------------------------------ */
-/* 01. Base and accessibility                                          */
+/* 00. Inks, fonts and the token remap                                 */
 /* ------------------------------------------------------------------ */
 
-/* App-level surfaces. The shared --sm-bg-* tokens are component-scoped in the
-   source design system, so the shell pins its own surface values per theme. */
-:root {
-  --sm-app-page: #ffffff;
-  --sm-app-surface: #ffffff;
-  --sm-app-surface-hover: #f5f5f5;
-  --sm-app-chrome: #f5f5f5;
-  --sm-app-sidebar: #f7f7f8;
-  --sm-app-border: rgba(0, 0, 0, 0.06);
-  --sm-app-muted: var(--sm-bg-tertiary);
-  /* Status and accent colours for text and small icons, at 4.5:1 or more on the app's surfaces
-     and tinted badges. The palette's 7-8 shades and the brand colour are fills: as small text
-     they read at 2-3.7:1. */
-  --sm-app-text-danger: #b42c3f;
-  --sm-app-text-success: #067a44;
-  --sm-app-text-warning: #b54708;
-  --sm-app-text-accent: #007a60;
+/* Bricolage Grotesque (SIL OFL 1.1, assets/fonts/BricolageGrotesque-OFL.txt): Latin subset
+   with every axis (opsz 12-96, wght 200-800, wdth 75-100), the "standard" file of
+   @fontsource-variable/bricolage-grotesque@5.3.0. font-optical-sizing: auto (set on body,
+   inherited) picks the optical-size cut from the font size, so 20 and 28px headings get the
+   inky large-size drawing and 11px tags the open small-size one. */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("../assets/fonts/BricolageGrotesque-full-latin.woff2") format("woff2-variations"),
+    url("../assets/fonts/BricolageGrotesque-full-latin.woff2") format("woff2");
+  font-weight: 200 800;
+  font-stretch: 75% 100%;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
 }
 
-[data-theme="dark"] {
-  --sm-app-page: #1f1f1f;
-  --sm-app-surface: #242424;
-  --sm-app-surface-hover: #2a2a2a;
-  --sm-app-chrome: #181818;
-  --sm-app-sidebar: #1a1a1a;
-  --sm-app-border: rgba(255, 255, 255, 0.08);
-  --sm-app-muted: rgba(255, 255, 255, 0.09);
-  --sm-app-text-danger: #f47a7a;
-  --sm-app-text-success: #2ee07e;
-  --sm-app-text-warning: #ffa061;
-  --sm-app-text-accent: #22cba8;
+:root {
+  color-scheme: light;
+
+  /* Inks on cool paper stock (light). */
+  --riso-paper: #F3F4F1;
+  --riso-paper-raised: #FAFAF8;
+  --riso-rail: color-mix(in srgb, #0078BF 9%, #F3F4F1);
+  --riso-ink: #1A1B1F;
+  --riso-ink-2: #4A4D55;
+  --riso-ink-3: #6B6F78;
+  --riso-rule: color-mix(in srgb, #1A1B1F 14%, transparent);
+  --riso-blue: #0078BF;
+  --riso-blue-text: #005E96;
+  --riso-pink: #FF48B0;
+  --riso-pink-text: #B8126F;
+  --riso-yellow: #FFE800;
+  --riso-red: #F15060;
+  --riso-red-text: #B42638;
+  --riso-green-text: #0A7A46;
+  --riso-diff-add-bg: color-mix(in srgb, #00A95C 14%, transparent);
+  --riso-diff-del-bg: color-mix(in srgb, #F15060 14%, transparent);
+
+  /* Derived inks. ink-3 reads 4.1:1 on the blue rail, so meta text there uses
+     --riso-rail-ink-3. Text on pink and yellow fills is always ink-black. */
+  --riso-rule-strong: color-mix(in srgb, var(--riso-ink) 26%, transparent);
+  --riso-rail-rule: color-mix(in srgb, var(--riso-blue) 24%, transparent);
+  --riso-rail-ink-3: #555962;
+  /* The rail is printed: a fine blue halftone screen (45 degree lattice, 4px cells) over the
+     tint, and selected rows as an opaque solid blue patch (no dots behind words). Measured on the light rail: ink-2 nav
+     text 6.5:1 on the screen's average and 5.6:1 even on a dot's centre; rail meta text
+     (--riso-rail-ink-3) 5.4:1 and 4.65:1. The active item's deep blue text sits on the solid patch. */
+  --riso-rail-dot: color-mix(in srgb, #0078BF 16%, transparent);
+  --riso-rail-screen: radial-gradient(circle at 2px 2px, var(--riso-rail-dot) 0.8px, transparent 1.15px);
+  /* Selected rows on the rail: an opaque blue patch (hides the screen), deep blue text 6.8:1. */
+  --riso-rail-patch: color-mix(in srgb, var(--riso-blue) 13%, var(--riso-rail));
+  --riso-rail-active-text: #004A78;
+  --riso-ink-black: #1A1B1F;
+  --riso-green: #00A95C;
+  --riso-yellow-text: #7A5D00;
+  --riso-blue-fill: #0078BF;
+  --riso-blue-fill-hover: #006AA8;
+  --riso-on-blue: #FFFFFF;
+  --riso-danger-fill: #B42638;
+  --riso-on-danger: #FFFFFF;
+  --riso-thumb: #FFFFFF;
+  --riso-ink-tint: color-mix(in srgb, var(--riso-ink) 5%, transparent);
+  --riso-ink-tint-strong: color-mix(in srgb, var(--riso-ink) 9%, transparent);
+  --riso-blue-tint: color-mix(in srgb, var(--riso-blue) 11%, transparent);
+  --riso-blue-wash: color-mix(in srgb, var(--riso-blue) 10%, var(--riso-paper-raised));
+  --riso-red-wash: color-mix(in srgb, var(--riso-red) 10%, var(--riso-paper-raised));
+  --riso-green-wash: color-mix(in srgb, var(--riso-green) 10%, var(--riso-paper-raised));
+  --riso-yellow-wash: color-mix(in srgb, var(--riso-yellow) 32%, var(--riso-paper-raised));
+  --riso-highlight: color-mix(in srgb, var(--riso-yellow) 70%, transparent);
+  --riso-shadow-ink: color-mix(in srgb, var(--riso-ink) 14%, transparent);
+  --riso-backdrop: color-mix(in srgb, var(--riso-paper) 55%, transparent);
+  /* Paper grain for the page ground only (never on editors or text surfaces). */
+  --riso-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .1 0 0 0 0 .106 0 0 0 0 .122 1 0 0 0 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='.035'/%3E%3C/svg%3E");
+
+  /* Semantic aliases: task state, the companion's two inks, motion. */
+  --sm-state-working: var(--riso-pink);
+  --sm-state-waiting: var(--riso-yellow);
+  --sm-state-done: var(--riso-blue);
+  --sm-state-failed: var(--riso-red);
+  --sm-state-queued: var(--riso-ink-3);
+  --sm-mascot-ink-a: var(--riso-pink);
+  --sm-mascot-ink-b: var(--riso-blue);
+  --sm-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sm-dur-1: 120ms;
+  --sm-dur-2: 200ms;
+  --sm-dur-3: 320ms;
+
+  /* Faces and the strict type scale. */
+  --sm-font-display: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif;
+  --sm-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --sm-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sm-type-meta: 11px;
+  --sm-type-small: 12px;
+  --sm-type-ui: 13px;
+  --sm-type-body: 15px;
+  --sm-type-title: 20px;
+  --sm-type-heading: 28px;
+
+  /* The one lift: dialogs and popovers. */
+  --sm-shadow-lift: 0 8px 24px var(--riso-shadow-ink), 0 1px 0 var(--riso-rule);
+
+  /* Remap: app shell surfaces and text. */
+  --sm-app-page: var(--riso-paper);
+  --sm-app-surface: var(--riso-paper-raised);
+  --sm-app-surface-hover: color-mix(in srgb, var(--riso-ink) 5%, var(--riso-paper-raised));
+  --sm-app-chrome: var(--riso-paper);
+  --sm-app-sidebar: var(--riso-rail);
+  --sm-app-border: var(--riso-rule);
+  --sm-app-muted: color-mix(in srgb, var(--riso-ink) 7%, transparent);
+  --sm-app-text-danger: var(--riso-red-text);
+  --sm-app-text-success: var(--riso-green-text);
+  --sm-app-text-warning: var(--riso-yellow-text);
+  --sm-app-text-accent: var(--riso-blue-text);
+
+  /* Remap: brand, text and icon tokens. */
+  --sm-brand-primary: var(--riso-blue);
+  --sm-brand-primary-subtle: var(--riso-blue-tint);
+  --sm-brand-primary-deep: var(--riso-blue-text);
+  --sm-brand-bright: var(--riso-blue);
+  --sm-text-strong: var(--riso-ink);
+  --sm-text-medium: var(--riso-ink-2);
+  --sm-text-weak: var(--riso-ink-3);
+  --sm-text-primary: var(--riso-ink);
+  --sm-text-secondary: var(--riso-ink-2);
+  --sm-text-muted: var(--riso-ink-3);
+  --sm-text-on-primary: var(--riso-on-blue);
+  --sm-text-highlight: var(--riso-highlight);
+  --sm-color-text-primary: var(--riso-ink);
+  --sm-color-text-secondary: var(--riso-ink-2);
+  --sm-color-text-tertiary: var(--riso-ink-3);
+  --sm-color-text-placeholder: var(--riso-ink-3);
+  --sm-color-text-hint: var(--riso-ink-3);
+  --sm-color-text-solid: var(--riso-ink);
+  --sm-color-text-brand-default: var(--riso-blue-text);
+  --sm-color-text-link-default: var(--riso-blue-text);
+  --sm-color-text-link-hover: var(--riso-blue-text);
+  --sm-color-text-error-default: var(--riso-red-text);
+  --sm-color-text-warning-default: var(--riso-yellow-text);
+  --sm-color-text-success-default: var(--riso-green-text);
+  --sm-icon-primary: var(--riso-ink);
+  --sm-icon-secondary: var(--riso-ink-2);
+  --sm-icon-tertiary: var(--riso-ink-3);
+  --sm-icon-default: var(--riso-ink-2);
+
+  /* Remap: rules, fills and states. */
+  --sm-color-border-primary: var(--riso-rule);
+  --sm-color-border-secondary: var(--riso-rule);
+  --sm-color-border-tertiary: var(--riso-rule);
+  --sm-color-border-solid: var(--riso-rule-strong);
+  --sm-color-border-focus: var(--riso-blue);
+  --sm-border-default: var(--riso-rule);
+  --sm-border-subtle: var(--riso-rule);
+  --sm-border-strong: var(--riso-rule-strong);
+  --sm-border-focus: var(--riso-blue);
+  --sm-border-popover: var(--riso-rule);
+  --sm-bg-hover: var(--riso-ink-tint);
+  --sm-bg-hover-light: var(--riso-ink-tint);
+  --sm-bg-active: var(--riso-blue-tint);
+  --sm-bg-item-selected: var(--riso-blue-tint);
+  --sm-bg-tertiary: color-mix(in srgb, var(--riso-ink) 7%, transparent);
+  --sm-bg-card: var(--riso-paper-raised);
+  --sm-bg-elevated: var(--riso-paper-raised);
+  --sm-bg-popover: var(--riso-paper-raised);
+  --sm-bg-modal: var(--riso-paper-raised);
+  --sm-bg-tooltip: var(--riso-ink);
+  --sm-bg-overlay: var(--riso-backdrop);
+  --sm-scrollbar-thumb: color-mix(in srgb, var(--riso-ink) 22%, transparent);
+  --sm-scrollbar-thumb-hover: color-mix(in srgb, var(--riso-ink) 36%, transparent);
+  --sm-status-info: var(--riso-blue);
+  --sm-status-success: var(--riso-green);
+  --sm-status-warning: var(--riso-yellow);
+  --sm-status-warning-soft: var(--riso-yellow-wash);
+  --sm-status-error: var(--riso-red);
+  --sm-status-error-soft: var(--riso-red-wash);
+
+  /* Remap: buttons. */
+  --sm-button-primary-bg: var(--riso-blue-fill);
+  --sm-button-primary-bg-hover: var(--riso-blue-fill-hover);
+  --sm-button-primary-fg: var(--riso-on-blue);
+  --sm-button-primary-bg-disabled: color-mix(in srgb, var(--riso-ink) 12%, transparent);
+  --sm-button-primary-fg-disabled: var(--riso-ink-3);
+  --sm-button-secondary-bg: var(--riso-paper-raised);
+  --sm-button-secondary-bg-hover: color-mix(in srgb, var(--riso-ink) 5%, var(--riso-paper-raised));
+  --sm-button-secondary-fg: var(--riso-ink);
+  --sm-button-secondary-border: var(--riso-rule);
+  --sm-button-danger-secondary-bg: var(--riso-paper-raised);
+  --sm-button-danger-secondary-bg-hover: var(--riso-red-wash);
+  --sm-button-danger-secondary-fg: var(--riso-red-text);
+  --sm-button-danger-secondary-border: color-mix(in srgb, var(--riso-red) 55%, transparent);
+  --sm-button-ghost-fg: var(--riso-ink-2);
+  --sm-button-ghost-bg-hover: var(--riso-ink-tint);
+
+  /* Remap: palette steps the component files still name. Tints (1-4) are washes over
+     raised paper, 5-8 are the fill ink, 9-10 the text ink. Orange becomes the
+     yellow highlighter; brand (formerly teal) becomes riso blue. */
+  --sm-palette-brand-1: var(--riso-blue-wash);
+  --sm-palette-brand-2: color-mix(in srgb, var(--riso-blue) 16%, var(--riso-paper-raised));
+  --sm-palette-brand-3: color-mix(in srgb, var(--riso-blue) 34%, transparent);
+  --sm-palette-brand-4: color-mix(in srgb, var(--riso-blue) 50%, transparent);
+  --sm-palette-brand-5: var(--riso-blue);
+  --sm-palette-brand-6: var(--riso-blue);
+  --sm-palette-brand-7: var(--riso-blue);
+  --sm-palette-brand-8: var(--riso-blue);
+  --sm-palette-brand-9: var(--riso-blue-text);
+  --sm-palette-brand-10: var(--riso-blue-text);
+  --sm-palette-blue-1: var(--riso-blue-wash);
+  --sm-palette-blue-2: color-mix(in srgb, var(--riso-blue) 16%, var(--riso-paper-raised));
+  --sm-palette-blue-3: color-mix(in srgb, var(--riso-blue) 34%, transparent);
+  --sm-palette-blue-8: var(--riso-blue);
+  --sm-palette-blue-9: var(--riso-blue-text);
+  --sm-palette-blue-10: var(--riso-blue-text);
+  --sm-palette-red-1: var(--riso-red-wash);
+  --sm-palette-red-2: color-mix(in srgb, var(--riso-red) 18%, var(--riso-paper-raised));
+  --sm-palette-red-3: color-mix(in srgb, var(--riso-red) 45%, transparent);
+  --sm-palette-red-8: var(--riso-red);
+  --sm-palette-red-9: var(--riso-red-text);
+  --sm-palette-green-1: var(--riso-green-wash);
+  --sm-palette-green-2: color-mix(in srgb, var(--riso-green) 18%, var(--riso-paper-raised));
+  --sm-palette-green-3: color-mix(in srgb, var(--riso-green) 45%, transparent);
+  --sm-palette-green-6: var(--riso-green);
+  --sm-palette-green-8: var(--riso-green);
+  --sm-palette-green-9: var(--riso-green-text);
+  --sm-palette-orange-1: var(--riso-yellow-wash);
+  --sm-palette-orange-2: color-mix(in srgb, var(--riso-yellow) 55%, var(--riso-paper-raised));
+  --sm-palette-orange-3: color-mix(in srgb, var(--riso-yellow-text) 40%, transparent);
+  --sm-palette-orange-4: color-mix(in srgb, var(--riso-yellow-text) 55%, transparent);
+  --sm-palette-orange-5: var(--riso-yellow);
+  --sm-palette-orange-8: var(--riso-yellow-text);
+  --sm-palette-orange-9: var(--riso-yellow-text);
+  --sm-palette-gray-5: var(--riso-ink-3);
+
+  /* Remap: shape, depth, motion, faces. */
+  --sm-radius-md: 6px;
+  --sm-radius-lg: 6px;
+  --sm-radius-xl: 8px;
+  --sm-radius-2xl: 8px;
+  --sm-shadow-sm: none;
+  --sm-shadow-card: none;
+  --sm-shadow-card-soft: none;
+  --sm-shadow-card-hover: none;
+  --sm-shadow-input: none;
+  --sm-shadow-md: var(--sm-shadow-lift);
+  --sm-shadow-lg: var(--sm-shadow-lift);
+  --sm-shadow-popover: var(--sm-shadow-lift);
+  --sm-shadow-popup-medium: var(--sm-shadow-lift);
+  --sm-shadow-popup-large: var(--sm-shadow-lift);
+  --sm-shadow-dialog: var(--sm-shadow-lift);
+  --sm-shadow-dialog-md: var(--sm-shadow-lift);
+  --sm-motion-easing-standard: var(--sm-ease-out);
+  --sm-motion-duration-instant: var(--sm-dur-1);
+  --sm-motion-duration-fast: var(--sm-dur-1);
+  --sm-motion-duration-base: var(--sm-dur-2);
+  --sm-motion-duration-medium: var(--sm-dur-2);
+  --sm-font-family: var(--sm-font-ui);
+  --sm-font-code-family: var(--sm-font-mono);
+  --sm-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
+
+/* The same inks on deep blue-black stock. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --riso-paper: #14161B;
+  --riso-paper-raised: #1B1E24;
+  --riso-rail: color-mix(in srgb, #0078BF 14%, #14161B);
+  --riso-ink: #E9EAE6;
+  --riso-ink-2: #B4B7BE;
+  --riso-ink-3: #8D919A;
+  --riso-rule: color-mix(in srgb, #E9EAE6 14%, transparent);
+  --riso-blue: #4BA6E0;
+  --riso-blue-text: #7CC0EC;
+  --riso-pink: #FF5CBA;
+  --riso-pink-text: #FF8FD0;
+  --riso-yellow: #FFE800;
+  --riso-red: #FF6B78;
+  --riso-red-text: #FF8C96;
+  --riso-green-text: #4FD08A;
+  --riso-diff-add-bg: color-mix(in srgb, #00A95C 18%, transparent);
+  --riso-diff-del-bg: color-mix(in srgb, #FF6B78 16%, transparent);
+
+  --riso-rail-rule: color-mix(in srgb, var(--riso-blue) 22%, transparent);
+  --riso-rail-ink-3: #9DA1AA;
+  /* The rail's screen in the light blue on deep stock, gentler: ink-2 7.5:1 on its average
+     (6.2:1 on a dot), rail meta 5.8:1 (4.8:1); the active item's blue text 6.3:1 (5.1:1). */
+  --riso-rail-dot: color-mix(in srgb, #4BA6E0 15%, transparent);
+  --riso-rail-active-text: var(--riso-blue-text);
+  --riso-green: #2FC57A;
+  --riso-yellow-text: #F2D14B;
+  /* White on the dark-mode blue is 2.7:1, so the primary fill carries dark ink. */
+  --riso-blue-fill: #4BA6E0;
+  --riso-blue-fill-hover: #6BB8E8;
+  --riso-on-blue: #0B1016;
+  --riso-danger-fill: #FF8C96;
+  --riso-on-danger: #14161B;
+  --riso-thumb: #E9EAE6;
+  --riso-blue-wash: color-mix(in srgb, var(--riso-blue) 16%, var(--riso-paper-raised));
+  --riso-red-wash: color-mix(in srgb, var(--riso-red) 14%, var(--riso-paper-raised));
+  --riso-green-wash: color-mix(in srgb, var(--riso-green) 14%, var(--riso-paper-raised));
+  --riso-yellow-wash: color-mix(in srgb, var(--riso-yellow) 12%, var(--riso-paper-raised));
+  --riso-shadow-ink: rgb(0 0 0 / 0.45);
+  --riso-backdrop: color-mix(in srgb, var(--riso-paper) 60%, transparent);
+  /* Deep stock has grain too: pale fibres at a lower strength than on light paper. */
+  --riso-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .914 0 0 0 0 .918 0 0 0 0 .902 1 0 0 0 -.18'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='.03'/%3E%3C/svg%3E");
+}
+
+/* ------------------------------------------------------------------ */
+/* 01. Base and accessibility                                          */
+/* ------------------------------------------------------------------ */
 
 *,
 *::before,
@@ -69,10 +360,10 @@ body {
   height: 100%;
   overflow: hidden;
 }
-/* Scrollbars. With a mouse attached (or "Show scroll bars: Always") macOS gives
-   Chromium classic scrollbars: wide grey tracks that read as extra dividers next
-   to the sidebar and panels. Draw a thin rounded thumb on a transparent track
-   instead. This replaces the overlay scrollbars too, so every setup looks the same. */
+
+/* Scrollbars: a thin ink thumb on a transparent track. With a mouse attached macOS gives
+   Chromium classic scrollbars (wide grey tracks that read as extra dividers); this draws
+   the same thin thumb in every setup. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -99,12 +390,12 @@ body {
 }
 
 body {
-  font-family: Assistant, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", sans-serif;
+  font-family: var(--sm-font-ui);
   font-size: 13px;
   line-height: 1.5;
-  color: var(--sm-text-strong);
-  background: var(--sm-app-page);
+  color: var(--riso-ink);
+  background: var(--riso-paper);
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -119,6 +410,50 @@ pre {
 
 button {
   font-family: inherit;
+}
+
+a {
+  color: var(--riso-blue-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+code,
+kbd {
+  font-family: var(--sm-font-mono);
+  font-size: 0.92em;
+}
+
+kbd {
+  padding: 0 4px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 3px;
+  background: var(--riso-paper-raised);
+}
+
+/* Search hits and marks: a yellow highlighter pass under ink-black text. */
+mark {
+  padding: 0 2px;
+  border-radius: 2px;
+  background: var(--riso-highlight);
+  color: var(--riso-ink-black);
+}
+
+::selection {
+  background: var(--riso-highlight);
+  color: var(--riso-ink-black);
+}
+
+input,
+textarea,
+[contenteditable] {
+  caret-color: var(--riso-blue);
 }
 
 .hidden {
@@ -148,10 +483,11 @@ button {
   left: -9999px;
   top: 0;
   z-index: 10000;
-  padding: 6px 12px;
-  background: var(--sm-app-surface);
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: var(--sm-radius-md);
+  padding: 8px 12px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-blue-text);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
 }
 
 .skip-link:focus {
@@ -159,9 +495,20 @@ button {
   top: 8px;
 }
 
+/* One focus ring everywhere: 2px riso blue, 2px out. */
 :focus-visible {
-  outline: 1px solid var(--sm-color-border-focus);
-  outline-offset: 1px;
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 2px;
+}
+
+/* Shell motion stays functional; with Reduce Motion nothing in the shell transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,14 +523,14 @@ button {
 }
 
 #titlebar {
-  height: 38px;
+  height: 40px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 0 78px;
-  background: var(--sm-app-chrome);
-  border-bottom: 1px solid var(--sm-color-border-tertiary);
+  padding: 0 12px 0 80px;
+  background: var(--riso-paper);
+  border-bottom: 1px solid var(--riso-rule);
   -webkit-app-region: drag;
 }
 
@@ -193,24 +540,27 @@ button {
 }
 
 .titlebar-btn {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 6px;
   background: transparent;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .titlebar-btn:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
 .titlebar-btn svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
@@ -219,29 +569,32 @@ button {
 }
 
 .titlebar-title {
+  font-family: var(--sm-font-display);
   font-size: 12px;
-  font-weight: 500;
-  color: var(--sm-text-weak);
+  font-weight: 600;
+  color: var(--riso-ink-2);
   white-space: nowrap;
 }
 
 .titlebar-search {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 24px;
-  min-width: 180px;
+  gap: 8px;
+  height: 28px;
+  min-width: 200px;
   margin-inline-start: 16px;
-  padding: 0 10px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-weak);
+  padding: 0 12px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-3);
   font-size: 12px;
+  transition: border-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .titlebar-search:hover {
-  background: var(--sm-app-surface-hover);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink-2);
 }
 
 .titlebar-search svg {
@@ -260,7 +613,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 #app-body {
@@ -270,15 +623,20 @@ button {
   overflow: hidden;
 }
 
+/* The sidebar: a blue-ink rail printed as a fine halftone screen over the tint (the two
+   offset layers make the 45 degree lattice). Meta text on it uses --riso-rail-ink-3. */
 #sidebar {
-  width: 220px;
+  width: 240px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 10px;
-  background: var(--sm-app-sidebar);
-  border-right: 1px solid var(--sm-app-border);
+  padding: 12px;
+  background-color: var(--riso-rail);
+  background-image: var(--riso-rail-screen), var(--riso-rail-screen);
+  background-size: 4px 4px;
+  background-position: 0 0, 2px 2px;
+  border-right: 1px solid var(--riso-rail-rule);
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -291,37 +649,42 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 4px 8px;
+  padding: 4px 8px 12px;
 }
 
+/* The brand mark: the companion printed in register in both inks (app.js renderBrandMarks,
+   mascot.css .brand-mascot). Before the script runs it holds the one-ink agent mark
+   (assets/icons/scalemax-mark.svg) in blue. */
 .brand-mark {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-brand-primary);
-  color: var(--sm-text-white);
-  font-size: 13px;
-  font-weight: 600;
+  background: none;
+  color: var(--riso-blue);
 }
 
-/* ScaleMax agent mark (assets/icons/scalemax-mark.svg), drawn in currentColor. */
 .brand-mark svg {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   display: block;
 }
+
 .about-card .brand-mark {
+  width: 48px;
+  height: 48px;
+}
+
+.about-card .brand-mark svg {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
 }
-.about-card .brand-mark svg {
-  width: 32px;
-  height: 32px;
+
+.brand-mark.brand-mascot svg {
+  width: 100%;
+  height: 100%;
 }
 
 .brand-text {
@@ -331,16 +694,18 @@ button {
 }
 
 .brand-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--sm-text-strong);
-  line-height: 1.3;
+  font-family: var(--sm-font-display);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
 }
 
 .brand-caption {
-  font-size: 10px;
-  color: var(--sm-text-weak);
-  line-height: 1.3;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--riso-rail-ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -354,24 +719,23 @@ button {
   gap: 8px;
   padding: 0 12px;
   margin-bottom: 8px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
+  border: 1px solid var(--riso-ink);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  font-family: var(--sm-font-display);
   font-size: 13px;
-  font-weight: 500;
-  box-shadow: var(--sm-shadow-sm);
-  transition: background-color var(--sm-motion-duration-fast)
-    var(--sm-motion-easing-standard);
+  font-weight: 600;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .new-task-btn:hover {
-  background: var(--sm-app-surface-hover);
+  background: color-mix(in srgb, var(--riso-ink) 5%, var(--riso-paper-raised));
 }
 
 .new-task-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -393,14 +757,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 8px 8px 4px;
+  gap: 8px;
+  padding: 12px 8px 4px;
   margin: 0;
-  font-size: 11px;
+  font-family: var(--sm-font-display);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-2);
 }
 
 .sm-sidebar-nav__section-title h2 {
@@ -412,29 +776,46 @@ button {
   margin: 0;
 }
 
+/* The nav needs no heading on screen; it stays for screen readers. */
+#sidebar-nav .sm-sidebar-nav__section-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .sm-sidebar-nav__item {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  height: 32px;
+  padding: 0 8px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   font-size: 13px;
   text-align: left;
-  transition: background-color var(--sm-motion-duration-fast)
-    var(--sm-motion-easing-standard);
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .sm-sidebar-nav__item:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
+/* The active item: a solid patch of the blue ink (a screen at 100%, opaque, so no dots sit
+   behind the words), under deep blue words. A busy dot screen behind 13px labels read as a
+   checker; a solid patch is how a printer would mark it. */
 .sm-sidebar-nav__item.active {
-  background: var(--sm-bg-active);
-  color: var(--sm-text-strong);
+  background: var(--riso-rail-patch);
+  color: var(--riso-rail-active-text);
   font-weight: 500;
 }
 
@@ -445,11 +826,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--sm-icon-secondary);
-}
-
-.sm-sidebar-nav__item.active .sm-sidebar-nav__item-icon {
-  color: var(--sm-icon-primary);
+  color: inherit;
 }
 
 .sm-sidebar-nav__item-icon svg {
@@ -480,19 +857,25 @@ button {
   flex-direction: column;
 }
 
+.tasks-heading {
+  color: var(--riso-ink);
+}
+
 .count {
-  font-size: 10px;
-  font-weight: 500;
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
+  font-weight: 400;
   letter-spacing: 0;
-  color: var(--sm-text-weak);
+  color: var(--riso-rail-ink-3);
   text-transform: none;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Projects: one group per folder (a header with the folder and "+"), its tasks below. */
 #tasks-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;
   overflow-y: auto;
 }
@@ -500,18 +883,19 @@ button {
 .task-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .task-group-header {
   display: flex;
   align-items: center;
-  height: 28px;
-  border-radius: var(--sm-radius-md);
+  height: 32px;
+  border-radius: 6px;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .task-group-header:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
 }
 
 .task-group-toggle {
@@ -519,15 +903,16 @@ button {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 4px 0 6px;
+  gap: 8px;
+  height: 32px;
+  padding: 0 4px 0 8px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-strong);
-  font-size: 12.5px;
-  font-weight: 500;
+  color: var(--riso-ink);
+  font-family: var(--sm-font-display);
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1;
   text-align: left;
 }
@@ -543,10 +928,10 @@ button {
 }
 
 .task-group-icon {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.6;
-  color: var(--sm-icon-secondary);
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.5;
+  color: var(--riso-rail-ink-3);
 }
 
 .task-group-name {
@@ -558,11 +943,11 @@ button {
 
 /* Points down while open, right while folded. */
 .task-group-chevron {
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
   stroke-width: 2;
-  color: var(--sm-text-weak);
-  transition: transform var(--sm-motion-duration-fast) var(--sm-motion-easing-standard);
+  color: var(--riso-rail-ink-3);
+  transition: transform var(--sm-dur-2) var(--sm-ease-out);
 }
 
 .task-group.is-collapsed .task-group-chevron {
@@ -574,15 +959,15 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin-inline-end: 3px;
+  width: 24px;
+  height: 24px;
+  margin-inline-end: 4px;
   padding: 0;
   border: none;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 4px;
   background: none;
-  color: var(--sm-text-weak);
-  opacity: 0.55;
+  color: var(--riso-ink-2);
+  opacity: 0.6;
 }
 
 .task-group-header:hover .task-group-add,
@@ -591,8 +976,8 @@ button {
 }
 
 .task-group-add:hover {
-  background: var(--sm-bg-active);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint-strong);
+  color: var(--riso-ink);
 }
 
 .task-group-add-icon {
@@ -604,37 +989,58 @@ button {
 .task-group-rows {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
-/* Rows line up under the folder name (6px padding + 14px icon + 6px gap). */
+/* A task row. The title lines up under the folder name (8px + 16px icon + 8px gap = 32px).
+   A leading 16px element (the companion's mini mascot) takes the slot under the folder
+   icon: whatever comes before .task-title is pulled back into the 8-24px slot, so the
+   title stays at 32px with or without it. State tags and the time sit at the end. */
 .task-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  min-height: 26px;
-  padding: 4px 8px 4px 26px;
+  min-height: 32px;
+  padding: 4px 8px 4px 32px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
-  font-size: 12.5px;
-  line-height: 1.4;
+  color: var(--riso-ink-2);
+  font-size: 13px;
+  line-height: 20px;
   text-align: left;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
+}
+
+.task-item > :first-child:not(.task-title) {
+  flex-shrink: 0;
+  margin-inline-start: -24px;
 }
 
 .task-item:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
 .task-item.active {
-  background: var(--sm-bg-active);
-  color: var(--sm-text-strong);
+  /* Opaque, like the active nav item: the rail's dots stop at the patch's edge. */
+  background: var(--riso-rail-patch);
+  color: var(--riso-ink);
+}
+
+.task-item.active .task-title {
+  font-weight: 500;
+}
+
+.task-item.is-draft {
+  color: var(--riso-rail-ink-3);
 }
 
 .task-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -643,22 +1049,64 @@ button {
 
 .task-time {
   flex-shrink: 0;
-  font-size: 10.5px;
-  color: var(--sm-text-weak);
+  margin-inline-start: auto;
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--riso-rail-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-item .sm-state-tag {
+  margin-inline-start: auto;
+}
+
+.task-item .sm-state-tag + .task-time {
+  margin-inline-start: 0;
+}
+
+/* A working, waiting, finished-unseen or failed task prints its state on a second line under the
+   title: the tag in the state's ink, then the reply's running time or when it ended. Its mark
+   (mini mascot, or the spinner and dot with the companion off) leads the first line. Idle rows
+   keep their one line. */
+.task-item.has-state {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.task-item.has-state .task-title {
+  flex: 1 1 0;
+}
+
+.task-state-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.task-state-line .sm-state-tag {
+  margin-inline-start: 0;
+}
+
+/* Outlined tags knock the rail's screen out, so their small coloured words sit on clean stock. */
+.task-state-line .sm-state-tag:not([data-state="working"]):not([data-state="waiting"]) {
+  background-color: var(--riso-paper-raised);
 }
 
 /* The sidebar scrolls sideways-clipped, so focus rings sit inside the controls. */
 .task-item:focus-visible,
 .task-group-toggle:focus-visible,
-.task-group-add:focus-visible {
-  outline: 2px solid var(--sm-palette-brand-8);
+.task-group-add:focus-visible,
+.sm-sidebar-nav__item:focus-visible,
+.new-task-btn:focus-visible {
+  outline: 2px solid var(--riso-blue);
   outline-offset: -2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .task-group-chevron {
-    transition: none;
-  }
+#sidebar .empty-state {
+  color: var(--riso-rail-ink-3);
 }
 
 #sidebar-bottom {
@@ -666,8 +1114,8 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 6px 2px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--riso-rail-rule);
 }
 
 .local-mark {
@@ -678,13 +1126,13 @@ button {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--sm-app-muted);
-  color: var(--sm-icon-secondary);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink-2);
 }
 
 .local-mark svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
@@ -698,7 +1146,8 @@ button {
 .user-name {
   font-size: 12px;
   font-weight: 500;
-  color: var(--sm-text-strong);
+  line-height: 16px;
+  color: var(--riso-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -706,23 +1155,25 @@ button {
 
 .user-email {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-rail-ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 #statusbar {
-  height: 22px;
+  height: 24px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
-  background: var(--sm-app-chrome);
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  padding: 0 12px;
+  background: var(--riso-paper);
+  border-top: 1px solid var(--riso-rule);
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
+  font-variant-numeric: tabular-nums;
   user-select: none;
 }
 
@@ -737,44 +1188,52 @@ button {
 }
 
 #statusbar-model {
-  color: var(--sm-text-medium);
+  font-family: var(--sm-font-mono);
+  color: var(--riso-ink-2);
 }
 
+/* The page ground carries the paper grain; editors and cards cover it with flat stock. */
 #main-content {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--sm-app-page);
+  background-color: var(--riso-paper);
+  background-image: var(--riso-grain);
   overflow: hidden;
 }
 
 /* ------------------------------------------------------------------ */
-/* 03. Controls: buttons, inputs, badges                               */
+/* 03. Controls: buttons, inputs, badges, state tags                   */
 /* ------------------------------------------------------------------ */
 
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: 28px;
+  gap: 8px;
+  height: 32px;
   padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: var(--sm-radius-lg);
+  border-radius: 6px;
   background: transparent;
   font-size: 13px;
   font-weight: 500;
   line-height: 1;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
   white-space: nowrap;
-  transition: background-color var(--sm-motion-duration-instant)
-    var(--sm-motion-easing-standard);
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
+}
+
+.button:hover {
+  background: var(--riso-ink-tint);
 }
 
 .button svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.6;
@@ -783,37 +1242,52 @@ button {
 }
 
 .button.primary {
-  background: var(--sm-button-primary-bg);
-  color: var(--sm-button-primary-fg);
+  background: var(--riso-blue-fill);
+  border-color: var(--riso-blue-fill);
+  color: var(--riso-on-blue);
 }
 
 .button.primary:hover {
-  background: var(--sm-button-primary-bg-hover);
+  background: var(--riso-blue-fill-hover);
+  border-color: var(--riso-blue-fill-hover);
 }
 
 .button.primary:disabled {
   background: var(--sm-button-primary-bg-disabled);
-  color: var(--sm-button-primary-fg-disabled);
+  border-color: transparent;
+  color: var(--riso-ink-3);
 }
 
 .button.secondary {
-  background: var(--sm-button-secondary-bg);
-  color: var(--sm-button-secondary-fg);
-  border-color: var(--sm-button-secondary-border);
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  border-color: var(--riso-rule);
 }
 
 .button.secondary:hover {
-  background: var(--sm-button-secondary-bg-hover);
+  background: color-mix(in srgb, var(--riso-ink) 5%, var(--riso-paper-raised));
+  border-color: var(--riso-rule-strong);
 }
 
 .button.danger {
-  background: var(--sm-button-danger-secondary-bg);
-  color: var(--sm-app-text-danger);
-  border-color: var(--sm-button-danger-secondary-border);
+  background: var(--riso-paper-raised);
+  color: var(--riso-red-text);
+  border-color: color-mix(in srgb, var(--riso-red) 55%, transparent);
 }
 
 .button.danger:hover {
-  background: var(--sm-button-danger-secondary-bg-hover);
+  background: var(--riso-red-wash);
+}
+
+/* Filled red only where a dialog confirms something destructive. */
+.consent-actions .button.danger {
+  background: var(--riso-danger-fill);
+  border-color: var(--riso-danger-fill);
+  color: var(--riso-on-danger);
+}
+
+.consent-actions .button.danger:hover {
+  background: color-mix(in srgb, var(--riso-ink-black) 12%, var(--riso-danger-fill));
 }
 
 .button:disabled {
@@ -830,7 +1304,7 @@ button {
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 16px;
   min-width: 0;
 }
@@ -838,7 +1312,8 @@ button {
 .form-group label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--sm-text-medium);
+  line-height: 16px;
+  color: var(--riso-ink-2);
 }
 
 .form-row {
@@ -856,39 +1331,66 @@ input[type="password"],
 input[type="search"],
 input[type="number"],
 input[type="time"],
+input[type="date"],
 select,
 textarea {
   width: 100%;
   font-family: inherit;
   font-size: 13px;
-  color: var(--sm-text-strong);
-  background: var(--sm-app-surface);
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: var(--sm-radius-lg);
-  padding: 6px 10px;
+  line-height: 22px;
+  color: var(--riso-ink);
+  background: var(--riso-paper-raised);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  padding: 4px 12px;
   min-height: 32px;
+  transition: border-color var(--sm-dur-1) var(--sm-ease-out);
+}
+
+input[type="text"]:hover,
+input[type="url"]:hover,
+input[type="password"]:hover,
+input[type="search"]:hover,
+input[type="number"]:hover,
+input[type="time"]:hover,
+input[type="date"]:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--riso-rule-strong);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--sm-color-border-focus);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 2px;
 }
 
 textarea {
   resize: vertical;
-  line-height: 1.55;
+  line-height: 20px;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--sm-color-text-placeholder);
+  color: var(--riso-ink-3);
+  opacity: 1;
+}
+
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--riso-blue);
 }
 
 input[type="range"] {
   width: 100%;
-  accent-color: var(--sm-brand-primary);
 }
 
 .range-row {
@@ -906,118 +1408,231 @@ input[type="range"] {
   flex-shrink: 0;
   min-width: 28px;
   white-space: nowrap;
+  font-family: var(--sm-font-mono);
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .checkbox-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
+/* A category or note: a quiet printed mark, not a pill. */
 .badge {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  padding: 0 7px;
-  border-radius: 100px;
-  background: var(--sm-app-muted);
-  color: var(--sm-text-medium);
-  font-size: 10px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--riso-ink-2);
+  font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* State tags (task rows, subagents, jobs): printed marks in the state's ink.
+   <span class="sm-state-tag" data-state="working|waiting|done|failed|queued|stopped">,
+   or the same states as .is-working / .is-waiting / ... classes. */
+.sm-state-tag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--riso-ink-2);
+  font-family: var(--sm-font-display);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-state-tag[data-state="working"],
+.sm-state-tag.is-working {
+  background: var(--sm-state-working);
+  border-color: var(--sm-state-working);
+  color: var(--riso-ink-black);
+}
+
+.sm-state-tag[data-state="waiting"],
+.sm-state-tag.is-waiting {
+  background: var(--sm-state-waiting);
+  border-color: var(--sm-state-waiting);
+  color: var(--riso-ink-black);
+}
+
+.sm-state-tag[data-state="done"],
+.sm-state-tag.is-done {
+  border-color: var(--sm-state-done);
+  color: var(--riso-blue-text);
+}
+
+.sm-state-tag[data-state="failed"],
+.sm-state-tag.is-failed {
+  border-color: var(--sm-state-failed);
+  color: var(--riso-red-text);
+}
+
+.sm-state-tag[data-state="queued"],
+.sm-state-tag[data-state="stopped"],
+.sm-state-tag.is-queued,
+.sm-state-tag.is-stopped {
+  border-color: var(--sm-state-queued);
+  color: var(--riso-ink-2);
+}
+
+/* A context meter: share of the window in blue, this reply's part overprinted in pink.
+   JS sets --sm-meter-value (0-1) and, for the reply, --sm-meter-start and --sm-meter-value
+   on the inner marks through the CSSOM. */
+.sm-meter {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 64px;
+  height: 6px;
+  border: 1px solid color-mix(in srgb, var(--riso-blue) 35%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.sm-meter__fill,
+.sm-meter__reply {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--sm-meter-value, 0) * 100%);
+  background: var(--riso-blue);
+}
+
+.sm-meter__reply {
+  left: calc(var(--sm-meter-start, 0) * 100%);
+  background: var(--riso-pink);
+  mix-blend-mode: multiply;
+}
+
+[data-theme="dark"] .sm-meter__reply {
+  mix-blend-mode: normal;
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--sm-palette-gray-5);
+  background: var(--riso-ink-3);
   flex-shrink: 0;
 }
 
+/* Yellow alone disappears on paper, so the pending dot gets a hairline. */
 .status-dot.pending {
-  background: var(--sm-palette-orange-8);
+  background: var(--riso-yellow);
+  box-shadow: inset 0 0 0 1px var(--riso-rule-strong);
 }
 
 .status-dot.ok {
-  background: var(--sm-palette-green-8);
+  background: var(--riso-green);
 }
 
 .status-dot.fail {
-  background: var(--sm-palette-red-8);
+  background: var(--riso-red);
 }
 
 .test-control {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .status-text {
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   line-height: 1.5;
 }
 
 .path-text {
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono);
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   overflow-wrap: anywhere;
 }
 
+/* A field note or a small label beside a heading: sentence case, no kicker caps. */
 .small-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
-}
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
-}
-
-.notice {
-  padding: 8px 12px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface-hover);
   font-size: 12px;
-  color: var(--sm-text-medium);
+  font-weight: 500;
+  color: var(--riso-ink-2);
+}
+
+/* Kept for the few dialog lines JS still writes into; not used above headings. */
+.eyebrow {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--riso-ink-2);
+}
+
+/* A plain note (the Experts page, the connector dialog): words under a 1px rule, no box and no
+   fill. Notices that report a failure or need the user keep a sheet of their own below. */
+.notice {
+  max-width: 76ch;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--riso-ink-2);
   line-height: 1.5;
+}
+
+.danger-notice,
+.warning-notice {
+  max-width: none;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
 }
 
 .danger-notice {
   margin: 12px 24px 0;
-  border-color: var(--sm-palette-red-3);
-  background: var(--sm-palette-red-1);
-  color: var(--sm-app-text-danger);
+  border-color: color-mix(in srgb, var(--riso-red) 45%, transparent);
+  background: var(--riso-red-wash);
+  color: var(--riso-red-text);
 }
 
+/* Something waits on the user: a yellow highlighter pass under ink. */
 .warning-notice {
-  border-color: var(--sm-palette-orange-3);
-  background: var(--sm-palette-orange-1);
-  color: var(--sm-text-medium);
+  border-color: transparent;
+  background: var(--riso-yellow-wash);
+  /* Ink, never grey, on the highlighter: grey on yellow reads washed out. */
+  color: var(--riso-ink);
+}
+
+.warning-notice strong {
+  color: var(--riso-ink);
 }
 
 /* "Next run: …" between the consent notice and the form: room above and below. */
 #scheduler-status {
-  margin: 12px 2px 16px;
+  margin: 12px 0 16px;
 }
 
 .body-copy {
   font-size: 13px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   line-height: 1.6;
   margin-bottom: 8px;
 }
@@ -1025,11 +1640,11 @@ input[type="range"] {
 .empty-state {
   padding: 12px 8px;
   font-size: 12px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .nested-empty {
-  padding: 3px 8px 3px 22px;
+  padding: 4px 8px 4px 32px;
   font-size: 11px;
 }
 
@@ -1041,11 +1656,28 @@ input[type="range"] {
   display: none;
 }
 
+/* View switches cross-fade in 160ms. */
 .view.active {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  animation: sm-view-in 160ms var(--sm-ease-out);
+}
+
+/* A view settles in from almost there, never from nothing: a frame that stalls (a busy main
+   thread, a hidden window) still shows the view, not a blank pane. */
+@keyframes sm-view-in {
+  from {
+    opacity: 0.55;
+    transform: translateY(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view.active {
+    animation: none;
+  }
 }
 
 .view-toolbar {
@@ -1054,14 +1686,16 @@ input[type="range"] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 20px;
+  min-height: 48px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--riso-rule);
 }
 
 .page {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px 40px 48px;
+  padding: 40px 40px 48px;
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
@@ -1076,63 +1710,70 @@ input[type="range"] {
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
 }
 
 .page-title {
-  margin: 4px 0 6px;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--sm-text-strong);
+  margin: 0 0 8px;
+  font-family: var(--sm-font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 36px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
 }
 
 .page-sub {
-  font-size: 13px;
-  color: var(--sm-text-medium);
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--riso-ink-2);
 }
 
+/* A settings group: a printed section under a 1px rule, not a box. */
 .settings-card {
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface);
-  padding: 20px;
-  margin-bottom: 20px;
-  box-shadow: var(--sm-shadow-card);
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: transparent;
+  padding: 24px 0 32px;
+  margin: 0;
+  box-shadow: none;
 }
 
 .settings-card h2 {
-  font-size: 15px;
+  font-family: var(--sm-font-display);
+  font-size: 20px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
+}
+
+.settings-card > h2 {
+  margin-bottom: 12px;
+}
+
+.settings-card > h2 + .status-text {
+  margin-bottom: 12px;
 }
 
 .card-heading {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 16px;
-}
-
-.section-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-muted);
-  color: var(--sm-text-medium);
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .preference-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
+  padding: 12px 0;
+}
+
+.preference-row + .preference-row {
+  border-top: 1px solid var(--riso-rule);
 }
 
 .preference-row .form-group {
@@ -1146,20 +1787,33 @@ input[type="range"] {
 /* A setting described in a sentence or two, next to its switch (Preferences > Projects). */
 .preference-text {
   flex: 1;
+  gap: 4px;
+}
+
+.preference-text > label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--riso-ink);
 }
 
 .about-card {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
+  gap: 16px;
+}
+
+.about-card h2 {
+  margin-bottom: 4px;
 }
 
 /* ------------------------------------------------------------------ */
-/* 05. Chat workspace (home layout)                          */
+/* 05. Chat workspace (home layout)                                    */
 /* ------------------------------------------------------------------ */
 
+/* Transparent so the page grain of #main-content shows through. */
 #view-chat.active {
-  background: var(--sm-app-page);
+  background: transparent;
 }
 
 .sm-home-page {
@@ -1181,74 +1835,79 @@ input[type="range"] {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 32px 0 0;
-  margin-bottom: 16px;
+  padding: 48px 0 0;
+  margin-bottom: 24px;
 }
 
 .sm-home-header__title-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   width: 100%;
 }
 
 .sm-home-header__title {
   margin: 0;
-  font-size: 30px;
-  font-weight: 600;
-  line-height: 42px;
-  color: var(--sm-text-strong);
+  font-family: var(--sm-font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 36px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
 }
 
 .sm-home-header__slogan {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 400;
-  line-height: 1.4;
-  color: var(--sm-text-medium);
+  line-height: 24px;
+  color: var(--riso-ink-2);
 }
 
+/* The mode switch: a segmented control; the active mode is printed in blue. */
 .sm-scene-tabs {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   height: 36px;
   padding: 2px;
-  margin-bottom: 20px;
-  border-radius: 100px;
-  background-color: var(--sm-app-muted);
+  margin-bottom: 24px;
+  border-radius: 8px;
+  background-color: var(--riso-ink-tint);
 }
 
 .sm-scene-tabs__pill {
   display: inline-flex;
   align-items: center;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 16px;
   border: none;
-  border-radius: 100px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--sm-text-medium);
-  font-size: 14px;
+  color: var(--riso-ink-2);
+  font-size: 13px;
   font-weight: 500;
-  line-height: 22px;
+  line-height: 20px;
   white-space: nowrap;
-  transition: background-color 0.18s ease, color 0.18s ease;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .sm-scene-tabs__pill:hover:not(.sm-scene-tabs__pill--active) {
-  background-color: var(--sm-bg-pill-hover);
-  color: var(--sm-text-strong);
+  background-color: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
 .sm-scene-tabs__pill--active {
-  background-color: var(--sm-bg-pill-active);
-  color: var(--sm-text-white);
+  background-color: var(--riso-paper-raised);
+  color: var(--riso-blue-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--riso-blue) 40%, transparent);
   font-weight: 600;
 }
 
 .sm-scene-tabs__pill--active:hover {
-  background-color: var(--sm-bg-pill-active-hover);
+  background-color: var(--riso-blue-wash);
 }
 
 /* A reply is running: the mode it was sent with cannot change until it ends. */
@@ -1259,16 +1918,16 @@ input[type="range"] {
 
 /* The mode pills carry their explanation right below, so the gap moves to that line. */
 #mode-switch {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 /* One line under the pills saying what the chosen mode does (src/composer-ui.js renderMode). */
 .mode-note {
-  margin: 0 0 20px;
-  padding-inline-start: 14px;
+  margin: 0 0 24px;
   font-size: 12px;
-  line-height: 1.45;
-  color: var(--sm-text-medium);
+  line-height: 16px;
+  color: var(--riso-ink-2);
+  text-align: center;
 }
 
 .sm-home-composer {
@@ -1312,8 +1971,8 @@ input[type="range"] {
   flex-direction: column;
   gap: 4px;
   max-width: 100%;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 24px;
 }
 
 .chat-bubble.user {
@@ -1323,15 +1982,16 @@ input[type="range"] {
 }
 
 .chat-bubble.user .msg-text {
-  padding: 8px 12px;
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  padding: 8px 16px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
 }
 
 .chat-bubble.assistant {
   align-self: stretch;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
 }
 
 .msg-text {
@@ -1340,33 +2000,46 @@ input[type="range"] {
 
 .msg-time {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
+  font-variant-numeric: tabular-nums;
 }
 
+/* The composer: one sheet of raised stock; focus prints its edge in blue. */
 .sm-home-composer__card {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface);
-  box-shadow: var(--sm-shadow-input);
+  border: 1px solid var(--riso-rule-strong);
+  border-radius: 8px;
+  background: var(--riso-paper-raised);
+  box-shadow: none;
   overflow: hidden;
+  transition: border-color var(--sm-dur-1) var(--sm-ease-out);
+}
+
+.sm-home-composer__card:focus-within {
+  border-color: color-mix(in srgb, var(--riso-blue) 60%, transparent);
 }
 
 #chat-input {
   border: none;
   border-radius: 0;
   background: transparent;
-  min-height: 74px;
+  min-height: 72px;
   padding: 12px 16px;
   font-size: 15px;
-  line-height: 1.75;
+  line-height: 24px;
+  caret-color: var(--riso-pink);
   resize: none;
 }
 
+#chat-input:hover,
 #chat-input:focus {
   border-color: transparent;
+}
+
+#chat-input:focus-visible {
+  outline: none;
 }
 
 /* In a narrow window the model button and Send move to a second line together (right-aligned
@@ -1377,7 +2050,7 @@ input[type="range"] {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  border-top: 1px solid var(--riso-rule);
 }
 
 .attachment-row {
@@ -1390,12 +2063,13 @@ input[type="range"] {
 .attachment-chip {
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  height: 24px;
   max-width: 100%;
-  padding: 0 10px;
-  border-radius: 100px;
-  background: var(--sm-app-muted);
-  color: var(--sm-text-medium);
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--riso-ink-2);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1405,7 +2079,7 @@ input[type="range"] {
 .context-chips {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -1425,21 +2099,22 @@ input[type="range"] {
 .context-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
-  max-width: 170px;
-  padding: 0 7px 0 10px;
-  border: 1px solid var(--sm-palette-brand-3);
-  border-radius: 100px;
-  background: var(--sm-palette-brand-1);
-  color: var(--sm-palette-brand-9);
-  font-size: 11px;
+  gap: 4px;
+  height: 28px;
+  max-width: 172px;
+  padding: 0 8px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--riso-blue) 34%, transparent);
+  border-radius: 6px;
+  background: var(--riso-blue-wash);
+  color: var(--riso-blue-text);
+  font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .context-chip:hover {
-  background: var(--sm-palette-brand-2);
+  background: color-mix(in srgb, var(--riso-blue) 18%, var(--riso-paper-raised));
 }
 
 .context-chip-label {
@@ -1450,30 +2125,31 @@ input[type="range"] {
 .context-chip-x {
   font-size: 13px;
   line-height: 1;
-  opacity: 0.65;
+  opacity: 0.7;
 }
 
 .skill-run {
   height: 28px;
   padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: 100px;
-  background: var(--sm-button-primary-bg);
-  color: var(--sm-button-primary-fg);
+  border-radius: 6px;
+  background: var(--riso-blue-fill);
+  color: var(--riso-on-blue);
   font-size: 12px;
   font-weight: 500;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .skill-run:hover {
-  background: var(--sm-button-primary-bg-hover);
+  background: var(--riso-blue-fill-hover);
 }
 
 .model-pill {
   margin-inline: auto;
-  padding: 4px 10px;
-  border-radius: 100px;
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-medium);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink-2);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -1481,7 +2157,7 @@ input[type="range"] {
 }
 
 .model-pill.empty {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .send-actions {
@@ -1500,23 +2176,25 @@ input[type="range"] {
   height: 28px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--sm-radius-lg);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .composer-icon-button:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
 .composer-icon-button svg,
 .composer-chip svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1524,22 +2202,26 @@ input[type="range"] {
 .composer-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex-shrink: 0;
   max-width: 100%;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--riso-ink-2);
   font-size: 12px;
   white-space: nowrap;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .composer-chip:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 .composer-chip .composer-chevron {
@@ -1549,9 +2231,9 @@ input[type="range"] {
 }
 
 .composer-chip.is-bypass {
-  border-color: var(--sm-palette-red-3);
-  background: var(--sm-palette-red-1);
-  color: var(--sm-app-text-danger);
+  border-color: color-mix(in srgb, var(--riso-red) 55%, transparent);
+  background: var(--riso-red-wash);
+  color: var(--riso-red-text);
 }
 
 .model-button {
@@ -1561,26 +2243,75 @@ input[type="range"] {
 }
 
 .model-button.empty {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .model-button-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
   font-weight: 500;
 }
 
 .model-button.empty .model-button-name {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
   font-weight: 400;
 }
 
 .model-button-reasoning {
   flex-shrink: 0;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
   font-size: 11px;
+}
+
+/* The context meter (app.js renderContextMeter): "38% of context" over a hairline bar in a 1px
+   rule, a printed label in the display face's condensed width with tabular numerals, so it
+   fits the toolbar's one line. Blue ink while there is room, the newest reply's part in pink;
+   the danger ink once the window is nearly full, when compacting is worth it. */
+.context-meter {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  max-width: 110px;
+  height: 28px;
+}
+
+.context-meter-label {
+  font-family: var(--sm-font-display);
+  font-size: 11px;
+  font-stretch: 75%;
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--riso-ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The bar is the shared .sm-meter (blue fill, the newest reply's part in pink overprinting it),
+   as wide as the words above it. */
+.context-meter .sm-meter {
+  display: block;
+  width: 100%;
+}
+
+.context-meter.is-full .sm-meter__fill {
+  background: var(--riso-red);
+}
+
+/* With the meter showing, the folder chip gives way first (its name is also in the chat crumb
+   and the sidebar) so the toolbar keeps one line: lines are filled counting the chip at its
+   narrowest, then it grows back towards its full name in the room left. */
+#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip {
+  flex: 1 1 0;
+  min-width: 88px;
+  max-width: max-content;
+}
+
+#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip-label {
+  max-width: 146px;
 }
 
 /* Popovers sit in the top layer; composer-ui.js places them above their button. */
@@ -1591,12 +2322,12 @@ input[type="range"] {
   width: 300px;
   max-height: min(460px, 70vh);
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-popover);
-  box-shadow: var(--sm-shadow-popup-medium);
-  color: var(--sm-text-strong);
+  padding: 4px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background: var(--riso-paper-raised);
+  box-shadow: var(--sm-shadow-lift);
+  color: var(--riso-ink);
 }
 
 .model-menu {
@@ -1621,24 +2352,25 @@ input[type="range"] {
 }
 
 .composer-menu-title {
-  margin: 4px 8px 6px;
-  font-size: 11px;
+  margin: 4px 8px;
+  font-family: var(--sm-font-display);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-2);
 }
 
 .composer-menu-option,
 .model-menu-option {
   display: flex;
   width: 100%;
-  padding: 7px 8px;
+  padding: 8px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
   text-align: left;
   color: inherit;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .composer-menu-option {
@@ -1654,12 +2386,12 @@ input[type="range"] {
 
 .composer-menu-option:hover,
 .model-menu-option:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
 }
 
 .composer-menu-option[aria-checked="true"],
 .model-menu-option[aria-checked="true"] {
-  background: var(--sm-bg-active);
+  background: var(--riso-blue-tint);
 }
 
 .composer-menu-option-name {
@@ -1667,36 +2399,40 @@ input[type="range"] {
   font-weight: 500;
 }
 
+.composer-menu-option[aria-checked="true"] .composer-menu-option-name {
+  color: var(--riso-blue-text);
+}
+
 .composer-menu-option[data-permission="bypass"] .composer-menu-option-name {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text);
 }
 
 .composer-menu-option-desc {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .model-menu-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .model-menu-option-text {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
 }
 
 .model-menu-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 6px;
-  padding: 10px 8px 4px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px 8px 4px;
+  border-top: 1px solid var(--riso-rule);
 }
 
 .model-menu-row {
@@ -1716,20 +2452,26 @@ input[type="range"] {
   font-size: 11px;
 }
 
+/* "Connect a provider first" and other notes directly in the model menu line up with the options. */
+.model-menu > .status-text {
+  padding: 4px 8px;
+}
+
+/* Switches: an ink track that prints blue when on. */
 .switch {
   position: relative;
   flex-shrink: 0;
-  width: 34px;
+  width: 36px;
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: 100px;
-  background: var(--sm-color-border-solid);
-  transition: background 0.15s ease;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--riso-ink) 28%, transparent);
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .switch[aria-checked="true"] {
-  background: var(--sm-palette-brand-8);
+  background: var(--riso-blue-fill);
 }
 
 .switch-thumb {
@@ -1739,13 +2481,13 @@ input[type="range"] {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform 0.15s ease;
+  background: var(--riso-thumb);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--riso-ink-black) 8%, transparent);
+  transition: transform var(--sm-dur-2) var(--sm-ease-out);
 }
 
 .switch[aria-checked="true"] .switch-thumb {
-  transform: translateX(14px);
+  transform: translateX(16px);
 }
 
 .switch:disabled,
@@ -1757,37 +2499,36 @@ input[type="range"] {
 .segmented {
   display: inline-flex;
   padding: 2px;
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface-hover);
+  border-radius: 6px;
+  background: var(--riso-ink-tint);
 }
 
 .segmented-option {
   height: 24px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 4px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   font-size: 12px;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
+}
+
+.segmented-option:hover {
+  color: var(--riso-ink);
 }
 
 .segmented-option[aria-checked="true"] {
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .switch,
-  .switch-thumb {
-    transition: none;
-  }
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: 0 0 0 1px var(--riso-rule);
 }
 
 .model-menu-group {
-  margin-top: 10px;
+  margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  border-top: 1px solid var(--riso-rule);
 }
 
 .model-menu-option:disabled {
@@ -1799,13 +2540,17 @@ input[type="range"] {
   background: none;
 }
 
-/* Keyboard focus inside the menus: a quiet brand ring instead of the global black outline. */
+/* Keyboard focus inside the menus and on switches: the blue ring, drawn inside. */
 .composer-menu-option:focus-visible,
 .model-menu-option:focus-visible,
 .segmented-option:focus-visible,
 .switch:focus-visible {
-  outline: 2px solid var(--sm-palette-brand-8);
+  outline: 2px solid var(--riso-blue);
   outline-offset: -2px;
+}
+
+.switch:focus-visible {
+  outline-offset: 2px;
 }
 
 /* The workspace folder the assistant's local tools use, next to the permission chip. */
@@ -1821,18 +2566,18 @@ input[type="range"] {
   text-overflow: ellipsis;
 }
 
-/* No folder yet: chat waits for one, so the chip asks for it. */
+/* No folder yet: chat waits for one, so the chip asks for it in blue. */
 .folder-chip.is-empty {
   border-style: dashed;
-  border-color: var(--sm-brand-primary);
-  background: var(--sm-brand-primary-subtle);
-  color: var(--sm-brand-primary-deep);
+  border-color: color-mix(in srgb, var(--riso-blue) 60%, transparent);
+  background: var(--riso-blue-wash);
+  color: var(--riso-blue-text);
   font-weight: 500;
 }
 
 .folder-chip.is-empty:hover {
-  background: color-mix(in srgb, var(--sm-brand-primary) 20%, transparent);
-  color: var(--sm-brand-primary-deep);
+  background: color-mix(in srgb, var(--riso-blue) 18%, var(--riso-paper-raised));
+  color: var(--riso-blue-text);
 }
 
 /* A task fixed to its folder: a lock instead of the chevron. */
@@ -1862,8 +2607,8 @@ input[type="range"] {
   flex-direction: column;
   gap: 2px;
   margin: 0 8px 4px;
-  padding: 6px 0 8px;
-  border-bottom: 1px solid var(--sm-app-border);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--riso-rule);
 }
 
 .folder-menu-current .composer-menu-option-name {
@@ -1872,10 +2617,10 @@ input[type="range"] {
 
 /* Full paths wrap instead of widening the menu. */
 .folder-menu-path {
-  font-family: var(--sm-font-code-family);
-  font-size: 10px;
-  line-height: 1.45;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--riso-ink-3);
   overflow-wrap: anywhere;
 }
 
@@ -1883,17 +2628,17 @@ input[type="range"] {
 .folder-menu-note {
   margin-top: 4px;
   font-size: 11px;
-  line-height: 1.45;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-3);
 }
 
 .folder-menu .model-menu-group {
-  border-top: 1px solid var(--sm-app-border);
+  border-top: 1px solid var(--riso-rule);
 }
 
 /* The active mode, next to the folder chip: it stays once the pills above the box are gone. */
 .mode-chip-label {
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
   font-weight: 500;
 }
 
@@ -1914,25 +2659,25 @@ input[type="range"] {
 
 /* The second description line is the quieter one: what the mode can reach. */
 .mode-option-detail {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 /* Why the options are off while a reply runs. */
 .mode-menu-reason {
-  margin: 2px 8px 0;
+  margin: 4px 8px 0;
   font-size: 11px;
-  line-height: 1.45;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-3);
 }
 
 /* What the active mode can use, from one list of labels (src/domain.mjs MODE_TOOLS). */
 .mode-menu-tools {
-  margin: 8px 8px 2px;
+  margin: 8px 8px 4px;
   padding-top: 8px;
-  border-top: 1px solid var(--sm-app-border);
+  border-top: 1px solid var(--riso-rule);
   font-size: 11px;
-  line-height: 1.45;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-3);
 }
 
 /* An option that cannot be chosen right now (mode while a reply runs, project notes). */
@@ -1970,40 +2715,42 @@ input[type="range"] {
   }
 }
 
-/* The chat's first step while no folder is chosen (index.html #folder-picker). */
+/* The chat's first step while no folder is chosen (index.html #folder-picker): an unboxed
+   section printed straight on the page under the heading, no card; a 1px rule sets the Recent
+   list apart. */
 .folder-picker {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   max-width: 440px;
-  margin-top: 20px;
-  padding: 16px 16px 14px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface);
-  box-shadow: var(--sm-shadow-sm);
+  margin-top: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
 }
 
 .folder-picker-title {
+  font-family: var(--sm-font-display);
   font-size: 15px;
   font-weight: 600;
-  line-height: 1.4;
-  color: var(--sm-text-strong);
+  line-height: 20px;
+  color: var(--riso-ink);
 }
 
 .folder-picker-text {
   max-width: 360px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--sm-text-medium);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2);
 }
 
 .folder-picker-open {
   height: 32px;
-  margin-top: 6px;
-  padding: 0 14px;
+  margin-top: 4px;
+  padding: 0 16px;
 }
 
 .folder-picker-recent {
@@ -2011,25 +2758,24 @@ input[type="range"] {
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--riso-rule);
   text-align: left;
 }
 
 .folder-picker-recent-title {
   padding: 0 8px;
-  font-size: 11px;
+  font-family: var(--sm-font-display);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-2);
 }
 
 .folder-picker-recent-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 4px;
 }
 
 /* Two columns once there are two or more. */
@@ -2042,33 +2788,34 @@ input[type="range"] {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 8px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
   text-align: left;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .folder-picker-recent-item:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
 }
 
 .folder-picker-recent-item:focus-visible {
-  outline: 2px solid var(--sm-palette-brand-8);
+  outline: 2px solid var(--riso-blue);
   outline-offset: -2px;
 }
 
 .folder-picker-recent-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.6;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  color: var(--sm-icon-secondary);
+  color: var(--riso-ink-3);
 }
 
 .folder-picker-recent-text {
@@ -2085,16 +2832,16 @@ input[type="range"] {
 }
 
 .folder-picker-recent-name {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 20px;
 }
 
 .folder-picker-recent-path {
-  font-family: var(--sm-font-code-family);
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--riso-ink-3);
 }
 
 /* In the message box when the task's folder is not the open one. */
@@ -2102,27 +2849,28 @@ input[type="range"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 14px;
-  border-bottom: 1px solid var(--sm-color-border-tertiary);
-  background: var(--sm-app-surface-hover);
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--riso-rule);
+  background: var(--riso-ink-tint);
   font-size: 12px;
-  line-height: 1.45;
-  color: var(--sm-text-medium);
+  line-height: 16px;
+  color: var(--riso-ink-2);
 }
 
+/* The folder is gone: the user has to act, so it gets the yellow pass. */
 .task-folder-notice.is-missing {
-  border-bottom-color: var(--sm-palette-orange-2);
-  background: var(--sm-palette-orange-1);
-  color: var(--sm-palette-orange-9);
+  border-bottom-color: color-mix(in srgb, var(--riso-yellow-text) 30%, transparent);
+  background: var(--riso-yellow-wash);
+  color: var(--riso-ink);
 }
 
 .task-folder-notice-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.6;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -2137,12 +2885,26 @@ input[type="range"] {
   flex-shrink: 0;
 }
 
-/* "<folder> / Chat" above the conversation; the folder name keeps its real case. */
+/* "<folder> / Chat" above the conversation: a plain crumb, the folder name in ink. */
 .chat-crumb {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink-2);
+}
+
+.chat-crumb-folder {
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--riso-ink);
+}
+
+.chat-crumb-separator {
+  color: var(--riso-ink-3);
 }
 
 /* The chat toolbar's controls keep one line; the crumb gives way (ellipsis) first. */
@@ -2152,30 +2914,23 @@ input[type="range"] {
 }
 
 .button.icon-only {
-  width: 28px;
+  width: 32px;
   padding: 0;
 }
 
 .button.icon-only svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .export-menu {
   width: 260px;
 }
 
-.chat-crumb-folder {
-  font-weight: 600;
-  letter-spacing: normal;
-  text-transform: none;
-  color: var(--sm-text-medium);
-}
-
 /* Chat / Image / Video tabs at the top of the model menu. */
 .model-tabs {
   display: flex;
-  margin: 2px 2px 8px;
+  margin: 4px 4px 8px;
 }
 
 .model-tabs .segmented-option {
@@ -2183,9 +2938,9 @@ input[type="range"] {
 }
 
 .model-tabs .segmented-option[aria-selected="true"] {
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: 0 0 0 1px var(--riso-rule);
 }
 
 /* Generation options of the selected image / video model, above the toolbar. */
@@ -2195,8 +2950,8 @@ input[type="range"] {
   align-items: center;
   gap: 8px 12px;
   padding: 8px 12px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
-  background: var(--sm-app-surface-hover);
+  border-top: 1px solid var(--riso-rule);
+  background: color-mix(in srgb, var(--riso-ink) 3%, transparent);
 }
 
 .media-modes {
@@ -2204,32 +2959,34 @@ input[type="range"] {
 }
 
 .media-modes .segmented-option {
-  height: 26px;
+  height: 24px;
 }
 
 .media-field {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .media-field-label {
   font-size: 11px;
   font-weight: 500;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .media-select,
 .media-number {
-  height: 26px;
-  padding: 0 6px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
   font-size: 12px;
+  line-height: 26px;
 }
 
 .media-select {
@@ -2238,6 +2995,7 @@ input[type="range"] {
 
 .media-number {
   width: 56px;
+  font-variant-numeric: tabular-nums;
 }
 
 .media-select:disabled {
@@ -2246,15 +3004,16 @@ input[type="range"] {
 
 .media-cost {
   margin-inline-start: auto;
+  font-family: var(--sm-font-mono);
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   font-variant-numeric: tabular-nums;
 }
 
 .media-source {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   font-size: 12px;
 }
@@ -2262,7 +3021,7 @@ input[type="range"] {
 .media-source-thumb {
   width: 28px;
   height: 28px;
-  border-radius: var(--sm-radius-sm);
+  border-radius: 4px;
   object-fit: cover;
 }
 
@@ -2275,26 +3034,26 @@ input[type="range"] {
 }
 
 .media-source-label.muted {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 /* Generated images and videos in the chat. */
 .msg-media-request {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 /* A note from ScaleMax under a reply, such as the project notes it just created. */
 .msg-notice {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 8px;
   font-size: 11px;
-  line-height: 1.5;
-  color: var(--sm-text-weak);
+  line-height: 16px;
+  color: var(--riso-ink-3);
 }
 
-/* A small "i" badge; the empty alternative text keeps screen readers from reading it. */
+/* A small "i" mark; the empty alternative text keeps screen readers from reading it. */
 .msg-notice::before {
   content: 'i' / '';
   display: inline-flex;
@@ -2321,7 +3080,7 @@ input[type="range"] {
 .msg-media-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   max-width: min(480px, 100%);
 }
@@ -2330,15 +3089,15 @@ input[type="range"] {
   display: block;
   max-width: 100%;
   max-height: 420px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface-hover);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-ink-tint);
   object-fit: contain;
 }
 
 .msg-media-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 /* Saved providers in Assistant. */
@@ -2359,31 +3118,32 @@ input[type="range"] {
   min-width: 0;
 }
 
-/* A reply in progress: animated dots, what it is doing, elapsed time. */
+/* A reply in progress: pink dots (agent activity), what it is doing, elapsed time. */
 .pending-reply-row {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   font-size: 13px;
 }
 
 .pending-reply-time {
-  color: var(--sm-text-weak);
-  font-size: 12px;
+  font-family: var(--sm-font-mono);
+  color: var(--riso-ink-3);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .thinking-dots {
   display: inline-flex;
-  gap: 3px;
+  gap: 4px;
 }
 
 .thinking-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--sm-palette-brand-8);
+  background: var(--riso-pink);
   animation: thinking-pulse 1.2s ease-in-out infinite;
 }
 
@@ -2409,14 +3169,14 @@ input[type="range"] {
 
 .msg-thought {
   font-size: 12px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 /* The model's thinking, folded above an answer. */
 .msg-reasoning {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .msg-reasoning-label {
@@ -2427,8 +3187,8 @@ input[type="range"] {
 
 .msg-reasoning-text {
   margin-top: 4px;
-  padding: 6px 10px;
-  border-inline-start: 2px solid var(--sm-color-border-secondary);
+  padding: 8px 12px;
+  border-inline-start: 1px solid var(--riso-rule-strong);
   white-space: pre-wrap;
 }
 
@@ -2439,17 +3199,17 @@ input[type="range"] {
 
 .consent-list {
   margin: 8px 0 12px;
-  padding-inline-start: 18px;
+  padding-inline-start: 20px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .consent-actions {
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 .approval-arguments {
@@ -2465,7 +3225,7 @@ input[type="range"] {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding-top: 20px;
+  padding-top: 24px;
 }
 
 .tag-row {
@@ -2478,17 +3238,20 @@ input[type="range"] {
 .tag-chip {
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--riso-ink-2);
   font-size: 12px;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .tag-chip:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-paper-raised);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2503,15 +3266,15 @@ input[type="range"] {
 
 .code-output {
   margin: 0;
-  padding: 8px 10px;
+  padding: 8px 12px;
   max-height: none;
   overflow: auto;
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface-hover);
-  font-family: var(--sm-font-code-family);
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--sm-text-medium);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--riso-ink) 4%, var(--riso-paper-raised));
+  font-family: var(--sm-font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--riso-ink-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2532,17 +3295,17 @@ input[type="range"] {
 }
 
 .diff-line.is-add {
-  color: var(--sm-app-text-success);
-  background: var(--sm-palette-green-1);
+  color: var(--riso-green-text);
+  background: var(--riso-diff-add-bg);
 }
 
 .diff-line.is-del {
-  color: var(--sm-app-text-danger);
-  background: var(--sm-palette-red-1);
+  color: var(--riso-red-text);
+  background: var(--riso-diff-del-bg);
 }
 
 .diff-line.is-meta {
-  color: var(--sm-palette-blue-8);
+  color: var(--riso-blue-text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2565,8 +3328,12 @@ input[type="range"] {
   flex: 0 0 200px;
 }
 
+#catalog-count {
+  font-variant-numeric: tabular-nums;
+}
+
 .catalog-section {
-  margin-top: 28px;
+  margin-top: 40px;
 }
 
 .catalog-heading {
@@ -2574,50 +3341,61 @@ input[type="range"] {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .catalog-heading h2,
 .catalog-heading h3 {
-  font-size: 15px;
+  font-family: var(--sm-font-display);
+  font-size: 20px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
+  font-variant-numeric: tabular-nums;
 }
 
+/* Catalog entries: flat sheets of raised stock on a 1px rule, no shadow and nothing boxed
+   inside them (experts.css gives the expert cards the same sheet). */
 .catalog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
 
-.expert-card {
+.expert-card,
+.skill-card,
+.connector-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   padding: 16px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface);
-  transition: box-shadow var(--sm-motion-duration-fast)
-    var(--sm-motion-easing-standard);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background: var(--riso-paper-raised);
+  box-shadow: none;
+  transition: border-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
-.expert-card:hover {
-  box-shadow: var(--sm-shadow-card-hover);
+.expert-card:hover,
+.skill-card:hover,
+.connector-card:hover {
+  border-color: color-mix(in srgb, var(--riso-ink) 30%, transparent);
+  box-shadow: none;
 }
 
 .expert-card.selected {
-  border-color: var(--sm-brand-primary);
-  box-shadow: 0 0 0 1px var(--sm-brand-primary);
+  border-color: var(--riso-blue);
+  background: color-mix(in srgb, var(--riso-blue) 5%, var(--riso-paper-raised));
 }
 
 .expert-card.selected .expert-use {
-  background: var(--sm-palette-brand-1);
-  border-color: var(--sm-palette-brand-3);
-  color: var(--sm-palette-brand-10);
+  background: var(--riso-blue-wash);
+  border-color: color-mix(in srgb, var(--riso-blue) 55%, transparent);
+  color: var(--riso-blue-text);
 }
 
-/* Category pills keep their natural width inside the column layout. */
+/* Category marks keep their natural width inside the column layout. */
 .expert-card > .badge {
   align-self: flex-start;
 }
@@ -2632,9 +3410,9 @@ input[type="range"] {
 .expert-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .expert-actions .expert-use {
@@ -2644,44 +3422,47 @@ input[type="range"] {
 .custom-tag {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  margin-inline-start: 6px;
-  padding: 0 7px;
-  border: 1px dashed var(--sm-palette-brand-4);
-  border-radius: 100px;
-  color: var(--sm-palette-brand-9);
-  font-size: 10px;
+  height: 20px;
+  margin-inline-start: 8px;
+  padding: 0 6px;
+  border: 1px dashed color-mix(in srgb, var(--riso-blue) 55%, transparent);
+  border-radius: 3px;
+  color: var(--riso-blue-text);
+  font-family: var(--sm-font-ui);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.2px;
   vertical-align: middle;
 }
 
 .custom-edit,
 .custom-delete {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-2);
   font-size: 12px;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .custom-edit:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 .custom-delete:hover {
-  background: var(--sm-palette-red-1);
-  border-color: var(--sm-palette-red-3);
-  color: var(--sm-app-text-danger);
+  background: var(--riso-red-wash);
+  border-color: color-mix(in srgb, var(--riso-red) 55%, transparent);
+  color: var(--riso-red-text);
 }
 
 .catalog-heading-actions {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .expert-avatar {
@@ -2692,69 +3473,57 @@ input[type="range"] {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--sm-palette-brand-1);
-  color: var(--sm-palette-brand-9);
+  background: var(--riso-blue-wash);
+  color: var(--riso-blue-text);
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.5px;
 }
 
 .expert-name {
-  font-size: 14px;
+  font-family: var(--sm-font-display);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 20px;
+  color: var(--riso-ink);
+  transition: color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .expert-role {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--sm-app-text-accent);
+  line-height: 16px;
+  color: var(--riso-blue-text);
 }
 
 .expert-desc {
   flex: 1;
-  font-size: 12px;
-  color: var(--sm-text-medium);
-  line-height: 1.5;
+  font-size: 13px;
+  color: var(--riso-ink-2);
+  line-height: 20px;
 }
 
 .expert-use {
   align-self: flex-start;
-  height: 26px;
+  height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
   font-size: 12px;
   font-weight: 500;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .expert-use:hover {
-  background: var(--sm-app-surface-hover);
+  border-color: var(--riso-rule-strong);
+  background: color-mix(in srgb, var(--riso-ink) 5%, var(--riso-paper-raised));
 }
 
 .skill-card,
 .connector-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   min-height: 96px;
-  padding: 16px 20px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-2xl);
-  background: var(--sm-app-surface);
-  box-shadow: var(--sm-shadow-card-soft);
-  transition: box-shadow var(--sm-motion-duration-medium) var(--sm-motion-easing-standard),
-    border-color var(--sm-motion-duration-medium) var(--sm-motion-easing-standard);
-}
-
-.skill-card:hover,
-.connector-card:hover {
-  box-shadow: var(--sm-shadow-card-hover);
-  border-color: var(--sm-color-border-solid);
 }
 
 .skill-card-head,
@@ -2767,17 +3536,20 @@ input[type="range"] {
 
 .skill-name,
 .connector-name {
-  font-size: 14px;
+  font-family: var(--sm-font-display);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 20px;
+  color: var(--riso-ink);
+  transition: color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .skill-desc,
 .connector-desc {
   flex: 1;
-  font-size: 12px;
-  color: var(--sm-text-medium);
-  line-height: 1.6;
+  font-size: 13px;
+  color: var(--riso-ink-2);
+  line-height: 20px;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -2803,47 +3575,50 @@ input[type="range"] {
 .connector-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: 100px;
-  background: var(--sm-app-surface-hover);
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: transparent;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   white-space: nowrap;
 }
 
 .connector-actions .button {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 12px;
 }
 
 .connector-chip-text {
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono);
   font-size: 11px;
 }
 
 .skill-toggle {
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-2);
   font-size: 12px;
   font-weight: 500;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .skill-toggle:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 .skill-toggle[aria-pressed="true"] {
-  background: var(--sm-palette-brand-1);
-  border-color: var(--sm-palette-brand-3);
-  color: var(--sm-palette-brand-10);
+  background: var(--riso-blue-wash);
+  border-color: color-mix(in srgb, var(--riso-blue) 45%, transparent);
+  color: var(--riso-blue-text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2853,18 +3628,20 @@ input[type="range"] {
 #automation-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 0;
+  margin-top: 8px;
 }
 
+/* One schedule per ruled row. */
 .automation-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
+  gap: 12px;
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: transparent;
 }
 
 .automation-info {
@@ -2875,6 +3652,7 @@ input[type="range"] {
 .automation-info .status-text,
 .automation-history {
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .automation-history-list {
@@ -2882,15 +3660,15 @@ input[type="range"] {
 }
 
 .automation-error {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text);
 }
 
 .automation-item .dot {
-  background: var(--sm-text-weak);
+  background: var(--riso-ink-3);
 }
 
 .automation-item .dot.active {
-  background: var(--sm-palette-green-6);
+  background: var(--riso-blue);
 }
 
 .automation-icon {
@@ -2906,14 +3684,14 @@ input[type="range"] {
 .automation-name {
   display: block;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--sm-text-strong);
+  font-weight: 600;
+  color: var(--riso-ink);
 }
 
 .automation-prompt {
   overflow: hidden;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2923,21 +3701,24 @@ input[type="range"] {
 .automation-edit,
 .automation-delete {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-2);
   font-size: 12px;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    border-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .automation-run-now {
   width: auto;
-  padding: 0 10px;
+  padding: 0 12px;
   gap: 4px;
   white-space: nowrap;
 }
@@ -2950,14 +3731,14 @@ input[type="range"] {
 .automation-toggle:hover,
 .automation-edit:hover,
 .automation-delete:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 .automation-delete:hover {
-  background: var(--sm-palette-red-1);
-  border-color: var(--sm-palette-red-3);
-  color: var(--sm-app-text-danger);
+  background: var(--riso-red-wash);
+  border-color: color-mix(in srgb, var(--riso-red) 55%, transparent);
+  color: var(--riso-red-text);
 }
 
 .dot {
@@ -2974,13 +3755,13 @@ input[type="range"] {
 #provider-models-section {
   margin-top: 8px;
   padding-top: 16px;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  border-top: 1px solid var(--riso-rule);
 }
 
 #provider-models {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   max-height: 280px;
   overflow-y: auto;
 }
@@ -2988,13 +3769,14 @@ input[type="range"] {
 .model-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: var(--sm-radius-md);
+  gap: 12px;
+  padding: 8px;
+  border-radius: 6px;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .model-row:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
 }
 
 .model-info {
@@ -3005,15 +3787,15 @@ input[type="range"] {
 }
 
 .model-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
 }
 
 .model-id {
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono);
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3022,24 +3804,24 @@ input[type="range"] {
 .model-toggle {
   flex-shrink: 0;
   height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
-  font-size: 11px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-2);
+  font-size: 12px;
   font-weight: 500;
 }
 
 .model-toggle:hover:not(:disabled) {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  border-color: var(--riso-rule-strong);
+  color: var(--riso-ink);
 }
 
 .model-toggle[aria-pressed="true"] {
-  background: var(--sm-palette-brand-1);
-  border-color: var(--sm-palette-brand-3);
-  color: var(--sm-palette-brand-10);
+  background: var(--riso-blue-wash);
+  border-color: color-mix(in srgb, var(--riso-blue) 45%, transparent);
+  color: var(--riso-blue-text);
 }
 
 .model-toggle:disabled {
@@ -3053,21 +3835,23 @@ input[type="range"] {
 .picker-button {
   width: 100%;
   min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
-  color: var(--sm-text-strong);
+  padding: 4px 12px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink);
   font-size: 13px;
+  line-height: 22px;
   text-align: left;
+  transition: border-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .picker-button:hover:not(:disabled) {
-  background: var(--sm-app-surface-hover);
+  border-color: var(--riso-rule-strong);
 }
 
 .picker-button:disabled {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .picker-list {
@@ -3079,44 +3863,53 @@ input[type="range"] {
   max-height: 240px;
   overflow-y: auto;
   padding: 4px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-bg-popover);
-  box-shadow: var(--sm-shadow-popup-medium);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background: var(--riso-paper-raised);
+  box-shadow: var(--sm-shadow-lift);
+}
+
+/* Opened as a popover in the top layer, so no scroller or overflow clips it; app.js
+   placeModelPicker sets top or bottom, left, width and max-height from the button. */
+.picker-list[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  color: var(--riso-ink);
 }
 
 .picker-option {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
   text-align: left;
 }
 
 .picker-option:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
 }
 
 .picker-option[aria-selected="true"] {
-  background: var(--sm-bg-active);
+  background: var(--riso-blue-tint);
 }
 
 .picker-option-name {
-  font-size: 12px;
-  color: var(--sm-text-strong);
+  font-size: 13px;
+  color: var(--riso-ink);
 }
 
 .picker-option-id {
-  font-family: var(--sm-font-code-family);
-  font-size: 10px;
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
+  color: var(--riso-ink-3);
 }
 
-/* MCP servers (Assistant card 03) */
+/* MCP servers (Assistant, "Tools from MCP servers") */
 .mcp-heading {
   align-items: flex-start;
 }
@@ -3134,8 +3927,8 @@ input[type="range"] {
 .mcp-quick-url {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 4px 0 14px;
+  gap: 8px;
+  margin: 4px 0 16px;
 }
 
 .mcp-quick-url-row {
@@ -3149,16 +3942,18 @@ input[type="range"] {
 }
 
 .mcp-subtitle {
-  margin: 0;
-  font-size: 13px;
+  margin: 8px 0 0;
+  font-family: var(--sm-font-display);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 20px;
+  color: var(--riso-ink);
 }
 
 .mcp-presets {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   margin-bottom: 16px;
 }
 
@@ -3166,8 +3961,8 @@ input[type="range"] {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 10px;
-  margin-bottom: 8px;
+  gap: 4px 12px;
+  margin-bottom: 4px;
 }
 
 .mcp-preset-group-head .status-text {
@@ -3177,24 +3972,25 @@ input[type="range"] {
 .mcp-preset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
+  gap: 0 24px;
 }
 
+/* Presets print as ruled entries too. */
 .mcp-preset {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
+  padding: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: transparent;
 }
 
 .mcp-preset.is-added {
-  border-color: var(--sm-palette-green-3);
-  background: var(--sm-palette-green-1);
+  border-top-color: color-mix(in srgb, var(--riso-green) 55%, transparent);
 }
 
 .mcp-preset-text {
@@ -3206,53 +4002,56 @@ input[type="range"] {
 
 .mcp-preset-name {
   font-size: 13px;
-  color: var(--sm-text-strong);
+  font-weight: 500;
+  color: var(--riso-ink);
 }
 
 .mcp-preset-desc {
   font-size: 11px;
-  line-height: 1.4;
-  color: var(--sm-text-medium);
+  line-height: 16px;
+  color: var(--riso-ink-2);
 }
 
 .mcp-preset-action {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .mcp-preset-status {
   font-size: 11px;
-  color: var(--sm-app-text-success);
+  color: var(--riso-green-text);
   white-space: nowrap;
 }
 
 .mcp-preset-status.is-error {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text);
 }
 
 .mcp-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+  margin-top: 8px;
 }
 
 .mcp-server {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-app-surface);
+  gap: 8px;
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: transparent;
 }
 
 .mcp-server-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 
 .mcp-server-title {
@@ -3266,12 +4065,12 @@ input[type="range"] {
 .mcp-server-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
 }
 
 .mcp-server-info {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .mcp-server-command {
@@ -3280,20 +4079,20 @@ input[type="range"] {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 4px 8px;
-  border-radius: var(--sm-radius-md);
-  background: var(--sm-app-surface-hover);
-  font-family: var(--sm-font-code-family);
+  border-radius: 4px;
+  background: var(--riso-ink-tint);
+  font-family: var(--sm-font-mono);
   font-size: 11px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .mcp-server-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .mcp-status-text {
@@ -3302,87 +4101,88 @@ input[type="range"] {
 
 .mcp-secret-keys {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .mcp-server-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .mcp-toggle {
   flex-shrink: 0;
   height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--sm-color-border-solid);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
-  font-size: 11px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: var(--riso-paper-raised);
+  color: var(--riso-ink-2);
+  font-size: 12px;
   font-weight: 500;
 }
 
 .mcp-toggle[aria-pressed="true"] {
-  background: var(--sm-palette-brand-1);
-  border-color: var(--sm-palette-brand-3);
-  color: var(--sm-palette-brand-10);
+  background: var(--riso-blue-wash);
+  border-color: color-mix(in srgb, var(--riso-blue) 45%, transparent);
+  color: var(--riso-blue-text);
 }
 
 .mcp-tools {
   margin: 4px 0 0;
-  padding: 8px 10px;
+  padding: 8px 12px;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   max-height: 260px;
   overflow-y: auto;
-  border-top: 1px solid var(--sm-color-border-tertiary);
+  border-top: 1px solid var(--riso-rule);
 }
 
 .mcp-tool-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .mcp-tool-name {
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono);
   font-size: 12px;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
 }
 
 .mcp-tool-desc,
 .mcp-tool-empty {
   font-size: 11px;
-  color: var(--sm-text-weak);
-  line-height: 1.5;
+  color: var(--riso-ink-3);
+  line-height: 16px;
 }
 
 /* Resources and prompts of an expanded server (src/mcp-ui.js renderExtras) */
 .mcp-extras-title {
-  margin: 8px 10px 0;
-  font-size: 11px;
+  margin: 8px 12px 0;
+  font-family: var(--sm-font-display);
+  font-size: 12px;
   font-weight: 600;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .mcp-extras-note {
-  margin: 6px 10px 0;
+  margin: 8px 12px 0;
 }
 
 .mcp-resource-uri {
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono);
   font-size: 11px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
   overflow-wrap: anywhere;
 }
 
 .mcp-prompt-args {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin: 4px 0;
 }
 
@@ -3390,9 +4190,9 @@ input[type="range"] {
   display: flex;
   flex: 1 1 160px;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
 .mcp-prompts .button {
@@ -3400,7 +4200,7 @@ input[type="range"] {
 }
 
 .mcp-dialog-actions {
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 /* Tool calls listed on an assistant reply */
@@ -3409,22 +4209,22 @@ input[type="range"] {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   white-space: normal;
 }
 
-/* One quiet chip per tool ("Read 4 files"); failures stand out. */
+/* One quiet mark per tool ("Read 4 files"); failures stand out in red ink. */
 .msg-tool {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 9px;
-  border: 1px solid var(--sm-app-border);
-  border-radius: 100px;
-  background: var(--sm-app-surface);
-  color: var(--sm-text-medium);
-  font-size: 11.5px;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--riso-ink-2);
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -3433,17 +4233,17 @@ input[type="range"] {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--sm-brand-primary);
+  background: var(--riso-blue);
 }
 
 .msg-tool.is-error {
-  border-color: color-mix(in srgb, var(--sm-color-text-error-default) 45%, transparent);
-  color: var(--sm-app-text-danger);
+  border-color: color-mix(in srgb, var(--riso-red) 55%, transparent);
+  color: var(--riso-red-text);
   font-weight: 500;
 }
 
 .msg-tool.is-error::before {
-  background: var(--sm-color-text-error-default);
+  background: var(--riso-red);
 }
 
 /* Time and Copy under a reply. */
@@ -3455,42 +4255,54 @@ input[type="range"] {
 
 .msg-copy {
   border: 0;
-  border-radius: 5px;
-  padding: 1px 6px;
+  border-radius: 4px;
+  padding: 2px 8px;
   background: transparent;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out),
+    color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .msg-copy:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
 }
 
 .msg-copy:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 2px;
 }
 
 /* ------------------------------------------------------------------ */
-/* 10. Overlays: search, toast                                         */
+/* 10. Overlays: dialogs, search, toast                                */
 /* ------------------------------------------------------------------ */
+
+/* Every dialog is a sheet of raised stock lifted above the shell; the shell dims behind it. */
+dialog {
+  color: var(--riso-ink);
+  background-color: var(--riso-paper-raised);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  box-shadow: var(--sm-shadow-lift);
+}
+
+dialog::backdrop {
+  background: var(--riso-backdrop);
+  backdrop-filter: blur(2px) saturate(0.8);
+}
 
 #search-dialog {
   width: min(560px, 90vw);
   margin: 12vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
-}
-
-#search-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background-color: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: var(--sm-shadow-lift);
 }
 
 #detail-dialog,
@@ -3499,18 +4311,11 @@ input[type="range"] {
   max-height: 78vh;
   margin: 8vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
-}
-
-#detail-dialog::backdrop,
-#connector-dialog::backdrop,
-#custom-dialog::backdrop,
-#mcp-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background-color: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: var(--sm-shadow-lift);
 }
 
 #custom-dialog,
@@ -3519,11 +4324,11 @@ input[type="range"] {
   max-height: 84vh;
   margin: 6vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background-color: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: var(--sm-shadow-lift);
 }
 
 #custom-dialog .dialog-body,
@@ -3537,16 +4342,20 @@ input[type="range"] {
   max-height: 84vh;
   margin: 14vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule);
+  border-radius: 8px;
+  background-color: var(--riso-paper-raised);
+  color: var(--riso-ink);
+  box-shadow: var(--sm-shadow-lift);
 }
 
-#bypass-dialog::backdrop,
-#tool-approval-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+/* The agent is asking: a 3px pink ink stripe across the top edge of the approval sheet. */
+#tool-approval-dialog {
+  background-image: linear-gradient(var(--riso-pink), var(--riso-pink));
+  background-size: 100% 3px;
+  background-repeat: no-repeat;
+  background-origin: border-box;
+  background-position: top left;
 }
 
 #bypass-dialog:focus-visible,
@@ -3572,28 +4381,28 @@ input[type="range"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 18px;
-  border: 1px solid var(--sm-app-border);
+  margin-top: 20px;
+  border: 1px solid var(--riso-rule);
   border-radius: 50%;
-  background: var(--sm-app-surface-hover);
+  background: var(--riso-ink-tint);
 }
 
 .custom-avatar-fieldset {
   display: flex;
   align-items: flex-end;
-  gap: 18px;
+  gap: 16px;
   flex-wrap: wrap;
   margin: 0 0 16px;
-  padding: 10px 12px 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-lg);
+  padding: 12px 12px 0;
+  border: 1px solid var(--riso-rule);
+  border-radius: 6px;
 }
 
 .custom-avatar-fieldset legend {
   padding: 0 4px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .custom-avatar-fieldset .form-group {
@@ -3611,25 +4420,30 @@ input[type="range"] {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 2px solid var(--sm-app-surface);
+  border: 2px solid var(--riso-paper-raised);
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--sm-color-border-solid);
+  background-color: var(--riso-fill);
+  box-shadow: 0 0 0 1px var(--riso-rule-strong);
   cursor: pointer;
 }
 
+[data-theme="dark"] .custom-color {
+  background-color: var(--riso-fill-dark);
+}
+
 .custom-color[aria-checked="true"] {
-  box-shadow: 0 0 0 2px var(--sm-text-strong);
+  box-shadow: 0 0 0 2px var(--riso-ink);
 }
 
 .custom-color:focus-visible {
-  outline: 2px solid var(--sm-color-border-focus);
+  outline: 2px solid var(--riso-blue);
   outline-offset: 2px;
 }
 
 .dialog-body {
   max-height: 60vh;
   overflow-y: auto;
-  padding: 0 18px 18px;
+  padding: 0 24px 24px;
 }
 
 #connector-dialog .dialog-body {
@@ -3638,46 +4452,50 @@ input[type="range"] {
 
 .connector-current {
   margin: 0 0 12px;
-  padding: 6px 10px;
-  border: 1px solid var(--sm-palette-green-3);
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-palette-green-1);
-  color: var(--sm-app-text-success);
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--riso-green) 45%, transparent);
+  border-radius: 6px;
+  background: var(--riso-green-wash);
+  color: var(--riso-green-text);
   font-size: 12px;
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
 
+/* Dialog sections print under a rule instead of nesting boxes. */
 .connector-section {
-  margin-top: 12px;
-  padding: 14px 16px 4px;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-app-surface);
+  margin-top: 16px;
+  padding: 16px 0 4px;
+  border: 0;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0;
+  background: transparent;
 }
 
 .connector-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
 .connector-section-head h3 {
-  font-size: 13px;
+  font-family: var(--sm-font-display);
+  font-size: 15px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  line-height: 20px;
+  color: var(--riso-ink);
 }
 
 .connector-steps {
-  margin: 8px 0 10px;
-  padding-inline-start: 18px;
+  margin: 8px 0 12px;
+  padding-inline-start: 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .connector-steps li > * {
@@ -3685,9 +4503,9 @@ input[type="range"] {
 }
 
 .connector-steps code {
-  padding: 1px 6px;
-  border-radius: var(--sm-radius-sm);
-  background: var(--sm-app-surface-hover);
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--riso-ink-tint);
 }
 
 #connector-redirect-note {
@@ -3696,21 +4514,22 @@ input[type="range"] {
 
 /* One-click sign-in (official MCP server with automatic app registration). */
 .connector-section.connector-recommended {
-  border-color: var(--sm-palette-green-3);
+  border-top-color: color-mix(in srgb, var(--riso-blue) 55%, transparent);
   padding-bottom: 12px;
 }
 
 .connector-recommended .button-row {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .connector-recommended .badge {
-  color: var(--sm-app-text-success);
-  background: var(--sm-palette-green-1);
+  border-color: color-mix(in srgb, var(--riso-blue) 55%, transparent);
+  background: transparent;
+  color: var(--riso-blue-text);
 }
 
 .connector-advanced {
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .connector-advanced > summary {
@@ -3719,64 +4538,64 @@ input[type="range"] {
   padding: 4px 0;
   font-size: 12px;
   font-weight: 500;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 .connector-advanced > summary:hover {
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
 }
 
-
 .button.compact {
-  height: 22px;
+  height: 24px;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .connector-auth-hint {
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3);
 }
 
-/* Text-style link to the connector dialog next to a one-click Connect button. */
+/* Text link to the connector dialog next to a one-click Connect button. */
 .connector-more {
   padding: 2px 0;
   border: 0;
   background: none;
   font: inherit;
   font-size: 11px;
-  color: var(--sm-text-weak);
+  color: var(--riso-blue-text);
   text-decoration: underline;
+  text-decoration-thickness: 1px;
   text-underline-offset: 2px;
   cursor: pointer;
 }
 
 .connector-more:hover {
-  color: var(--sm-text-strong);
+  text-decoration-color: currentColor;
 }
 
 .detail-content {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   margin-top: 12px;
 }
 
 .detail-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .detail-value {
   font-size: 13px;
-  line-height: 1.55;
-  color: var(--sm-text-medium);
+  line-height: 20px;
+  color: var(--riso-ink-2);
 }
 
 .detail-steps {
   margin: 0;
-  padding-inline-start: 18px;
+  padding-inline-start: 20px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3784,8 +4603,8 @@ input[type="range"] {
 
 .detail-step {
   font-size: 13px;
-  line-height: 1.5;
-  color: var(--sm-text-medium);
+  line-height: 20px;
+  color: var(--riso-ink-2);
 }
 
 .dialog-header {
@@ -3793,50 +4612,74 @@ input[type="range"] {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 18px 8px;
+  padding: 20px 24px 12px;
+}
+
+.dialog-header > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .dialog-header h2 {
-  font-size: 16px;
+  margin: 0;
+  font-family: var(--sm-font-display);
+  font-size: 20px;
   font-weight: 600;
-  margin-top: 2px;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  color: var(--riso-ink);
+}
+
+/* Where a prompt comes from (the task, the subagent, the folder): one line under the title. */
+.dialog-context {
+  order: 1;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-2);
+}
+
+.dialog-context:empty {
+  display: none;
 }
 
 .dialog-search {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 18px 12px;
+  gap: 8px;
+  padding: 8px 24px 12px;
 }
 
 .dialog-search label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2);
 }
 
 #search-results {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   max-height: 320px;
   overflow-y: auto;
-  padding: 0 10px 12px;
+  padding: 0 12px 12px;
 }
 
 .search-result {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: none;
-  border-radius: var(--sm-radius-md);
+  border-radius: 6px;
   background: none;
-  color: var(--sm-text-strong);
+  color: var(--riso-ink);
   font-size: 13px;
   text-align: left;
+  transition: background-color var(--sm-dur-1) var(--sm-ease-out);
 }
 
 .search-result-text {
@@ -3847,8 +4690,8 @@ input[type="range"] {
 }
 
 .search-result-desc {
-  font-size: 11px;
-  color: var(--sm-text-weak);
+  font-size: 12px;
+  color: var(--riso-ink-3);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 1;
@@ -3856,7 +4699,12 @@ input[type="range"] {
 }
 
 .search-result:hover {
-  background: var(--sm-bg-hover);
+  background: var(--riso-ink-tint);
+}
+
+.search-result:focus-visible {
+  outline: 2px solid var(--riso-blue);
+  outline-offset: -2px;
 }
 
 #toast {
@@ -3866,16 +4714,16 @@ input[type="range"] {
   z-index: 1000;
   transform: translate(-50%, 12px);
   max-width: min(480px, 80vw);
-  padding: 8px 14px;
-  border-radius: var(--sm-radius-lg);
-  background: var(--sm-bg-tooltip);
-  color: var(--sm-text-white);
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: var(--riso-ink);
+  color: var(--riso-paper);
   font-size: 12px;
+  box-shadow: var(--sm-shadow-lift);
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--sm-motion-duration-base)
-      var(--sm-motion-easing-standard),
-    transform var(--sm-motion-duration-base) var(--sm-motion-easing-standard);
+  transition: opacity var(--sm-dur-2) var(--sm-ease-out),
+    transform var(--sm-dur-2) var(--sm-ease-out);
 }
 
 #toast.show {
@@ -3906,12 +4754,12 @@ input[type="range"] {
 
 @media (max-width: 760px) {
   #sidebar {
-    width: 200px;
+    width: 208px;
   }
 
   .sm-home-header__title {
-    font-size: 24px;
-    line-height: 34px;
+    font-size: 20px;
+    line-height: 28px;
   }
 
   .catalog-filters {
@@ -3926,25 +4774,38 @@ input[type="range"] {
 
 /* Per-reply provider usage/cost and the current task's compacted-context state. */
 .msg-metrics {
-  color: var(--sm-text-weak);
+  font-family: var(--sm-font-mono);
+  color: var(--riso-ink-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+
+/* Tokens and cost beside the crumb, set off by a rule. */
 .chat-crumb-metrics,
 .chat-crumb-context {
   display: inline-block;
-  margin-left: 8px;
-  color: var(--sm-text-weak);
-  font-size: 10.5px;
+  margin-left: 12px;
+  color: var(--riso-ink-3);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   letter-spacing: normal;
   text-transform: none;
+  vertical-align: 1px;
 }
+
+.chat-crumb-metrics {
+  padding-left: 12px;
+  border-left: 1px solid var(--riso-rule);
+  font-family: var(--sm-font-mono);
+}
+
 .chat-crumb-context {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--sm-app-surface-hover);
+  padding: 0 6px;
+  border: 1px solid var(--riso-rule-strong);
+  border-radius: 3px;
+  color: var(--riso-ink-2);
 }
+
 .compact-context-button:disabled {
-  opacity: 0.52;
+  opacity: 0.5;
 }

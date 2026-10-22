@@ -1,15 +1,20 @@
 /*
  * What a reply changed (src/changes-ui.js): the card under the reply and the review dialog with
- * the diff. Added and removed lines use the green and red of the palette at low strength, so
- * they read the same in light and dark themes.
+ * the diff. Riso Zine Press: a flat sheet (paper-raised, 1px rule), rows on rules, the kind of
+ * change as a printed tag, +/- counts in green-text / red-text tabular figures, and the diff
+ * lines on the riso add/del backgrounds, which read the same in light and dark.
  */
+
+/* ---- The card under a reply ---------------------------------------------------------------- */
+
 .changes-card {
-  margin-top: 6px;
-  border: 1px solid var(--sm-app-border);
+  margin-top: 12px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 8px;
-  background: var(--sm-app-surface);
+  background: var(--riso-paper-raised, #FAFAF8);
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 20px;
   white-space: normal;
 }
 .changes-head {
@@ -17,45 +22,56 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 32px;
-  padding: 4px 6px 4px 12px;
-  border-bottom: 1px solid var(--sm-app-border);
-  background: var(--sm-app-muted);
+  min-height: 40px;
+  padding: 4px 8px 4px 16px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .changes-summary {
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--sm-text-strong);
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink, #1A1B1F);
 }
 .changes-actions {
   display: flex;
-  gap: 4px;
+  gap: 8px;
 }
 .changes-list {
   margin: 0;
-  padding: 2px 0;
+  padding: 0;
   list-style: none;
 }
 .changes-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 6px 0 12px;
+  gap: 12px;
+  min-height: 36px;
+  padding: 4px 8px 4px 16px;
 }
 .changes-row + .changes-row {
-  border-top: 1px solid color-mix(in srgb, var(--sm-app-border) 60%, transparent);
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
+
+/* EDITED / NEW: printed state tags. */
 .changes-kind {
   flex-shrink: 0;
-  min-width: 44px;
-  font-size: 10.5px;
+  min-width: 52px;
+  padding: 2px 6px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 3px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  text-align: center;
   text-transform: uppercase;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-2, #4A4D55);
 }
 .changes-kind.is-created {
-  color: var(--sm-app-text-success);
+  border-color: color-mix(in srgb, var(--riso-green-text, #0A7A46) 55%, transparent);
+  color: var(--riso-green-text, #0A7A46);
 }
 .changes-file {
   flex: 1;
@@ -63,8 +79,8 @@
   padding: 2px 0;
   border: 0;
   background: none;
-  color: var(--sm-text-strong);
-  font-family: var(--sm-font-code-family);
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
   text-align: left;
   overflow: hidden;
@@ -73,104 +89,143 @@
   cursor: pointer;
 }
 .changes-file:hover:not(:disabled) {
+  color: var(--riso-blue-text, #005E96);
   text-decoration: underline;
-  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 .changes-file:disabled {
   cursor: default;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
 }
 .changes-row[data-status="undone"] .changes-file {
   text-decoration: line-through;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .changes-counts {
   flex-shrink: 0;
   display: inline-flex;
-  gap: 6px;
-  font-family: var(--sm-font-code-family);
-  font-size: 11.5px;
+  gap: 8px;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
 .changes-added {
-  color: var(--sm-app-text-success);
+  color: var(--riso-green-text, #0A7A46);
 }
 .changes-removed {
-  color: var(--sm-app-text-danger);
+  color: var(--riso-red-text, #B42638);
 }
 .changes-zero {
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
+
+/* Undo / Keep / Commit: small standard buttons. "Keep all" is the primary one. */
 .changes-action {
   flex-shrink: 0;
   height: 24px;
   padding: 0 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
   border-radius: 6px;
-  background: none;
-  color: var(--sm-text-medium);
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
   cursor: pointer;
+  transition: background-color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 .changes-action:hover:not(:disabled) {
-  border-color: var(--sm-app-border);
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 6%, var(--riso-paper-raised, #FAFAF8));
+}
+.changes-action[data-action="keep-all"] {
+  border-color: var(--sm-button-primary-bg, #006AA8);
+  background: var(--sm-button-primary-bg, #006AA8);
+  color: var(--sm-button-primary-fg, #FFFFFF);
+}
+.changes-action[data-action="keep-all"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sm-button-primary-bg, #006AA8) 88%, var(--riso-ink, #1A1B1F));
 }
 .changes-action:disabled {
   opacity: 0.45;
   cursor: default;
 }
+
+/* Kept: DONE tag. Undone: STOPPED tag. Not recorded / mixed: quiet text. */
 .changes-state {
   flex-shrink: 0;
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
+}
+.changes-row .changes-state:is(.is-kept, .is-undone),
+.changes-dialog-file .changes-state:is(.is-kept, .is-undone) {
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--riso-ink-3, #6B6F78) 70%, transparent);
+  border-radius: 3px;
+  font-family: var(--sm-font-display, "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .changes-state.is-kept {
-  color: var(--sm-app-text-success);
+  border-color: var(--riso-blue, #0078BF);
+  color: var(--riso-blue-text, #005E96);
 }
 .changes-state.is-mixed {
-  color: var(--sm-app-text-warning);
+  color: var(--riso-ink-2, #4A4D55);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
   cursor: help;
 }
 .changes-note {
   margin: 0;
-  padding: 6px 12px 8px;
-  font-size: 11.5px;
-  color: var(--sm-text-weak);
+  padding: 8px 16px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .changes-file:focus-visible,
 .changes-action:focus-visible,
-.changes-dialog-file:focus-visible,
+.changes-dialog-file:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
 .changes-diff:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: -2px;
 }
 
-/* The review dialog: the reply's files on the left, the selected file's diff on the right. */
+/* ---- The review dialog: the reply's files on the left, the selected file's diff on the right */
+
 #changes-dialog {
   width: min(1040px, 94vw);
   height: min(760px, 84vh);
-  margin: 7vh auto auto;
+  margin: 8vh auto auto;
   padding: 0;
-  border: 1px solid var(--sm-color-border-secondary);
-  border-radius: var(--sm-radius-xl);
-  background: var(--sm-bg-modal);
-  color: var(--sm-text-strong);
-  box-shadow: var(--sm-shadow-popup-large);
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 8px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 #changes-dialog[open] {
   display: flex;
   flex-direction: column;
 }
 #changes-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--riso-backdrop, color-mix(in srgb, #F3F4F1 55%, transparent));
+  backdrop-filter: blur(2px) saturate(0.8);
 }
 .changes-subtitle {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--sm-text-weak);
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-2, #4A4D55);
 }
 .changes-close {
   width: 28px;
@@ -178,57 +233,59 @@
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
-  font-size: 18px;
+  color: var(--riso-ink-2, #4A4D55);
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
 .changes-close:hover {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
 .changes-close:focus-visible {
-  outline: 2px solid var(--sm-brand-primary);
-  outline-offset: 1px;
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
 .changes-dialog-body {
   flex: 1;
   min-height: 0;
   display: flex;
-  border-top: 1px solid var(--sm-app-border);
-  border-bottom: 1px solid var(--sm-app-border);
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .changes-files {
-  flex: 0 0 250px;
+  flex: 0 0 256px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px;
+  gap: 0;
+  padding: 8px;
   overflow-y: auto;
-  border-right: 1px solid var(--sm-app-border);
+  border-right: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  background: var(--riso-paper, #F3F4F1);
 }
 .changes-dialog-file {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   min-height: 28px;
-  padding: 3px 8px;
+  padding: 4px 8px;
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--sm-text-medium);
+  color: var(--riso-ink-2, #4A4D55);
   font: inherit;
   font-size: 12px;
   text-align: left;
   cursor: pointer;
 }
 .changes-dialog-file:hover:not(:disabled) {
-  background: var(--sm-app-surface-hover);
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
 }
 .changes-dialog-file.is-selected {
-  background: var(--sm-app-surface-hover);
-  color: var(--sm-text-strong);
+  background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
+  color: var(--riso-ink, #1A1B1F);
   font-weight: 500;
 }
 .changes-dialog-file:disabled {
@@ -241,7 +298,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
 }
 .changes-dialog-file[data-status="undone"] .changes-dialog-name {
   text-decoration: line-through;
@@ -256,93 +313,107 @@
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--sm-app-border);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 .changes-path {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--sm-font-code-family);
-  font-size: 12.5px;
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
   font-weight: 600;
 }
 .changes-view-head .changes-state {
   margin-left: auto;
 }
+
+/* The diff: mono 12px on 20px lines, old and new line numbers, a sign column. */
 .changes-diff {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 4px 0 12px;
-  font-family: var(--sm-font-code-family);
+  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 20px;
 }
 .changes-empty {
-  margin: 16px 14px;
-  font-family: inherit;
-  font-size: 12.5px;
-  color: var(--sm-text-weak);
+  margin: 16px;
+  font-family: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
+  font-size: 13px;
+  color: var(--riso-ink-3, #6B6F78);
 }
 .changes-diff .changes-note {
-  padding: 8px 14px 0;
+  padding: 8px 16px 0;
+  border-top: 0;
+  font-family: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
 }
-.diff-hunk {
-  margin-top: 6px;
-  padding: 3px 14px;
-  background: var(--sm-app-muted);
-  color: var(--sm-text-weak);
+.changes-diff .diff-hunk {
+  margin-top: 8px;
+  padding: 2px 16px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  color: var(--riso-blue-text, #005E96);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
-.diff-hunk:first-child {
+.changes-diff .diff-hunk:first-child {
   margin-top: 0;
+  border-top: 0;
 }
-.diff-line {
+.changes-diff .diff-line {
   display: grid;
-  grid-template-columns: 46px 46px 18px minmax(0, 1fr);
-  padding-right: 14px;
+  grid-template-columns: 48px 48px 16px minmax(0, 1fr);
+  padding-right: 16px;
+  color: var(--riso-ink, #1A1B1F);
 }
-.diff-num {
+.changes-diff .diff-num {
   padding-right: 8px;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
   text-align: right;
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
-.diff-sign {
-  color: var(--sm-text-weak);
+.changes-diff .diff-sign {
+  color: var(--riso-ink-3, #6B6F78);
   text-align: center;
   user-select: none;
 }
-.diff-text {
+.changes-diff .diff-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 4;
 }
-.diff-line.is-add {
-  background: color-mix(in srgb, var(--sm-palette-green-8) 13%, transparent);
+.changes-diff .diff-line.is-add {
+  background: var(--riso-diff-add-bg, color-mix(in srgb, #00A95C 14%, transparent));
 }
-.diff-line.is-add .diff-sign {
-  color: var(--sm-app-text-success);
+.changes-diff .diff-line.is-add .diff-sign {
+  color: var(--riso-green-text, #0A7A46);
 }
-.diff-line.is-del {
-  background: color-mix(in srgb, var(--sm-palette-red-8) 12%, transparent);
+.changes-diff .diff-line.is-del {
+  background: var(--riso-diff-del-bg, color-mix(in srgb, #F15060 14%, transparent));
 }
-.diff-line.is-del .diff-sign {
-  color: var(--sm-app-text-danger);
+.changes-diff .diff-line.is-del .diff-sign {
+  color: var(--riso-red-text, #B42638);
 }
-.diff-meta {
+.changes-diff .diff-meta {
   font-style: italic;
-  color: var(--sm-text-weak);
+  color: var(--riso-ink-3, #6B6F78);
 }
 .changes-dialog-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 12px 16px;
 }
 .changes-dialog-actions .changes-spacer {
   flex: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .changes-action {
+    transition: none;
+  }
 }

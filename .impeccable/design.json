@@ -1,0 +1,857 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-21T17:23:57+00:00",
+  "title": "Design System: ScaleMax IDE",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Cool Paper",
+        "canonical": "oklch(96.6% 0.004 122)",
+        "tonalRamp": [
+          "oklch(15% 0.002 122)",
+          "oklch(25% 0.003 122)",
+          "oklch(35% 0.004 122)",
+          "oklch(45% 0.004 122)",
+          "oklch(55% 0.004 122)",
+          "oklch(65% 0.004 122)",
+          "oklch(85% 0.003 122)",
+          "oklch(95% 0.002 122)"
+        ]
+      },
+      "paper-raised": {
+        "role": "neutral",
+        "displayName": "Raised Stock",
+        "canonical": "oklch(98.5% 0.003 106)",
+        "tonalRamp": [
+          "oklch(15% 0.002 106)",
+          "oklch(25% 0.002 106)",
+          "oklch(35% 0.003 106)",
+          "oklch(45% 0.003 106)",
+          "oklch(55% 0.003 106)",
+          "oklch(65% 0.003 106)",
+          "oklch(85% 0.002 106)",
+          "oklch(95% 0.002 106)"
+        ]
+      },
+      "rail": {
+        "role": "neutral",
+        "displayName": "Blue Rail Tint",
+        "canonical": "color-mix(in srgb, #0078BF 9%, #F3F4F1)",
+        "tonalRamp": [
+          "oklch(15% 0.011 245)",
+          "oklch(25% 0.016 245)",
+          "oklch(35% 0.020 245)",
+          "oklch(45% 0.020 245)",
+          "oklch(55% 0.020 245)",
+          "oklch(65% 0.020 245)",
+          "oklch(85% 0.016 245)",
+          "oklch(95% 0.011 245)"
+        ]
+      },
+      "rail-patch": {
+        "role": "primary",
+        "displayName": "Selected Rail Patch",
+        "canonical": "color-mix(in srgb, #0078BF 13%, rail)",
+        "tonalRamp": [
+          "oklch(15% 0.019 245)",
+          "oklch(25% 0.028 245)",
+          "oklch(35% 0.035 245)",
+          "oklch(45% 0.035 245)",
+          "oklch(55% 0.035 245)",
+          "oklch(65% 0.035 245)",
+          "oklch(85% 0.028 245)",
+          "oklch(95% 0.019 245)"
+        ]
+      },
+      "rail-active-text": {
+        "role": "primary",
+        "displayName": "Rail Active Blue",
+        "canonical": "oklch(39.6% 0.100 245)",
+        "tonalRamp": [
+          "oklch(15% 0.055 245)",
+          "oklch(25% 0.080 245)",
+          "oklch(35% 0.100 245)",
+          "oklch(45% 0.100 245)",
+          "oklch(55% 0.100 245)",
+          "oklch(65% 0.100 245)",
+          "oklch(85% 0.080 245)",
+          "oklch(95% 0.055 245)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink Black",
+        "canonical": "oklch(22.3% 0.008 275)",
+        "tonalRamp": [
+          "oklch(15% 0.004 275)",
+          "oklch(25% 0.006 275)",
+          "oklch(35% 0.008 275)",
+          "oklch(45% 0.008 275)",
+          "oklch(55% 0.008 275)",
+          "oklch(65% 0.008 275)",
+          "oklch(85% 0.006 275)",
+          "oklch(95% 0.004 275)"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "oklch(42.0% 0.014 269)",
+        "tonalRamp": [
+          "oklch(15% 0.008 269)",
+          "oklch(25% 0.011 269)",
+          "oklch(35% 0.014 269)",
+          "oklch(45% 0.014 269)",
+          "oklch(55% 0.014 269)",
+          "oklch(65% 0.014 269)",
+          "oklch(85% 0.011 269)",
+          "oklch(95% 0.008 269)"
+        ]
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink 3",
+        "canonical": "oklch(54.1% 0.015 267)",
+        "tonalRamp": [
+          "oklch(15% 0.008 267)",
+          "oklch(25% 0.012 267)",
+          "oklch(35% 0.015 267)",
+          "oklch(45% 0.015 267)",
+          "oklch(55% 0.015 267)",
+          "oklch(65% 0.015 267)",
+          "oklch(85% 0.012 267)",
+          "oklch(95% 0.008 267)"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "color-mix(in srgb, #1A1B1F 14%, transparent)",
+        "tonalRamp": [
+          "oklch(15% 0.004 275)",
+          "oklch(25% 0.006 275)",
+          "oklch(35% 0.008 275)",
+          "oklch(45% 0.008 275)",
+          "oklch(55% 0.008 275)",
+          "oklch(65% 0.008 275)",
+          "oklch(85% 0.006 275)",
+          "oklch(95% 0.004 275)"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "canonical": "color-mix(in srgb, #1A1B1F 26%, transparent)",
+        "tonalRamp": [
+          "oklch(15% 0.004 275)",
+          "oklch(25% 0.006 275)",
+          "oklch(35% 0.008 275)",
+          "oklch(45% 0.008 275)",
+          "oklch(55% 0.008 275)",
+          "oklch(65% 0.008 275)",
+          "oklch(85% 0.006 275)",
+          "oklch(95% 0.004 275)"
+        ]
+      },
+      "riso-blue": {
+        "role": "primary",
+        "displayName": "Riso Blue",
+        "canonical": "oklch(55.4% 0.141 245)",
+        "tonalRamp": [
+          "oklch(15% 0.078 245)",
+          "oklch(25% 0.113 245)",
+          "oklch(35% 0.141 245)",
+          "oklch(45% 0.141 245)",
+          "oklch(55% 0.141 245)",
+          "oklch(65% 0.141 245)",
+          "oklch(85% 0.113 245)",
+          "oklch(95% 0.078 245)"
+        ]
+      },
+      "blue-text": {
+        "role": "primary",
+        "displayName": "Deep Blue Text",
+        "canonical": "oklch(46.6% 0.117 245)",
+        "tonalRamp": [
+          "oklch(15% 0.064 245)",
+          "oklch(25% 0.094 245)",
+          "oklch(35% 0.117 245)",
+          "oklch(45% 0.117 245)",
+          "oklch(55% 0.117 245)",
+          "oklch(65% 0.117 245)",
+          "oklch(85% 0.094 245)",
+          "oklch(95% 0.064 245)"
+        ]
+      },
+      "blue-fill-hover": {
+        "role": "primary",
+        "displayName": "Riso Blue Pressed",
+        "canonical": "#006AA8",
+        "tonalRamp": [
+          "oklch(15% 0.072 245)",
+          "oklch(25% 0.104 245)",
+          "oklch(35% 0.130 245)",
+          "oklch(45% 0.130 245)",
+          "oklch(55% 0.130 245)",
+          "oklch(65% 0.130 245)",
+          "oklch(85% 0.104 245)",
+          "oklch(95% 0.072 245)"
+        ]
+      },
+      "on-blue": {
+        "role": "neutral",
+        "displayName": "White on Blue",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "oklch(15% 0.000 0)",
+          "oklch(25% 0.000 0)",
+          "oklch(35% 0.000 0)",
+          "oklch(45% 0.000 0)",
+          "oklch(55% 0.000 0)",
+          "oklch(65% 0.000 0)",
+          "oklch(85% 0.000 0)",
+          "oklch(95% 0.000 0)"
+        ]
+      },
+      "fluorescent-pink": {
+        "role": "secondary",
+        "displayName": "Fluorescent Pink",
+        "canonical": "oklch(69.3% 0.236 350)",
+        "tonalRamp": [
+          "oklch(15% 0.130 350)",
+          "oklch(25% 0.189 350)",
+          "oklch(35% 0.236 350)",
+          "oklch(45% 0.236 350)",
+          "oklch(55% 0.236 350)",
+          "oklch(65% 0.236 350)",
+          "oklch(85% 0.189 350)",
+          "oklch(95% 0.130 350)"
+        ]
+      },
+      "pink-text": {
+        "role": "secondary",
+        "displayName": "Pink Text",
+        "canonical": "oklch(51.7% 0.204 354)",
+        "tonalRamp": [
+          "oklch(15% 0.112 354)",
+          "oklch(25% 0.163 354)",
+          "oklch(35% 0.204 354)",
+          "oklch(45% 0.204 354)",
+          "oklch(55% 0.204 354)",
+          "oklch(65% 0.204 354)",
+          "oklch(85% 0.163 354)",
+          "oklch(95% 0.112 354)"
+        ]
+      },
+      "highlighter-yellow": {
+        "role": "tertiary",
+        "displayName": "Highlighter Yellow",
+        "canonical": "oklch(92.1% 0.193 102)",
+        "tonalRamp": [
+          "oklch(15% 0.106 102)",
+          "oklch(25% 0.154 102)",
+          "oklch(35% 0.193 102)",
+          "oklch(45% 0.193 102)",
+          "oklch(55% 0.193 102)",
+          "oklch(65% 0.193 102)",
+          "oklch(85% 0.154 102)",
+          "oklch(95% 0.106 102)"
+        ]
+      },
+      "yellow-text": {
+        "role": "tertiary",
+        "displayName": "Yellow Text",
+        "canonical": "oklch(49.4% 0.101 87)",
+        "tonalRamp": [
+          "oklch(15% 0.056 87)",
+          "oklch(25% 0.081 87)",
+          "oklch(35% 0.101 87)",
+          "oklch(45% 0.101 87)",
+          "oklch(55% 0.101 87)",
+          "oklch(65% 0.101 87)",
+          "oklch(85% 0.081 87)",
+          "oklch(95% 0.056 87)"
+        ]
+      },
+      "riso-red": {
+        "role": "tertiary",
+        "displayName": "Riso Red",
+        "canonical": "oklch(65.7% 0.196 19)",
+        "tonalRamp": [
+          "oklch(15% 0.108 19)",
+          "oklch(25% 0.157 19)",
+          "oklch(35% 0.196 19)",
+          "oklch(45% 0.196 19)",
+          "oklch(55% 0.196 19)",
+          "oklch(65% 0.196 19)",
+          "oklch(85% 0.157 19)",
+          "oklch(95% 0.108 19)"
+        ]
+      },
+      "red-text": {
+        "role": "tertiary",
+        "displayName": "Red Text",
+        "canonical": "oklch(50.6% 0.177 20)",
+        "tonalRamp": [
+          "oklch(15% 0.097 20)",
+          "oklch(25% 0.142 20)",
+          "oklch(35% 0.177 20)",
+          "oklch(45% 0.177 20)",
+          "oklch(55% 0.177 20)",
+          "oklch(65% 0.177 20)",
+          "oklch(85% 0.142 20)",
+          "oklch(95% 0.097 20)"
+        ]
+      },
+      "danger-fill": {
+        "role": "tertiary",
+        "displayName": "Danger Fill",
+        "canonical": "oklch(50.6% 0.177 20)",
+        "tonalRamp": [
+          "oklch(15% 0.097 20)",
+          "oklch(25% 0.142 20)",
+          "oklch(35% 0.177 20)",
+          "oklch(45% 0.177 20)",
+          "oklch(55% 0.177 20)",
+          "oklch(65% 0.177 20)",
+          "oklch(85% 0.142 20)",
+          "oklch(95% 0.097 20)"
+        ]
+      },
+      "riso-green": {
+        "role": "tertiary",
+        "displayName": "Addition Green",
+        "canonical": "oklch(64.5% 0.164 154)",
+        "tonalRamp": [
+          "oklch(15% 0.090 154)",
+          "oklch(25% 0.131 154)",
+          "oklch(35% 0.164 154)",
+          "oklch(45% 0.164 154)",
+          "oklch(55% 0.164 154)",
+          "oklch(65% 0.164 154)",
+          "oklch(85% 0.131 154)",
+          "oklch(95% 0.090 154)"
+        ]
+      },
+      "green-text": {
+        "role": "tertiary",
+        "displayName": "Green Text",
+        "canonical": "oklch(51.0% 0.122 155)",
+        "tonalRamp": [
+          "oklch(15% 0.067 155)",
+          "oklch(25% 0.098 155)",
+          "oklch(35% 0.122 155)",
+          "oklch(45% 0.122 155)",
+          "oklch(55% 0.122 155)",
+          "oklch(65% 0.122 155)",
+          "oklch(85% 0.098 155)",
+          "oklch(95% 0.067 155)"
+        ]
+      },
+      "paper-dark": {
+        "role": "neutral",
+        "displayName": "Deep Stock",
+        "canonical": "oklch(20.0% 0.010 268)",
+        "tonalRamp": [
+          "oklch(15% 0.006 268)",
+          "oklch(25% 0.008 268)",
+          "oklch(35% 0.010 268)",
+          "oklch(45% 0.010 268)",
+          "oklch(55% 0.010 268)",
+          "oklch(65% 0.010 268)",
+          "oklch(85% 0.008 268)",
+          "oklch(95% 0.006 268)"
+        ]
+      },
+      "paper-raised-dark": {
+        "role": "neutral",
+        "displayName": "Raised Deep Stock",
+        "canonical": "oklch(23.5% 0.012 264)",
+        "tonalRamp": [
+          "oklch(15% 0.007 264)",
+          "oklch(25% 0.010 264)",
+          "oklch(35% 0.012 264)",
+          "oklch(45% 0.012 264)",
+          "oklch(55% 0.012 264)",
+          "oklch(65% 0.012 264)",
+          "oklch(85% 0.010 264)",
+          "oklch(95% 0.007 264)"
+        ]
+      },
+      "rail-dark": {
+        "role": "neutral",
+        "displayName": "Deep Blue Rail",
+        "canonical": "color-mix(in srgb, #0078BF 14%, #14161B)",
+        "tonalRamp": [
+          "oklch(15% 0.017 245)",
+          "oklch(25% 0.024 245)",
+          "oklch(35% 0.030 245)",
+          "oklch(45% 0.030 245)",
+          "oklch(55% 0.030 245)",
+          "oklch(65% 0.030 245)",
+          "oklch(85% 0.024 245)",
+          "oklch(95% 0.017 245)"
+        ]
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Paper Ink (dark)",
+        "canonical": "oklch(93.5% 0.005 118)",
+        "tonalRamp": [
+          "oklch(15% 0.003 118)",
+          "oklch(25% 0.004 118)",
+          "oklch(35% 0.005 118)",
+          "oklch(45% 0.005 118)",
+          "oklch(55% 0.005 118)",
+          "oklch(65% 0.005 118)",
+          "oklch(85% 0.004 118)",
+          "oklch(95% 0.003 118)"
+        ]
+      },
+      "ink-2-dark": {
+        "role": "neutral",
+        "displayName": "Ink 2 (dark)",
+        "canonical": "#B4B7BE",
+        "tonalRamp": [
+          "oklch(15% 0.007 265)",
+          "oklch(25% 0.010 265)",
+          "oklch(35% 0.012 265)",
+          "oklch(45% 0.012 265)",
+          "oklch(55% 0.012 265)",
+          "oklch(65% 0.012 265)",
+          "oklch(85% 0.010 265)",
+          "oklch(95% 0.007 265)"
+        ]
+      },
+      "ink-3-dark": {
+        "role": "neutral",
+        "displayName": "Ink 3 (dark)",
+        "canonical": "#8D919A",
+        "tonalRamp": [
+          "oklch(15% 0.008 265)",
+          "oklch(25% 0.012 265)",
+          "oklch(35% 0.015 265)",
+          "oklch(45% 0.015 265)",
+          "oklch(55% 0.015 265)",
+          "oklch(65% 0.015 265)",
+          "oklch(85% 0.012 265)",
+          "oklch(95% 0.008 265)"
+        ]
+      },
+      "riso-blue-dark": {
+        "role": "primary",
+        "displayName": "Riso Blue on Deep Stock",
+        "canonical": "oklch(69.5% 0.121 240)",
+        "tonalRamp": [
+          "oklch(15% 0.067 240)",
+          "oklch(25% 0.097 240)",
+          "oklch(35% 0.121 240)",
+          "oklch(45% 0.121 240)",
+          "oklch(55% 0.121 240)",
+          "oklch(65% 0.121 240)",
+          "oklch(85% 0.097 240)",
+          "oklch(95% 0.067 240)"
+        ]
+      },
+      "blue-text-dark": {
+        "role": "primary",
+        "displayName": "Blue Text (dark)",
+        "canonical": "oklch(77.9% 0.093 238)",
+        "tonalRamp": [
+          "oklch(15% 0.051 238)",
+          "oklch(25% 0.074 238)",
+          "oklch(35% 0.093 238)",
+          "oklch(45% 0.093 238)",
+          "oklch(55% 0.093 238)",
+          "oklch(65% 0.093 238)",
+          "oklch(85% 0.074 238)",
+          "oklch(95% 0.051 238)"
+        ]
+      },
+      "on-blue-dark": {
+        "role": "neutral",
+        "displayName": "Ink on Dark Blue",
+        "canonical": "#0B1016",
+        "tonalRamp": [
+          "oklch(15% 0.006 250)",
+          "oklch(25% 0.008 250)",
+          "oklch(35% 0.010 250)",
+          "oklch(45% 0.010 250)",
+          "oklch(55% 0.010 250)",
+          "oklch(65% 0.010 250)",
+          "oklch(85% 0.008 250)",
+          "oklch(95% 0.006 250)"
+        ]
+      },
+      "fluorescent-pink-dark": {
+        "role": "secondary",
+        "displayName": "Fluorescent Pink (dark)",
+        "canonical": "oklch(71.6% 0.218 348)",
+        "tonalRamp": [
+          "oklch(15% 0.120 348)",
+          "oklch(25% 0.174 348)",
+          "oklch(35% 0.218 348)",
+          "oklch(45% 0.218 348)",
+          "oklch(55% 0.218 348)",
+          "oklch(65% 0.218 348)",
+          "oklch(85% 0.174 348)",
+          "oklch(95% 0.120 348)"
+        ]
+      },
+      "pink-text-dark": {
+        "role": "secondary",
+        "displayName": "Pink Text (dark)",
+        "canonical": "#FF8FD0",
+        "tonalRamp": [
+          "oklch(15% 0.083 350)",
+          "oklch(25% 0.120 350)",
+          "oklch(35% 0.150 350)",
+          "oklch(45% 0.150 350)",
+          "oklch(55% 0.150 350)",
+          "oklch(65% 0.150 350)",
+          "oklch(85% 0.120 350)",
+          "oklch(95% 0.083 350)"
+        ]
+      },
+      "yellow-text-dark": {
+        "role": "tertiary",
+        "displayName": "Yellow Text (dark)",
+        "canonical": "#F2D14B",
+        "tonalRamp": [
+          "oklch(15% 0.083 95)",
+          "oklch(25% 0.120 95)",
+          "oklch(35% 0.150 95)",
+          "oklch(45% 0.150 95)",
+          "oklch(55% 0.150 95)",
+          "oklch(65% 0.150 95)",
+          "oklch(85% 0.120 95)",
+          "oklch(95% 0.083 95)"
+        ]
+      },
+      "riso-red-dark": {
+        "role": "tertiary",
+        "displayName": "Riso Red (dark)",
+        "canonical": "oklch(71.4% 0.180 18)",
+        "tonalRamp": [
+          "oklch(15% 0.099 18)",
+          "oklch(25% 0.144 18)",
+          "oklch(35% 0.180 18)",
+          "oklch(45% 0.180 18)",
+          "oklch(55% 0.180 18)",
+          "oklch(65% 0.180 18)",
+          "oklch(85% 0.144 18)",
+          "oklch(95% 0.099 18)"
+        ]
+      },
+      "red-text-dark": {
+        "role": "tertiary",
+        "displayName": "Red Text (dark)",
+        "canonical": "#FF8C96",
+        "tonalRamp": [
+          "oklch(15% 0.077 18)",
+          "oklch(25% 0.112 18)",
+          "oklch(35% 0.140 18)",
+          "oklch(45% 0.140 18)",
+          "oklch(55% 0.140 18)",
+          "oklch(65% 0.140 18)",
+          "oklch(85% 0.112 18)",
+          "oklch(95% 0.077 18)"
+        ]
+      },
+      "green-text-dark": {
+        "role": "tertiary",
+        "displayName": "Green Text (dark)",
+        "canonical": "#4FD08A",
+        "tonalRamp": [
+          "oklch(15% 0.083 155)",
+          "oklch(25% 0.120 155)",
+          "oklch(35% 0.150 155)",
+          "oklch(45% 0.150 155)",
+          "oklch(55% 0.150 155)",
+          "oklch(65% 0.150 155)",
+          "oklch(85% 0.120 155)",
+          "oklch(95% 0.083 155)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Page titles and the home header; Bricolage Grotesque with optical sizing."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Dialog titles, catalog and section headings."
+      },
+      "body-reading": {
+        "displayName": "Body Reading",
+        "purpose": "Agent replies, page subtitles, the composer."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "The UI default: nav, buttons, inputs, rows."
+      },
+      "small": {
+        "displayName": "Small",
+        "purpose": "Field notes, dialog context lines (beneath titles), status text, paths."
+      },
+      "label": {
+        "displayName": "Printed Label",
+        "purpose": "Uppercase state tags and change kinds only."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Code, paths and measured numbers (tokens, cost, time, context)."
+      }
+    },
+    "shadows": [
+      {
+        "name": "lift",
+        "value": "0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent)",
+        "purpose": "Dialogs, popovers and menus only. Dark mode uses rgb(0 0 0 / 0.45) for the soft layer."
+      },
+      {
+        "name": "backdrop",
+        "value": "background: color-mix(in srgb, paper 55%, transparent); backdrop-filter: blur(2px) saturate(0.8)",
+        "purpose": "Dims the shell behind a modal (60% on deep stock)."
+      },
+      {
+        "name": "approval-stripe",
+        "value": "linear-gradient(#FF48B0, #FF48B0) top / 100% 3px no-repeat, origin border-box",
+        "purpose": "The agent is asking: 3px pink stripe on the approval sheet."
+      },
+      {
+        "name": "paper-grain",
+        "value": "SVG feTurbulence fractalNoise, baseFrequency .85, 3 octaves, 180px tile, opacity .035 light / .03 dark",
+        "purpose": "Page ground only."
+      },
+      {
+        "name": "rail-screen",
+        "value": "radial-gradient(circle at 2px 2px, color-mix(in srgb, #0078BF 16%, transparent) 0.8px, transparent 1.15px) x2, size 4px, offsets 0 0 / 2px 2px",
+        "purpose": "The sidebar halftone screen (dark: #4BA6E0 at 15%)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "The one easing curve, shell and companion."
+      },
+      {
+        "name": "dur-1",
+        "value": "120ms",
+        "purpose": "Hover and colour changes."
+      },
+      {
+        "name": "dur-2",
+        "value": "200ms",
+        "purpose": "Base transitions."
+      },
+      {
+        "name": "dur-3",
+        "value": "320ms",
+        "purpose": "Larger moves."
+      },
+      {
+        "name": "view-in",
+        "value": "160ms ease-out, from opacity 0.55 and translateY(3px)",
+        "purpose": "View switches settle in from mostly visible."
+      },
+      {
+        "name": "companion-ink-ease",
+        "value": "transform 0.45s ease-out",
+        "purpose": "Companion inks and limbs easing between states."
+      },
+      {
+        "name": "companion-snap",
+        "value": "550ms ease-out (snap-a / snap-b / stamp)",
+        "purpose": "The inks snap into register when a task is done."
+      },
+      {
+        "name": "companion-misregister",
+        "value": "--mx 1.8px / --my 1.1px (teammate 1.3/0.8, mini 1.4/0.9)",
+        "purpose": "How far each ink slips out of register while working."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation: none; transition: none",
+        "purpose": "Views, companion and avatars go still under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "1080px"
+      },
+      {
+        "name": "compact",
+        "value": "900px"
+      },
+      {
+        "name": "narrow",
+        "value": "760px"
+      },
+      {
+        "name": "short",
+        "value": "max-height 720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one solid blue action in a group.",
+      "html": "<button class=\"ds-btn-primary\">Allow</button>",
+      "css": ".ds-btn-primary { display:inline-flex; align-items:center; gap:8px; height:32px; padding:0 12px; border:1px solid var(--riso-blue-fill, #0078BF); border-radius:6px; background:var(--riso-blue-fill, #0078BF); color:var(--riso-on-blue, #FFFFFF); font:500 13px/1 -apple-system, BlinkMacSystemFont, sans-serif; transition: background-color 120ms cubic-bezier(0.16,1,0.3,1), border-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background:var(--riso-blue-fill-hover, #006AA8); border-color:var(--riso-blue-fill-hover, #006AA8); } .ds-btn-primary:focus-visible { outline:2px solid var(--riso-blue, #0078BF); outline-offset:2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Raised stock with a rule border; the default for secondary actions.",
+      "html": "<button class=\"ds-btn-secondary\">Allow all in this reply</button>",
+      "css": ".ds-btn-secondary { display:inline-flex; align-items:center; height:32px; padding:0 12px; border:1px solid var(--riso-rule, rgba(26,27,31,0.14)); border-radius:6px; background:var(--riso-paper-raised, #FAFAF8); color:var(--riso-ink, #1A1B1F); font:500 13px/1 -apple-system, BlinkMacSystemFont, sans-serif; transition: background-color 120ms cubic-bezier(0.16,1,0.3,1), border-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-secondary:hover { background:color-mix(in srgb, #1A1B1F 5%, #FAFAF8); border-color:var(--riso-rule-strong, rgba(26,27,31,0.26)); } .ds-btn-secondary:focus-visible { outline:2px solid var(--riso-blue, #0078BF); outline-offset:2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Outlined red at rest; filled only inside a destructive confirmation.",
+      "html": "<button class=\"ds-btn-danger\">Delete task</button>",
+      "css": ".ds-btn-danger { display:inline-flex; align-items:center; height:32px; padding:0 12px; border:1px solid color-mix(in srgb, #F15060 55%, transparent); border-radius:6px; background:var(--riso-paper-raised, #FAFAF8); color:var(--riso-red-text, #B42638); font:500 13px/1 -apple-system, BlinkMacSystemFont, sans-serif; transition: background-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-danger:hover { background:color-mix(in srgb, #F15060 10%, #FAFAF8); } .ds-btn-danger:focus-visible { outline:2px solid var(--riso-blue, #0078BF); outline-offset:2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Raised stock field with a rule border and a blue focus ring.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search by name or purpose\">",
+      "css": ".ds-input { width:280px; min-height:32px; padding:4px 12px; border:1px solid var(--riso-rule, rgba(26,27,31,0.14)); border-radius:6px; background:var(--riso-paper-raised, #FAFAF8); color:var(--riso-ink, #1A1B1F); font:13px/22px -apple-system, BlinkMacSystemFont, sans-serif; transition:border-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-input::placeholder { color:var(--riso-ink-3, #6B6F78); } .ds-input:hover { border-color:var(--riso-rule-strong, rgba(26,27,31,0.26)); } .ds-input:focus-visible { outline:2px solid var(--riso-blue, #0078BF); outline-offset:2px; }"
+    },
+    {
+      "name": "Printed Rail",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Sidebar halftone screen with an opaque blue patch under the active item.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-rail-item\" href=\"#\">Chat</a><a class=\"ds-rail-item is-active\" href=\"#\">Workspace</a><a class=\"ds-rail-item\" href=\"#\">Automation</a></nav>",
+      "css": ".ds-rail { display:flex; flex-direction:column; gap:2px; width:216px; padding:12px; background-color:color-mix(in srgb, #0078BF 9%, #F3F4F1); background-image:radial-gradient(circle at 2px 2px, color-mix(in srgb, #0078BF 16%, transparent) 0.8px, transparent 1.15px), radial-gradient(circle at 2px 2px, color-mix(in srgb, #0078BF 16%, transparent) 0.8px, transparent 1.15px); background-size:4px 4px; background-position:0 0, 2px 2px; border-right:1px solid color-mix(in srgb, #0078BF 24%, transparent); } .ds-rail-item { padding:6px 8px; border-radius:6px; color:#4A4D55; font:13px/20px -apple-system, BlinkMacSystemFont, sans-serif; text-decoration:none; transition:background-color 120ms cubic-bezier(0.16,1,0.3,1), color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-rail-item:hover { background:color-mix(in srgb, #1A1B1F 5%, transparent); color:#1A1B1F; } .ds-rail-item:focus-visible { outline:2px solid #0078BF; outline-offset:-2px; } .ds-rail-item.is-active { background:color-mix(in srgb, #0078BF 13%, color-mix(in srgb, #0078BF 9%, #F3F4F1)); color:#004A78; font-weight:500; }"
+    },
+    {
+      "name": "State Tags",
+      "kind": "chip",
+      "refersTo": "state-tag-working",
+      "description": "Printed task-state marks: WORKING pink fill, WAITING yellow fill, DONE blue outline, FAILED red outline.",
+      "html": "<span class=\"ds-tag ds-tag--working\">Working</span> <span class=\"ds-tag ds-tag--waiting\">Waiting for you</span> <span class=\"ds-tag ds-tag--done\">Done</span> <span class=\"ds-tag ds-tag--failed\">Failed</span>",
+      "css": ".ds-tag { display:inline-flex; align-items:center; padding:2px 6px; border:1px solid transparent; border-radius:3px; font:600 11px/12px \"Bricolage Grotesque\", -apple-system, sans-serif; letter-spacing:0.04em; text-transform:uppercase; white-space:nowrap; } .ds-tag--working { background:#FF48B0; border-color:#FF48B0; color:#1A1B1F; } .ds-tag--waiting { background:#FFE800; border-color:#FFE800; color:#1A1B1F; } .ds-tag--done { border-color:#0078BF; color:#005E96; } .ds-tag--failed { border-color:#F15060; color:#B42638; }"
+    },
+    {
+      "name": "Approval Dialog",
+      "kind": "card",
+      "refersTo": "dialog",
+      "description": "A lifted sheet with the pink stripe: the agent is asking.",
+      "html": "<div class=\"ds-dialog\" role=\"dialog\"><h2 class=\"ds-dialog-title\">Run a command?</h2><p class=\"ds-dialog-context\">scalemax-ide · Fix MCP reconnect on wake</p><p class=\"ds-dialog-body\">The model wants to run a command in the project folder.</p></div>",
+      "css": ".ds-dialog { width:420px; padding:20px 24px; border:1px solid rgba(26,27,31,0.14); border-radius:8px; background-color:#FAFAF8; background-image:linear-gradient(#FF48B0, #FF48B0); background-size:100% 3px; background-repeat:no-repeat; background-origin:border-box; color:#1A1B1F; box-shadow:0 8px 24px rgba(26,27,31,0.14), 0 1px 0 rgba(26,27,31,0.14); } .ds-dialog-title { margin:0; font:600 20px/28px \"Bricolage Grotesque\", -apple-system, sans-serif; letter-spacing:-0.01em; } .ds-dialog-context { margin:4px 0 0; font:12px/16px -apple-system, sans-serif; color:#4A4D55; } .ds-dialog-body { margin:12px 0 0; font:13px/1.5 -apple-system, sans-serif; }"
+    },
+    {
+      "name": "Context Meter",
+      "kind": "custom",
+      "refersTo": "riso-blue",
+      "description": "Used share in blue with this reply overprinted in pink by multiply.",
+      "html": "<span class=\"ds-meter\"><span class=\"ds-meter-fill\"></span><span class=\"ds-meter-reply\"></span></span>",
+      "css": ".ds-meter { position:relative; display:inline-block; width:64px; height:6px; border:1px solid color-mix(in srgb, #0078BF 35%, transparent); border-radius:999px; overflow:hidden; } .ds-meter-fill, .ds-meter-reply { position:absolute; top:0; bottom:0; } .ds-meter-fill { left:0; width:40%; background:#0078BF; } .ds-meter-reply { left:28%; width:12%; background:#FF48B0; mix-blend-mode:multiply; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Riso Zine Press",
+    "overview": "Every task is a print run. The shell is a calm two-ink risograph print on cool paper stock: ink-black words, riso blue for the structure of the page, fluorescent pink only where the agent is at work, and a yellow highlighter pass for the one thing that needs you. The agent's state is told in ink, most literally by the companion, whose pink and blue plates drift out of register while it works and snap back into register when the task is done.\n\nThe print metaphor governs density and depth too. Hierarchy comes from a strict six-step type scale and 1px rules, not from boxes and shadows; settings groups and notes are printed sections under a rule, not cards. The sidebar rail is a blue halftone screen; selection is a solid patch of that ink. Only sheets that need the user (dialogs and popovers) lift off the page, and the shell dims behind them. Dark mode is the same inks on deep blue-black stock, not a different palette.\n\nThe world refuses both the category's grey chat app with a single indigo accent and its neon-terminal opposite. It is built for an eight-hour day: quiet at rest, legible state at a glance, motion that carries meaning.",
+    "keyCharacteristics": [
+      "Cool, near-neutral paper ground with a faint grain on the page only; never cream.",
+      "Four working inks with fixed jobs: blue structure, pink agent activity, yellow highlighter, red failure.",
+      "1px rules, few boxes, one 4px spacing module.",
+      "A strict type scale (11 / 12 / 13 / 15 / 20 / 28) with a printed grotesk for headings and tags.",
+      "Printed state tags and a two-ink companion whose registration is the task state.",
+      "One lift: dialogs and popovers; everything else is flat stock."
+    ],
+    "rules": [
+      {
+        "name": "The Four Inks Rule",
+        "body": "In the shell chrome each ink has one job: blue is structure, pink is the agent at work, yellow is a highlighter for what waits on the user, red is failure. A pink fill on a static control, or a blue fill on an agent state, is a misprint.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink-Black on Fluorescent Rule",
+        "body": "Text on a pink or yellow fill is always ink black (#1A1B1F), in both themes. Grey text never sits on yellow; it reads washed out.",
+        "section": "colors"
+      },
+      {
+        "name": "The Overprint Rule",
+        "body": "Where pink meets blue, they overprint: multiply on paper, screen on deep stock. The companion's two inks and the reply share on the context meter are printed this way.",
+        "section": "colors"
+      },
+      {
+        "name": "The Same Inks, Deeper Stock Rule",
+        "body": "Dark mode swaps the paper, not the identity: the same four inks, lightened only as far as contrast needs, on blue-black stock with its own fainter grain.",
+        "section": "colors"
+      },
+      {
+        "name": "The Six Sizes Rule",
+        "body": "Type comes in 11, 12, 13, 15, 20 and 28px. Hierarchy is made from these steps and weight, never from a seventh size or a box.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono Is Measurement Rule",
+        "body": "Monospace appears only for code, paths and numbers that are measured (tokens, cost, time, context). Prose and labels never use it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Caps Are Tags Rule",
+        "body": "Uppercase with tracking is reserved for printed state tags. Headings and section labels stay in sentence case.",
+        "section": "typography"
+      },
+      {
+        "name": "The 4px Module Rule",
+        "body": "Spacing, control heights and pane sizes are multiples of 4px.",
+        "section": "layout"
+      },
+      {
+        "name": "The One Lift Rule",
+        "body": "Only sheets that ask for the user's attention lift. If it is not a dialog or popover, it has no shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Grain Is For Ground Rule",
+        "body": "Paper grain prints on the page ground only (3.5% light, 3% dark). Editors, inputs, cards and dialogs are flat raised stock that covers it.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep the page ground cool paper (#F3F4F1) with faint grain, and dark mode on deep blue-black stock (#14161B) with fainter grain.",
+      "Do use riso blue for every structural mark: active nav, selection, primary action, focus, links.",
+      "Do reserve fluorescent pink in the chrome for the agent at work, and print ink-black words on it.",
+      "Do use yellow as a highlighter pass under ink-black words for whatever waits on the user.",
+      "Do tell task state with the printed tags: WORKING pink fill, WAITING FOR YOU yellow fill, DONE blue outline, FAILED red outline.",
+      "Do separate with 1px rules and the step from paper to raised stock before reaching for a box.",
+      "Do set sizes from 11 / 12 / 13 / 15 / 20 / 28px and space on the 4px module.",
+      "Do mark the selected rail row with an opaque solid blue patch.",
+      "Do lift dialogs with the one Lift shadow over a dimmed, 2px-blurred backdrop.",
+      "Do let the companion's registration carry state, animate it with transform and opacity only, and keep it still under Reduce Motion.",
+      "Do print new illustration and avatars as two-ink duotone in pink and blue."
+    ],
+    "donts": [
+      "Don't warm the paper toward cream or beige.",
+      "Don't use pink for static controls, branding accents or decoration in the chrome; it means the agent is working.",
+      "Don't set yellow text on paper or grey text on yellow.",
+      "Don't let halftone dots sit behind words; selected rows are solid patches.",
+      "Don't put shadows on cards, inputs or buttons; only dialogs and popovers lift.",
+      "Don't grain editors, inputs, cards or dialogs.",
+      "Don't add labels or kickers above headings; context lines go beneath the title.",
+      "Don't introduce type sizes off the six-step scale or uppercase outside state tags.",
+      "Don't use monospace for prose or labels.",
+      "Don't animate the brand mark.",
+      "Don't fade a view in from nothing; it settles in from mostly visible."
+    ]
+  }
+}
