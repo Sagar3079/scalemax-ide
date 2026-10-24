@@ -3663,6 +3663,29 @@ input[type="range"] {
   color: var(--riso-red-text);
 }
 
+/* A run that answered but was not allowed the tool calls it needed (text token, both themes). */
+.automation-warning {
+  color: var(--sm-app-text-warning);
+}
+
+/* Folder, mode and permission of a schedule: long folder names shorten instead of widening the form. */
+.automation-run-settings {
+  flex-wrap: wrap;
+}
+
+.automation-run-settings .form-group {
+  min-width: 160px;
+}
+
+.automation-run-settings select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.automation-permission-hint {
+  margin: -8px 0 16px;
+}
+
 .automation-item .dot {
   background: var(--riso-ink-3);
 }

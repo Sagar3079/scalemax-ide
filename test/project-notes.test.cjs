@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createWorkspace } = require('../lib/workspace.cjs');
-const { createProjectNotes, isInitCommand, NOTES_PATH, INIT_PROMPT, NO_CHANGE_INIT, firstParagraph, frontMatter } = require('../lib/project-notes.cjs');
+const { createProjectNotes, isInitCommand, NOTES_PATH, INIT_PROMPT, NO_CHANGE_INIT, firstParagraph, frontMatter, mainCheckoutOf } = require('../lib/project-notes.cjs');
 
 const DAY = new Date('2026-09-27T10:00:00Z');
 
@@ -226,4 +226,56 @@ test('prepareChatRequest: a reply that may not change anything answers /init ins
   assert.ok(!fs.existsSync(path.join(root, NOTES_PATH)), 'a plan creates nothing');
   assert.ok(planned.input.messages[0].content.startsWith(NO_CHANGE_INIT));
   assert.doesNotMatch(planned.input.messages[0].content, /^Write the ScaleMax project notes/);
+});
+
+test('a task worktree gets no notes file of its own; its chats read the main checkout\'s notes', { skip: spawnSync('git', ['--version']).status !== 0 }, async (t) => {
+  const { root } = await folder(t, 'api', { 'a.txt': 'one\n' });
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+  const git = (cwd, ...args) => {
+    const result = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=T', ...args], { cwd, encoding: 'utf8', env });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git(root, 'init', '-q');
+  git(root, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  git(root, 'add', '.');
+  git(root, 'commit', '-qm', 'init');
+  const tree = path.join(path.dirname(root), 'worktrees', 'api-task-1');
+  fs.mkdirSync(path.dirname(tree));
+  git(root, 'worktree', 'add', '-b', 'scalemax/fix', tree, 'HEAD');
+  const real = fs.realpathSync(tree);
+  assert.equal(await mainCheckoutOf(real), root);
+  assert.equal(await mainCheckoutOf(root), null, 'the main checkout is no linked worktree');
+
+  const workspace = createWorkspace({ approve: async () => true });
+  t.after(() => workspace.dispose());
+  await workspace.select(real);
+  const notes = createProjectNotes({ getWorkspace: () => workspace, now: () => DAY, isTaskWorktree: (folderPath) => folderPath === real });
+  // Nothing is written into the task's branch, on the first message or later.
+  assert.deepEqual(await notes.ensure(), { created: false, worktree: true });
+  assert.equal(fs.existsSync(path.join(real, '.scalemax')), false);
+  let text = await notes.context();
+  assert.match(text, /There are no \.scalemax\/SCALEMAX\.md notes for this project yet\./);
+  assert.match(text, /separate worktree of "api"/);
+  assert.match(text, /do not create or edit \.scalemax\/SCALEMAX\.md here unless the user asks you to/);
+  assert.doesNotMatch(text, /Keep \.scalemax\/SCALEMAX\.md current/);
+
+  // The main checkout's notes (made by an earlier chat there) are what its worktrees read.
+  fs.mkdirSync(path.join(root, '.scalemax'));
+  fs.writeFileSync(path.join(root, NOTES_PATH), '# api\nRun the tests with npm test.\n');
+  text = await notes.context();
+  assert.match(text, /## Project notes \(\.scalemax\/SCALEMAX\.md of "api", the main checkout\)\n# api\nRun the tests with npm test\./);
+  // A link instead of the file is not followed.
+  fs.rmSync(path.join(root, NOTES_PATH));
+  fs.writeFileSync(path.join(path.dirname(root), 'elsewhere.md'), '# not the notes\n');
+  fs.symlinkSync(path.join(path.dirname(root), 'elsewhere.md'), path.join(root, NOTES_PATH));
+  assert.doesNotMatch(await notes.context(), /not the notes/);
+
+  // Notes the worktree has itself (tracked by the repository, or written by /init) come first.
+  fs.mkdirSync(path.join(real, '.scalemax'));
+  fs.writeFileSync(path.join(real, NOTES_PATH), '# api (branch)\n');
+  assert.match(await notes.context(), /## Project notes \(\.scalemax\/SCALEMAX\.md\)\n# api \(branch\)/);
+  // An ordinary folder still gets its notes created.
+  const plain = createProjectNotes({ getWorkspace: () => workspace, now: () => DAY, isTaskWorktree: () => false });
+  fs.rmSync(path.join(real, '.scalemax'), { recursive: true });
+  assert.deepEqual(await plain.ensure(), { created: true, path: NOTES_PATH });
 });

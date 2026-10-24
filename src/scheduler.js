@@ -47,6 +47,53 @@ export function mergeAutomations(own, incoming) {
   });
 }
 
+// ---- What the Automation view shows (src/app.js renderAutomations and the form) --------------
+
+/** The permission an automation's runs work under, as the row and the form name it. */
+export const AUTOMATION_PERMISSION_LABELS = Object.freeze({ plan: 'Plan', manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' });
+
+const PERMISSION_HINTS = Object.freeze({
+  plan: 'Plan: the run can only read. Nothing in the folder is changed.',
+  manual: 'Manual: every tool call asks in the ScaleMax window first. While no window is open, those calls are denied and the run says so.',
+  basic: 'Basic: reading runs on its own; edits, commands and other changes ask in the ScaleMax window first. While no window is open, they are denied and the run says so.',
+  bypass: 'Bypass all permissions: every tool call runs without asking, also while no window is open.',
+});
+
+/** The line under the form's Permission field: what the chosen permission means for a run. */
+export function automationPermissionHint(permission) {
+  return PERMISSION_HINTS[permission] || PERMISSION_HINTS.basic;
+}
+
+/** How a run went, as the row and its history say it ('denied' runs need approval). */
+export function automationStatusLabel(status) {
+  return status === 'denied' ? 'Needs approval' : (typeof status === 'string' && status ? status : 'idle');
+}
+
+/** One line of Run history: "<time> · success — <preview>", "<time> · needs approval (<note>) — …". */
+export function automationHistoryLine(entry, formatTime = (time) => new Date(time).toLocaleString()) {
+  const status = entry?.status === 'denied' ? `needs approval${entry.note ? ` (${entry.note})` : ''}` : entry?.status;
+  return `${formatTime(entry?.time)} · ${status}${entry?.preview ? ` — ${entry.preview}` : ''}`;
+}
+
+/**
+ * The folders the form offers, each once ({ name, path }): the current task's folder first, then
+ * the recent folders main remembers, then folders other automations work in.
+ */
+export function automationFolderChoices({ current = null, recent = [], automations = [] } = {}) {
+  const seen = new Set();
+  const choices = [];
+  const add = (folder) => {
+    if (!isRecord(folder) || typeof folder.path !== 'string' || !folder.path || seen.has(folder.path)) return;
+    seen.add(folder.path);
+    const name = typeof folder.name === 'string' && folder.name ? folder.name : folder.path.split('/').filter(Boolean).pop() || folder.path;
+    choices.push({ name, path: folder.path });
+  };
+  add(current);
+  for (const folder of Array.isArray(recent) ? recent : []) add(folder);
+  for (const automation of Array.isArray(automations) ? automations : []) add(automation?.folder);
+  return choices;
+}
+
 function toolSummaries(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => isRecord(item) && typeof item.tool === 'string').slice(0, 32).map((item) => ({
@@ -173,7 +220,10 @@ export function startScheduler(app) {
     }
     const finished = isRecord(change.finished) ? change.finished : null;
     if (finished?.status === 'success') app.showToast(`Automation finished: ${finished.name}`);
-    else if (finished?.status === 'error' && finished.code !== 'PROVIDER_NOT_CONFIGURED') {
+    else if (finished?.status === 'denied') {
+      app.showToast(`Automation needs approval: ${finished.name}${typeof finished.note === 'string' && finished.note ? ` — ${finished.note}` : ''}`);
+    // CANCELLED: the window deleted it while it ran, and said so itself.
+    } else if (finished?.status === 'error' && finished.code !== 'PROVIDER_NOT_CONFIGURED' && finished.code !== 'CANCELLED') {
       app.showToast(`Automation failed: ${finished.name} — ${finished.message || 'Provider request failed'}`);
     }
     sync();
@@ -221,6 +271,18 @@ export function startScheduler(app) {
     },
     // Resolves once the window knows which runs are in progress (used by tests).
     ready,
+    /**
+     * Redraws the status line ("Next run: …", the provider hint) after the window changed
+     * something itself: a pause, resume, edit or delete, or a provider connected in Assistant.
+     * It never redraws the list (src/app.js renderAutomations calls this).
+     */
+    refreshStatus() {
+      updateStatus(app, state);
+    },
+    /** True while a run of this automation is in progress (main said so). */
+    isRunning(automationId) {
+      return state.running.has(automationId);
+    },
     stop() {
       unsubscribe?.();
       doc?.querySelector('#automations-background-toggle')?.removeEventListener('click', onToggle);

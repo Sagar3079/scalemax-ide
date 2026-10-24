@@ -446,12 +446,19 @@ export function renderPermission(app) {
   if (select) select.value = mode;
 }
 
-function askBypassConsent() {
+/**
+ * The Bypass consent dialog; resolves true only when the user confirms. Also asked before an
+ * automation may run with Bypass (src/app.js): `title` then names it for the time the dialog is open.
+ */
+export function askBypassConsent({ title = '' } = {}) {
   const dialog = $('#bypass-dialog');
   if (!dialog) return Promise.resolve(false);
   return new Promise((resolve) => {
     const confirm = $('#bypass-confirm');
     const cancel = $('#bypass-cancel');
+    const heading = $('#bypass-title');
+    const original = heading?.textContent || '';
+    if (heading && title) heading.textContent = title;
     let answered = false;
     const finish = (yes) => {
       if (answered) return;
@@ -460,6 +467,7 @@ function askBypassConsent() {
       cancel?.removeEventListener('click', onNo);
       dialog.removeEventListener('close', onNo);
       if (dialog.open) dialog.close();
+      if (heading && title) heading.textContent = original;
       resolve(yes);
     };
     const onYes = () => finish(true);

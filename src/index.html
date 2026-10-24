@@ -576,6 +576,13 @@
                 <div class="form-group" data-automation-field="weekday" hidden><label for="automation-weekday">Day of the week</label><select id="automation-weekday"><option value="0">Sunday</option><option value="1" selected>Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
                 <div class="form-group" data-automation-field="monthday" hidden><label for="automation-monthday">Day of the month</label><input id="automation-monthday" type="number" min="1" max="31" value="1" step="1" /></div>
               </div>
+              <!-- Where and how its runs work, whatever is open when it fires (src/app.js fillAutomationFolders; main honours Bypass only with the consent given here). -->
+              <div class="form-row automation-run-settings">
+                <div class="form-group"><label for="automation-folder">Folder</label><select id="automation-folder"></select></div>
+                <div class="form-group"><label for="automation-mode">Mode</label><select id="automation-mode"><option value="working">Working</option><option value="coding">Coding</option></select></div>
+                <div class="form-group"><label for="automation-permission">Permission</label><select id="automation-permission" aria-describedby="automation-permission-hint"><option value="plan">Plan (read only)</option><option value="manual">Manual (ask for every tool call)</option><option value="basic">Basic (ask before changes)</option><option value="bypass">Bypass all permissions</option></select></div>
+              </div>
+              <p id="automation-permission-hint" class="status-text automation-permission-hint"></p>
               <input id="automation-edit-id" type="hidden" value="" />
               <div class="button-row"><button id="automation-submit" class="button primary" type="submit">Consent &amp; create schedule</button><button id="automation-cancel-edit" class="button secondary" type="button" hidden>Cancel edit</button></div>
             </form>
@@ -603,7 +610,7 @@
               <div class="preference-row">
                 <div class="form-group preference-text">
                   <label id="project-notes-label" for="project-notes-toggle">Project notes</label>
-                  <p id="project-notes-desc" class="status-text">On the first message in a folder, create .scalemax/SCALEMAX.md with what ScaleMax finds there. ScaleMax reads it, and any AGENTS.md, CLAUDE.md or Kiro steering files, in every chat in that folder.</p>
+                  <p id="project-notes-desc" class="status-text">On the first message in a folder, create .scalemax/SCALEMAX.md with what ScaleMax finds there. ScaleMax reads it, and any AGENTS.md, CLAUDE.md or Kiro steering files, in every chat in that folder. A task in a separate worktree reads the project's notes and adds none to its branch.</p>
                 </div>
                 <button id="project-notes-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="project-notes-label" aria-describedby="project-notes-desc"><span class="switch-thumb"></span></button>
               </div>

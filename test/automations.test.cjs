@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createStore } = require('../lib/state.cjs');
-const { createAutomations, nextRunAt, mergeAutomations } = require('../lib/automations.cjs');
+const { createAutomations, nextRunAt, mergeAutomations, deniedSummary, runPermission } = require('../lib/automations.cjs');
 
 const CONTEXT = {
   systemPrompts: { working: 'You are ScaleMax. Working mode.', coding: 'You are ScaleMax. Coding mode.' },
@@ -35,7 +35,7 @@ function automation(overrides = {}) {
 }
 
 // The scheduler with a fake chat path: `reply` answers each request (a function gets it).
-function setup(t, { automations = [automation()], tasks, context = CONTEXT, reply, configured = true, windowOpen = true, settings, openFolder } = {}) {
+function setup(t, { automations = [automation()], tasks, context = CONTEXT, reply, configured = true, windowOpen = true, settings, openFolder, cancel } = {}) {
   const store = tempStore(t, {
     automations,
     ...(tasks ? { tasks } : {}),
@@ -56,6 +56,7 @@ function setup(t, { automations = [automation()], tasks, context = CONTEXT, repl
     windowOpen: () => state.windowOpen,
     openFolder: openFolder || (() => null),
     notify: (change) => notices.push(structuredClone(change)),
+    ...(cancel ? { cancel } : {}),
   });
   t.after(() => scheduler.stop());
   const saved = () => store.readAll();
@@ -387,6 +388,107 @@ test('an automation deleted while it ran keeps its run in its task and stays del
   await scheduler.runNow('a1');
   assert.deepEqual(saved().automations, []);
   assert.equal(saved().tasks[0].messages.length, 2);
+});
+
+test('a run whose calls were denied with no window open is recorded as denied, not as a success', async (t) => {
+  const { scheduler, saved, record, notices } = setup(t, {
+    reply: (input, self) => {
+      self.unattended(input.requestId, 'Workspace · write_file');
+      return { text: 'I could not change CHANGELOG.md.' };
+    },
+  });
+  assert.deepEqual(await scheduler.runNow('a1'), { status: 'denied', message: '1 tool call denied: no window was open' });
+  assert.equal(record().lastStatus, 'denied');
+  assert.equal(record().lastError, '');
+  const [entry] = record().history;
+  assert.equal(entry.status, 'denied');
+  assert.equal(entry.note, '1 tool call denied: no window was open');
+  assert.match(entry.preview, /^I could not change CHANGELOG\.md\./);
+  // The reply (and the note naming the denied call) still reach its task.
+  const [task] = saved().tasks;
+  assert.equal(task.messages.length, 2);
+  assert.match(task.messages[1].text, /^I could not change CHANGELOG\.md\.\n\n\[Note from ScaleMax: a tool call needed your approval/);
+  const last = notices.at(-1);
+  assert.deepEqual(last.finished, { id: 'a1', name: 'Digest', status: 'denied', manual: true, note: '1 tool call denied: no window was open' });
+  assert.equal(last.run.messages.length, 2);
+});
+
+test('a call the user denied in the window makes the run denied too; other replies are not counted', async (t) => {
+  const { scheduler, record } = setup(t, {
+    reply: (input, self) => {
+      assert.equal(self.refused(input.requestId, 'Workspace · write_file', 'user'), true);
+      assert.equal(self.refused('chat-request-1', 'Workspace · write_file', 'user'), false, 'a chat reply is not an automation run');
+      return { text: 'Denied, so nothing changed.' };
+    },
+  });
+  const outcome = await scheduler.runNow('a1');
+  assert.equal(outcome.status, 'denied');
+  assert.equal(record().history[0].note, '1 tool call denied: by you');
+  assert.equal(record().lastStatus, 'denied');
+});
+
+test('a run knows its automation\'s name and the permission it works under', async (t) => {
+  const seen = [];
+  const { scheduler } = setup(t, {
+    automations: [automation({ permission: 'bypass', bypassConsent: true }), automation({ id: 'a2', name: 'Plain' })],
+    reply: (input, self) => {
+      seen.push(self.info(input.requestId));
+      return { text: 'ok' };
+    },
+  });
+  await scheduler.runNow('a1');
+  await scheduler.runNow('a2');
+  assert.deepEqual(seen, [{ name: 'Digest', permission: 'bypass' }, { name: 'Plain', permission: null }]);
+  assert.equal(scheduler.info('automation-a1-0'), null, 'nothing once the run ended');
+  assert.equal(scheduler.info(undefined), null);
+  // Bypass only with the consent the window recorded for this automation.
+  assert.equal(runPermission({ permission: 'bypass' }), 'basic');
+  assert.equal(runPermission({ permission: 'bypass', bypassConsent: true }), 'bypass');
+  assert.equal(runPermission({ permission: 'plan' }), 'plan');
+  assert.equal(runPermission({ permission: 'everything' }), null);
+  assert.equal(runPermission({}), null);
+  assert.equal(runPermission(null), null);
+});
+
+test('the denied note says how many calls and why', () => {
+  assert.equal(deniedSummary([], []), '');
+  assert.equal(deniedSummary(['Workspace · write_file'], []), '1 tool call denied: no window was open');
+  assert.equal(deniedSummary(['a', 'b', 'c'], []), '3 tool calls denied: no window was open');
+  assert.equal(deniedSummary([], [{ label: 'a', how: 'user' }]), '1 tool call denied: by you');
+  assert.equal(deniedSummary([], [{ label: 'a', how: 'timeout' }, { label: 'b', how: 'timeout' }]), '2 tool calls denied: nobody answered');
+  assert.equal(deniedSummary(['a'], [{ label: 'b', how: 'user' }]), '2 tool calls denied: 1 by you, 1 no window was open');
+  assert.equal(deniedSummary([], [{ label: 'a', how: 'closed' }, { label: 'b', how: 'user' }]), '2 tool calls denied: 1 the window closed, 1 by you');
+});
+
+test('deleting an automation in the window while it runs stops its run, which records nothing', async (t) => {
+  const cancelled = [];
+  let release;
+  const { scheduler, saved, notices } = setup(t, {
+    cancel: (requestId) => { cancelled.push(requestId); release(); return true; },
+    // The request stays out until it is cancelled (provider:cancel rejects it, like Stop).
+    reply: () => new Promise((_resolve, reject) => {
+      release = () => reject(Object.assign(new Error('Provider request was cancelled.'), { code: 'CANCELLED' }));
+      // The window deletes it while the request is out.
+      setImmediate(() => scheduler.fromWindow('automations', []));
+    }),
+  });
+  const outcome = await scheduler.runNow('a1');
+  assert.deepEqual(outcome, { status: 'error', code: 'CANCELLED', message: 'Stopped: the automation was deleted.' });
+  assert.equal(cancelled.length, 1);
+  assert.match(cancelled[0], /^automation-a1-\d+$/);
+  assert.deepEqual(saved().automations, []);
+  assert.equal(saved().tasks, undefined, 'nothing appended to any task');
+  assert.equal(notices.at(-1).finished.code, 'CANCELLED');
+  assert.equal(notices.at(-1).run, undefined);
+  // A request that answers anyway after the delete is dropped too.
+  const late = setup(t, {
+    reply: (input, self) => {
+      self.fromWindow('automations', []);
+      return { text: 'done anyway' };
+    },
+  });
+  assert.equal((await late.scheduler.runNow('a1')).code, 'CANCELLED');
+  assert.equal(late.saved().tasks, undefined);
 });
 
 // ---- The hand-off: the window and main write the same keys ------------------------------

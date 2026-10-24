@@ -25,14 +25,17 @@ import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
-import { startScheduler } from './scheduler.js';
+import {
+  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLabel, automationHistoryLine,
+  automationFolderChoices,
+} from './scheduler.js';
 import { renderAvatar } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
 import { bindMcpUi } from './mcp-ui.js';
 import {
   bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles, renderFolderMenu,
-  renderMode, setMode,
+  renderMode, setMode, askBypassConsent,
 } from './composer-ui.js';
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
@@ -567,6 +570,8 @@ const app = {
         : 'Provider not configured';
     }
     this.renderModelPill();
+    // The Automation view's "Connect a provider…" line follows the provider too.
+    window.scalemaxScheduler?.refreshStatus?.();
   },
 
   // The active model is the button next to Send (src/composer-ui.js) and the statusbar.
@@ -2971,6 +2976,7 @@ const app = {
   renderAutomations() {
     const list = $('#automation-list');
     if (!list) return;
+    const composerPermission = AUTOMATION_PERMISSION_LABELS[effectivePermission(this.settings)];
     list.replaceChildren(...this.automations.map((automation) => {
       const row = element('div', 'automation-item');
       row.dataset.automationId = automation.id;
@@ -2982,14 +2988,18 @@ const app = {
       const next = automation.active && Number.isFinite(automation.nextRun)
         ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
       const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
-      const status = element('div', 'status-text', `${automation.lastStatus || 'idle'}${last} · Next: ${next}`);
+      const status = element('div', 'status-text', `${automationStatusLabel(automation.lastStatus)}${last} · Next: ${next}`);
       info.append(status);
-      // Where it runs: fixed when it was made, never the folder that happens to be open.
+      // Where it runs and under which permission: fixed when it was made or edited, never the
+      // folder or permission that happen to be current when it fires.
+      const permission = AUTOMATION_PERMISSION_LABELS[automation.permission]
+        ? AUTOMATION_PERMISSION_LABELS[automation.permission] : `Permission: the composer's (${composerPermission})`;
+      const mode = automation.mode === 'coding' ? 'Coding' : 'Working';
       const where = element('div', 'status-text automation-where', !('folder' in automation)
         ? 'Runs in whichever folder is open when it fires. Edit and save it to fix it to the open folder.'
         : automation.folder
-          ? `Runs in ${automation.folder.name} · ${automation.mode === 'coding' ? 'Coding' : 'Working'}`
-          : 'No folder: runs without file tools');
+          ? `Runs in ${automation.folder.name} · ${mode} · ${permission}`
+          : `No folder: runs without file tools · ${mode} · ${permission}`);
       where.title = automation.folder ? automation.folder.path : ('folder' in automation ? 'Made while no folder was open' : '');
       info.append(where);
       if (automation.lastStatus === 'error' || automation.lastStatus === 'interrupted') {
@@ -3000,15 +3010,17 @@ const app = {
         }
       }
       const history = Array.isArray(automation.history) ? automation.history : [];
+      // The last run answered, but tool calls it needed were not allowed: it did not do all of it.
+      if (automation.lastStatus === 'denied') {
+        const note = history[0]?.status === 'denied' && history[0].note ? `${history[0].note} · ` : '';
+        info.append(element('div', 'status-text automation-warning',
+          `${note}Nothing that needed approval was done. Run it now with ScaleMax open to approve, or edit its permission.`));
+      }
       if (history.length) {
         const details = element('details', 'automation-history');
         details.append(element('summary', '', `Run history (${history.length})`));
         const items = element('ol', 'automation-history-list');
-        for (const entry of history) {
-          const item = element('li', `automation-history-${entry.status}`,
-            `${new Date(entry.time).toLocaleString()} · ${entry.status}${entry.preview ? ` — ${entry.preview}` : ''}`);
-          items.append(item);
-        }
+        for (const entry of history) items.append(element('li', `automation-history-${entry.status}`, automationHistoryLine(entry)));
         details.append(items);
         info.append(details);
       }
@@ -3038,6 +3050,10 @@ const app = {
       row.append(info, element('span', 'badge', schedule), dot, runNow, toggle, edit, remove);
       return row;
     }));
+    // A new schedule's form follows the current task until the user changes its fields.
+    this.applyAutomationDefaults();
+    // "Next run: …" above the form changes with every pause, resume, edit and delete too.
+    window.scalemaxScheduler?.refreshStatus?.();
   },
 
   describeSchedule(automation) {
@@ -3070,10 +3086,137 @@ const app = {
     if (hint) hint.textContent = schedule === 'hourly' ? '(minute past each hour)' : '';
   },
 
+  // The folder a new schedule works in by default: the current task's, else the open one.
+  automationDefaultFolder() {
+    // Not a folder that is gone (a removed worktree, a deleted project).
+    const folder = this.currentTask()?.folder;
+    return (folder && !this.missingFolders.has(folder.path) ? folder : null) || this.rootFolder() || null;
+  },
+
+  /**
+   * The Folder field's choices: the current task's folder, recent folders, folders other
+   * automations use, "No folder" ('') and "Choose a folder…". `selected` is a path, or '' for none;
+   * `extra` adds a folder that is not among the others (one picked with Choose a folder…).
+   */
+  fillAutomationFolders(selected, extra = null) {
+    const select = $('#automation-folder');
+    if (!select) return;
+    const choices = automationFolderChoices({
+      current: this.automationDefaultFolder(),
+      recent: this.workspace.recent,
+      automations: this.automations,
+    });
+    if (extra && !choices.some((item) => item.path === extra.path)) choices.push(extra);
+    if (selected && !choices.some((item) => item.path === selected)) {
+      choices.push({ name: selected.split('/').filter(Boolean).pop() || selected, path: selected });
+    }
+    const option = (value, label, title = '') => {
+      const node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      if (title) node.title = title;
+      return node;
+    };
+    // Unchanged choices are not rebuilt: a redraw while the list is open would close it.
+    const signature = JSON.stringify([choices, selected || '']);
+    if (select.dataset.choices !== signature) {
+      select.replaceChildren(
+        ...choices.map((item) => option(item.path, item.name, item.path)),
+        option('', 'No folder (no file tools)'),
+        option('__choose__', 'Choose a folder…'),
+      );
+      select.dataset.choices = signature;
+    }
+    select.value = selected || '';
+    this.automationFolderValue = select.value;
+  },
+
+  // What the chosen permission means for a run, under the Permission field.
+  syncAutomationPermissionHint() {
+    const hint = $('#automation-permission-hint');
+    if (hint) hint.textContent = automationPermissionHint($('#automation-permission')?.value || 'basic');
+  },
+
+  // A new schedule's folder, mode and permission: those of the current task, until the user
+  // changes one of them (an edit fills the automation's own instead).
+  applyAutomationDefaults() {
+    if ($('#automation-edit-id')?.value || this.automationFormTouched) return;
+    const folder = this.automationDefaultFolder();
+    this.fillAutomationFolders(folder?.path || '');
+    if ($('#automation-mode')) $('#automation-mode').value = this.settings.mode === 'coding' ? 'coding' : 'working';
+    const permission = effectivePermission(this.settings);
+    if ($('#automation-permission')) $('#automation-permission').value = permission;
+    this.automationPermissionValue = permission;
+    // The composer's Bypass consent covers chat, not runs while nobody watches: a schedule made
+    // with Bypass asks for its own consent (when it is saved, at the latest).
+    this.automationBypassConsent = false;
+    this.syncAutomationPermissionHint();
+  },
+
   bindAutomationForm() {
     $('#automation-schedule')?.addEventListener('change', () => this.syncAutomationFields());
     $('#automation-cancel-edit')?.addEventListener('click', () => this.resetAutomationForm());
+    $('#automation-mode')?.addEventListener('change', () => { this.automationFormTouched = true; });
+    $('#automation-folder')?.addEventListener('change', (event) => void this.chooseAutomationFolder(event.target));
+    $('#automation-permission')?.addEventListener('change', (event) => void this.chooseAutomationPermission(event.target));
+    // The defaults follow the current task: refreshed whenever the Automation view is shown.
+    const view = $('#view-automation');
+    if (view && typeof MutationObserver === 'function') {
+      new MutationObserver(() => {
+        if (view.classList.contains('active')) this.applyAutomationDefaults();
+      }).observe(view, { attributes: true, attributeFilter: ['class'] });
+    }
     this.syncAutomationFields();
+    this.applyAutomationDefaults();
+  },
+
+  // "Choose a folder…" opens the folder dialog; a cancelled one puts the previous choice back.
+  async chooseAutomationFolder(select) {
+    this.automationFormTouched = true;
+    if (select.value !== '__choose__') {
+      this.automationFolderValue = select.value;
+      return;
+    }
+    const previous = this.automationFolderValue ?? '';
+    select.value = previous;
+    let picked = null;
+    try {
+      const result = await window.scalemaxAPI?.dialog?.openFolder?.();
+      picked = result?.ok && typeof result.data?.path === 'string' && result.data.path ? result.data.path : null;
+    } catch {
+      picked = null;
+    }
+    if (!picked) {
+      select.value = previous;
+      return;
+    }
+    this.fillAutomationFolders(picked, { name: folderName(picked), path: picked });
+  },
+
+  // The Bypass consent dialog, named for this automation (the composer's own dialog and wording).
+  askAutomationBypassConsent() {
+    const name = $('#automation-name')?.value.trim();
+    return askBypassConsent({ title: name ? `Bypass all permissions for runs of “${name}”?` : 'Bypass all permissions for this automation?' });
+  },
+
+  // Bypass all permissions asks for the same consent as the composer's, every time it is chosen.
+  async chooseAutomationPermission(select) {
+    this.automationFormTouched = true;
+    const previous = this.automationPermissionValue || 'basic';
+    if (select.value === 'bypass' && !this.automationBypassConsent) {
+      const consent = await this.askAutomationBypassConsent();
+      if (!consent) {
+        select.value = previous;
+        this.syncAutomationPermissionHint();
+        this.showToast('Permission unchanged');
+        return;
+      }
+      this.automationBypassConsent = true;
+    } else if (select.value !== 'bypass') {
+      this.automationBypassConsent = false;
+    }
+    this.automationPermissionValue = select.value;
+    this.syncAutomationPermissionHint();
   },
 
   resetAutomationForm() {
@@ -3083,7 +3226,9 @@ const app = {
     if ($('#automation-submit')) $('#automation-submit').textContent = 'Consent & create schedule';
     if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = true;
     if ($('#automation-form-title')) $('#automation-form-title').textContent = 'New schedule';
+    this.automationFormTouched = false;
     this.syncAutomationFields();
+    this.applyAutomationDefaults();
   },
 
   // Reads the form into schedule fields; returns an error string on bad input.
@@ -3097,12 +3242,22 @@ const app = {
     }
     const time = $('#automation-time')?.value || '09:00';
     if (schedule !== 'interval' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'Choose a valid time' };
+    const permission = $('#automation-permission')?.value || 'basic';
+    if (!Object.hasOwn(AUTOMATION_PERMISSION_LABELS, permission)) return { error: 'Choose a permission' };
+    if (permission === 'bypass' && this.automationBypassConsent !== true) return { error: 'Confirm Bypass all permissions first' };
+    const folderPath = $('#automation-folder')?.value || '';
+    if (folderPath === '__choose__') return { error: 'Choose a folder' };
     const fields = {
       name, prompt, schedule, time,
       dayOfWeek: Number.parseInt($('#automation-weekday')?.value ?? '1', 10),
       dayOfMonth: Number.parseInt($('#automation-monthday')?.value ?? '1', 10),
       intervalMinutes: null,
       runAt: null,
+      // Where and how it runs: the folder ('' = none: no file tools), the mode and the permission.
+      folder: folderPath ? { name: this.folderLabel(folderPath) || folderName(folderPath), path: folderPath } : null,
+      mode: $('#automation-mode')?.value === 'coding' ? 'coding' : 'working',
+      permission,
+      ...(permission === 'bypass' ? { bypassConsent: true } : {}),
     };
     if (schedule === 'interval') {
       fields.intervalMinutes = Number.parseInt($('#automation-interval')?.value ?? '', 10);
@@ -3125,34 +3280,38 @@ const app = {
 
   async createAutomation(event) {
     event.preventDefault();
+    // Bypass shown by default (taken over from the composer) is consented to before it is saved.
+    if ($('#automation-permission')?.value === 'bypass' && this.automationBypassConsent !== true) {
+      if (!(await this.askAutomationBypassConsent())) {
+        this.showToast('Not saved: choose another permission, or confirm Bypass all permissions');
+        return;
+      }
+      this.automationBypassConsent = true;
+    }
     const { fields, error } = this.readAutomationForm();
     if (error) { this.showToast(error); return; }
     const now = Date.now();
     const editId = $('#automation-edit-id')?.value || '';
     const existing = editId ? this.automations.find((item) => item.id === editId) : null;
-    // A new schedule works in the folder and mode that are open now, whatever is open when it
-    // fires (lib/automations.cjs); an edit keeps where it runs. `editedAt` tells main this copy is
-    // newer than the schedule state it keeps itself.
-    const automation = existing ? { ...existing, ...fields, editedAt: now } : {
+    // The form says where and how it runs (folder, mode, permission); main runs it there whatever
+    // is open when it fires (lib/automations.cjs). An edit keeps whether it is paused. `editedAt`
+    // tells main this copy is newer than the schedule state it keeps itself.
+    const automation = existing ? { ...existing, ...fields, active: existing.active, editedAt: now } : {
       id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, ...fields,
       active: true, createdAt: now, schemaVersion: 2, nextRun: null, pendingCatchUp: false,
-      lastRun: null, lastStatus: 'idle', lastError: '', history: [],
-      folder: this.rootFolder() || null, mode: this.settings.mode === 'coding' ? 'coding' : 'working', editedAt: now,
+      lastRun: null, lastStatus: 'idle', lastError: '', history: [], editedAt: now,
     };
+    if (automation.permission !== 'bypass') delete automation.bypassConsent;
     try {
       automation.nextRun = nextRunAt(automation, now);
     } catch (problem) {
       this.showToast(problem?.message || 'Choose a valid schedule and time');
       return;
     }
-    // One made before automations remembered their folder is fixed to the open one by an edit.
-    if (existing && !('folder' in existing)) {
-      automation.folder = this.rootFolder() || null;
-      automation.mode = this.settings.mode === 'coding' ? 'coding' : 'working';
-    }
     if (existing) {
       // Mutated in place: the list may be drawn from it before the save reaches main.
-      Object.assign(existing, automation, { active: true });
+      Object.assign(existing, automation);
+      if (!('bypassConsent' in automation)) delete existing.bypassConsent;
     } else {
       this.automations.push(automation);
     }
@@ -3160,7 +3319,8 @@ const app = {
     this.renderAutomations();
     this.resetAutomationForm();
     await saved;
-    this.showToast(existing ? 'Automation updated' : 'Automation created');
+    this.showToast(!existing ? 'Automation created'
+      : existing.active ? 'Automation updated' : 'Automation updated · still paused (resume it to run on schedule)');
   },
 
   editAutomation(automation) {
@@ -3177,6 +3337,16 @@ const app = {
       set('#automation-date', `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
     } else set('#automation-date', '');
     set('#automation-edit-id', automation.id);
+    // Its own folder, mode and permission; one made before automations remembered them shows the
+    // current ones, which a save then fixes it to.
+    this.fillAutomationFolders('folder' in automation ? (automation.folder?.path || '') : (this.automationDefaultFolder()?.path || ''));
+    set('#automation-mode', automation.mode || (this.settings.mode === 'coding' ? 'coding' : 'working'));
+    const permission = AUTOMATION_PERMISSION_LABELS[automation.permission] ? automation.permission : effectivePermission(this.settings);
+    set('#automation-permission', permission);
+    this.automationPermissionValue = permission;
+    // Consent given for this automation is kept; Bypass taken over from the composer asks on save.
+    this.automationBypassConsent = automation.permission === 'bypass' && automation.bypassConsent === true;
+    this.syncAutomationPermissionHint();
     if ($('#automation-submit')) $('#automation-submit').textContent = 'Save changes';
     if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = false;
     if ($('#automation-form-title')) $('#automation-form-title').textContent = `Edit ${automation.name}`;
@@ -3191,10 +3361,12 @@ const app = {
     if (!automation) return;
     const action = button.dataset.action;
     if (action === 'delete') {
-      if (!window.confirm(`Delete the automation "${automation.name}"?`)) return;
+      // Deleting one that runs now stops its run too (main sees it gone, lib/automations.cjs).
+      const running = Boolean(window.scalemaxScheduler?.isRunning?.(automation.id));
+      if (!window.confirm(running ? `"${automation.name}" is running now. Stop it and delete it?` : `Delete the automation "${automation.name}"?`)) return;
       this.automations = this.automations.filter((item) => item.id !== automation.id);
       if ($('#automation-edit-id')?.value === automation.id) this.resetAutomationForm();
-      this.showToast('Automation deleted');
+      this.showToast(running ? `Stopped and deleted ${automation.name}` : 'Automation deleted');
     } else if (action === 'toggle') {
       automation.active = !automation.active;
       if (automation.active) {
