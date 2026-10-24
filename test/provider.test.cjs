@@ -1041,6 +1041,14 @@ test('a passing failure (rate limit, overloaded server, cut stream, dropped conn
   assert.equal(calls.length, 4);
 });
 
+test('retries that never streamed anything are announced too, so the window can say it is retrying', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({ error: { message: 'busy' } }, { status: 500 }));
+  const heard = [];
+  await assert.rejects(() => provider.complete({ requestId: 'n-500', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) }),
+    (error) => error.status === 500);
+  assert.deepEqual(heard.map((delta) => [delta.type, delta.attempt, delta.of, delta.reset]), [['retry', 1, 3, false], ['retry', 2, 3, false], ['retry', 3, 3, false]]);
+});
+
 test('refusals are not retried, and retries give up after three', async () => {
   for (const [status, expected] of [[400, 1], [401, 1], [404, 1]]) {
     const { provider, calls } = await configuredProvider(() => jsonResponse({ error: { message: 'no' } }, { status }));
@@ -1155,8 +1163,10 @@ test('an error event in the stream that names a passing failure is retried like 
   const result = await provider.complete({ requestId: 'se-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) });
   assert.equal(result.content, 'The whole answer.');
   assert.equal(calls.length, 4);
-  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'text']);
+  // Every retry is announced, as retry n of 3; only the first had shown text to take back.
+  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'retry', 'retry', 'text']);
   assert.equal(heard[1].reason, 'NETWORK');
+  assert.deepEqual(heard.slice(1, 4).map((delta) => [delta.attempt, delta.of, delta.reset]), [[1, 3, true], [2, 3, false], [3, 3, false]]);
   // A refusal in the stream keeps its code and type but is not asked again.
   const refusing = await configuredProvider(() => sseResponse([{ error: { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'too long' } }]));
   await assert.rejects(() => refusing.provider.complete({ requestId: 'se-2', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
