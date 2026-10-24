@@ -220,12 +220,61 @@ export async function runSlashCommand(app, text) {
 
 // ---- The menu ---------------------------------------------------------------------------
 
+// The menu is a manual popover (bindSlashUi): it prints in the top layer, over the starter chips
+// and everything else, and never takes the focus from the message box. It opens below the box
+// when it fits there (or there is more room below), otherwise above it, and scrolls instead of
+// leaving the window.
+const MENU_CAP = 280;
+const MENU_MIN = 96;
+const MENU_MARGIN = 8;
+const MENU_GAP = 4;
+const MENU_INSET = 12;
+
+function isPopover(menu) {
+  return typeof menu?.showPopover === 'function' && menu.hasAttribute?.('popover');
+}
+
+function popoverOpen(menu) {
+  try {
+    return Boolean(menu?.matches?.(':popover-open'));
+  } catch {
+    return false;
+  }
+}
+
+/** Places the open menu by the message box, inside the window. */
+export function placeSlashMenu(menu, input) {
+  if (!isPopover(menu) || typeof input?.getBoundingClientRect !== 'function') return;
+  const rect = input.getBoundingClientRect();
+  // As wide as the composer card, inset like the old in-card menu.
+  const card = $('#chat-card');
+  const frame = typeof card?.getBoundingClientRect === 'function' ? card.getBoundingClientRect() : rect;
+  const height = window.innerHeight;
+  const spaceBelow = height - rect.bottom - MENU_GAP - MENU_MARGIN;
+  const spaceAbove = rect.top - MENU_GAP - MENU_MARGIN;
+  for (const property of ['max-height', 'top', 'bottom']) menu.style.removeProperty(property);
+  const natural = Math.min(menu.scrollHeight || 0, MENU_CAP);
+  const below = natural <= spaceBelow || spaceBelow >= spaceAbove;
+  const room = Math.max(MENU_MIN, Math.min(MENU_CAP, below ? spaceBelow : spaceAbove));
+  menu.dataset.side = below ? 'below' : 'above';
+  menu.style.setProperty('max-height', `${Math.round(room)}px`);
+  if (below) menu.style.setProperty('top', `${Math.round(rect.bottom + MENU_GAP)}px`);
+  else menu.style.setProperty('bottom', `${Math.round(height - rect.top + MENU_GAP)}px`);
+  const width = Math.max(160, frame.width - MENU_INSET * 2);
+  const left = Math.max(MENU_MARGIN, Math.min(frame.left + MENU_INSET, window.innerWidth - width - MENU_MARGIN));
+  menu.style.setProperty('left', `${Math.round(left)}px`);
+  menu.style.setProperty('width', `${Math.round(Math.min(width, window.innerWidth - MENU_MARGIN * 2))}px`);
+}
+
 function closeMenu() {
   state.open = false;
   state.results = [];
   state.token += 1;
   const menu = $('#slash-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (isPopover(menu) && popoverOpen(menu)) menu.hidePopover();
+  }
   const input = $('#chat-input');
   if (input?.getAttribute?.('aria-controls') === 'slash-menu') {
     input.removeAttribute('aria-activedescendant');
@@ -241,11 +290,14 @@ function renderMenu() {
     closeMenu();
     return;
   }
+  // `hidden` goes first: the app's [hidden] rule would keep even an open popover out of sight.
   menu.hidden = false;
+  if (isPopover(menu) && !popoverOpen(menu)) menu.showPopover();
   input.setAttribute('aria-controls', 'slash-menu');
   if (!state.results.length) {
     menu.replaceChildren(element('div', 'mention-empty', 'No command by that name. Press Enter to send it as a message.'));
     input.removeAttribute('aria-activedescendant');
+    placeSlashMenu(menu, input);
     return;
   }
   menu.replaceChildren(...state.results.slice(0, SHOWN).map((command, index) => {
@@ -262,6 +314,8 @@ function renderMenu() {
     return option;
   }));
   input.setAttribute('aria-activedescendant', `slash-option-${state.active}`);
+  // Placed before the active row scrolls into view: the height it gets decides the scrolling.
+  placeSlashMenu(menu, input);
   menu.querySelector('.is-active')?.scrollIntoView?.({ block: 'nearest' });
 }
 
@@ -347,6 +401,10 @@ export function bindSlashUi(app) {
   input.addEventListener('blur', () => window.setTimeout(() => { if (state.open) closeMenu(); }, 150));
   input.parentElement?.addEventListener('keydown', onKeydown, true);
   const menu = $('#slash-menu');
+  // In the top layer, so the starter chips and headings of an empty task never print over it.
+  // Manual: it neither takes the focus nor closes on its own; the message box drives it.
+  if (menu && typeof menu.showPopover === 'function' && !menu.hasAttribute('popover')) menu.setAttribute('popover', 'manual');
+  window.addEventListener?.('resize', () => { if (state.open && menu && !menu.hidden) placeSlashMenu(menu, input); });
   // A click on the menu must not take the focus (and close it) before it picks the command.
   menu?.addEventListener('mousedown', (event) => event.preventDefault());
   menu?.addEventListener('click', (event) => {

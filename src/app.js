@@ -32,7 +32,7 @@ import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui
 import { bindMcpUi } from './mcp-ui.js';
 import {
   bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles, renderFolderMenu,
-  renderMode, setMode,
+  renderMode, setMode, syncApprovalPrompt,
 } from './composer-ui.js';
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
@@ -1660,6 +1660,8 @@ const app = {
     this.renderReplyState();
     this.renderChat();
     this.renderFolder();
+    // A tool call of this task that waited while it was in the background asks now (src/composer-ui.js).
+    syncApprovalPrompt();
   },
 
   // Runs inside runFolderJob (see selectTask): opens the task's folder unless a newer selection or

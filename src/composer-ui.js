@@ -165,8 +165,10 @@ function modelOption(model, { checked, profileId, tab }) {
   option.setAttribute('role', 'radio');
   option.setAttribute('aria-checked', String(checked));
   const text = element('span', 'model-menu-option-text');
-  text.append(element('span', 'picker-option-name', model.displayName || model.id),
-    element('span', 'picker-option-id', model.id));
+  const name = model.displayName || model.id;
+  text.append(element('span', 'picker-option-name', name));
+  // Endpoints without display names would print the id twice.
+  if (name !== model.id) text.append(element('span', 'picker-option-id', model.id));
   option.append(text);
   if (model.available === false) {
     option.disabled = true;
@@ -203,6 +205,60 @@ function renderTabs(app) {
   }
 }
 
+// Why the last pick failed, said inside the menu: the menu is in the top layer, so a toast would
+// print under it. Cleared when the menu opens and on the next pick.
+let menuError = '';
+
+// The two lines the menu builds itself (its markup is in src/index.html): the error of a pick,
+// above the list, and "Open Assistant" under the empty text.
+function menuExtras(app) {
+  const list = $('#model-menu-list');
+  const empty = $('#model-menu-empty');
+  let error = $('#model-menu-error');
+  if (!error && list?.before) {
+    error = element('p', 'status-text model-menu-note model-menu-error');
+    error.id = 'model-menu-error';
+    error.setAttribute('role', 'alert');
+    error.hidden = true;
+    list.before(error);
+  }
+  let open = $('#model-menu-assistant');
+  if (!open && empty?.after) {
+    open = element('button', 'button secondary compact model-menu-assistant', 'Open Assistant');
+    open.id = 'model-menu-assistant';
+    open.hidden = true;
+    open.addEventListener('click', () => {
+      $('#model-menu')?.hidePopover?.();
+      // The sidebar's own Assistant item: the same way there, and the keyboard lands on it.
+      const item = $('#sidebar-nav .sidebar-item[data-view="assistant"]');
+      if (item) {
+        item.click();
+        item.focus();
+      } else {
+        app.switchView?.('assistant');
+      }
+    });
+    empty.after(open);
+  }
+  return { error, open };
+}
+
+// A failed pick: main's message as it is, in the menu while it is open (else a toast).
+function reportModelError(app, message) {
+  if ($('#model-menu')?.matches?.(':popover-open')) {
+    menuError = message;
+    renderModelMenu(app);
+  } else {
+    app.showToast(message);
+  }
+}
+
+// Where the keyboard starts in the model list: the selected model, else the first one.
+function modelMenuStart(list) {
+  return list?.querySelector('.model-menu-option[aria-checked="true"]:not(:disabled)')
+    || list?.querySelector('.model-menu-option:not(:disabled)') || null;
+}
+
 function renderModelMenu(app) {
   const list = $('#model-menu-list');
   if (!list) return;
@@ -227,12 +283,28 @@ function renderModelMenu(app) {
     total += models.length;
   }
   list.setAttribute('aria-label', `${menuTab[0].toUpperCase()}${menuTab.slice(1)} models`);
+  // The list is drawn again while open (the saved providers arrive, a model was picked): the
+  // keyboard focus stays on the same model instead of falling back to the page.
+  const active = document.activeElement;
+  const focused = active && list.contains(active) ? active : null;
+  const lost = !focused && (!active || active === document.body) && $('#model-menu')?.matches?.(':popover-open');
   list.replaceChildren(...nodes);
+  if (focused || lost) {
+    const same = focused && [...list.querySelectorAll('.model-menu-option')].find((option) => !option.disabled
+      && option.dataset.modelId === focused.dataset.modelId && option.dataset.profileId === focused.dataset.profileId);
+    (same || modelMenuStart(list))?.focus();
+  }
   const empty = $('#model-menu-empty');
+  const extras = menuExtras(app);
   if (empty) {
     empty.hidden = total > 0;
-    empty.textContent = !app.provider?.configured ? 'Connect a provider in Assistant first.'
+    empty.textContent = !app.provider?.configured ? 'Test and save a provider in Assistant first.'
       : `No ${menuTab} models are available with ${several ? 'these providers' : 'this key'}.`;
+  }
+  if (extras.open) extras.open.hidden = total > 0 || Boolean(app.provider?.configured);
+  if (extras.error) {
+    extras.error.hidden = !menuError;
+    extras.error.textContent = menuError;
   }
   const reasoningSection = $('#model-menu-reasoning');
   if (reasoningSection) reasoningSection.hidden = menuTab !== 'chat';
@@ -297,7 +369,8 @@ async function useProfile(app, profileId, chatModel) {
   if (!profileId || profileId === app.provider?.profileId) return true;
   const result = await bridge?.selectProfile?.({ id: profileId, ...(chatModel ? { model: chatModel } : {}) });
   if (!result?.ok) {
-    app.showToast(result?.error?.message || 'Could not switch provider');
+    // Main says why (an unsaved provider: 'Save "<name>" in Assistant first, …'): shown as it is.
+    reportModelError(app, result?.error?.message || 'Could not switch provider');
     return false;
   }
   app.providerProfiles = result.data.profiles;
@@ -311,6 +384,7 @@ async function useProfile(app, profileId, chatModel) {
 async function chooseModel(app, id, profileId = app.provider?.profileId, tab = 'chat') {
   const bridge = providerBridge();
   if (!id || chatBusy(app)) return;
+  menuError = '';
   if (tab !== 'chat') {
     if (!(await useProfile(app, profileId))) return;
     app.settings[tab === 'image' ? 'imageModel' : 'videoModel'] = id;
@@ -329,7 +403,7 @@ async function chooseModel(app, id, profileId = app.provider?.profileId, tab = '
     if (!bridge?.setModel) return;
     const result = await bridge.setModel({ model: id });
     if (!result?.ok) {
-      app.showToast(result?.error?.message || 'The model could not be changed');
+      reportModelError(app, result?.error?.message || 'The model could not be changed');
       return;
     }
     applyProviderMeta(app, { ...result.data, profileId: app.provider?.profileId, profileName: app.provider?.profileName });
@@ -392,7 +466,10 @@ function placeAbove(menu, anchor, align) {
   menu.style.setProperty('left', `${Math.round(left)}px`);
 }
 
-function bindPopover(menuSelector, buttonSelector, align, onOpen) {
+// `start` picks the element the keyboard lands on when the menu opens (default: the checked
+// option, else the first button). The chip's click, Enter and the slash commands (/model, /mode)
+// all open it through here, so they behave the same.
+function bindPopover(menuSelector, buttonSelector, align, onOpen, start = null) {
   const menu = $(menuSelector);
   const button = $(buttonSelector);
   if (!menu || !button || typeof menu.showPopover !== 'function') return;
@@ -404,25 +481,53 @@ function bindPopover(menuSelector, buttonSelector, align, onOpen) {
     onOpen();
     menu.showPopover();
     placeAbove(menu, button, align);
-    (menu.querySelector('[aria-checked="true"]:not(:disabled)') || menu.querySelector('button:not(:disabled)'))?.focus();
+    (start?.(menu) || menu.querySelector('[aria-checked="true"]:not(:disabled)') || menu.querySelector('button:not(:disabled)'))?.focus();
+  });
+  // Escape closes the menu and gives the keyboard back to its chip, wherever the menu was
+  // opened from (the chip or a slash command typed in the message box).
+  menu.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !menu.matches(':popover-open')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    menu.hidePopover();
+    button.focus();
+  });
+  let hadFocus = false;
+  menu.addEventListener('beforetoggle', (event) => {
+    if (event.newState === 'closed') hadFocus = menu.contains(document.activeElement);
   });
   menu.addEventListener('toggle', (event) => {
     const open = event.newState === 'open';
     button.setAttribute('aria-expanded', String(open));
-    if (!open && menu.contains(document.activeElement)) button.focus();
+    // Closed while the keyboard was in it: the focus goes back to the chip, not to the page. A
+    // click elsewhere keeps the focus where the click put it.
+    const active = document.activeElement;
+    if (!open && (menu.contains(active) || (hadFocus && (!active || active === document.body)))) button.focus();
+    hadFocus = false;
   });
   window.addEventListener('resize', () => { if (menu.matches(':popover-open')) placeAbove(menu, button, align); });
 }
 
-// Arrow keys move between the options of a menu.
+/**
+ * The option a menu key moves to, from `index` (-1: none focused) among `count` options: arrows
+ * wrap around, Home and End go to the first and last; -1 for any other key.
+ */
+export function menuKeyIndex(key, index, count) {
+  if (!(count > 0)) return -1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  if (key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'ArrowUp') return index < 0 ? count - 1 : (index - 1 + count) % count;
+  return -1;
+}
+
+// Arrow keys, Home and End move between the options of a menu.
 function bindArrowKeys(menu, selector) {
   menu?.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
     const items = [...menu.querySelectorAll(selector)].filter((node) => !node.disabled);
-    if (!items.length) return;
+    const next = menuKeyIndex(event.key, items.indexOf(document.activeElement), items.length);
+    if (next < 0) return;
     event.preventDefault();
-    const index = items.indexOf(document.activeElement);
-    const next = event.key === 'ArrowDown' ? (index + 1) % items.length : (index - 1 + items.length) % items.length;
     items[next].focus();
   });
 }
@@ -576,10 +681,344 @@ export async function setMode(app, mode) {
 
 // ---- Tool approval prompts -------------------------------------------------------
 
-const approvals = { queue: [], showing: null };
+// Several tasks work at once, so a prompt can appear while the user is typing in another task.
+// A keystroke must never answer one: a prompt of a task that is not on screen waits in a notice
+// bar until the user chooses Review (or opens that task), the modal starts on its heading rather
+// than on Allow, and Enter and Space do nothing for a moment after a prompt appears.
+export const APPROVAL_KEY_GUARD_MS = 600;
+const ACTIVATION_KEYS = new Set(['Enter', ' ', 'Spacebar']);
+
+// `reviewing`: the user asked to see the prompts waiting in the background (Review), so the
+// modal goes on through the queue until it is empty. `shownAt`: when the prompt on screen
+// appeared; `held`: when each key now down was pressed (for the guard).
+const approvals = { queue: [], showing: null, app: null, reviewing: false, shownAt: Number.NaN, held: new Map(), returnTo: null };
+const approvalsBound = new WeakSet();
 
 function approvalBridge() {
   return window.scalemaxAPI?.approvals || null;
+}
+
+function clock() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+/**
+ * Whether a key must not reach the approval prompt: Enter or Space within APPROVAL_KEY_GUARD_MS
+ * of the prompt appearing, held down since before it (auto-repeat), or pressed before it
+ * appeared (Space clicks a button on keyup). Other keys (Escape denies, Tab moves) always pass.
+ */
+export function blocksApprovalKey({ key, repeat = false, at, shownAt, downAt = null } = {}) {
+  if (!ACTIVATION_KEYS.has(key)) return false;
+  if (!Number.isFinite(shownAt) || repeat) return true;
+  if (Number.isFinite(downAt) && downAt < shownAt) return true;
+  return !(Number.isFinite(at) && at - shownAt >= APPROVAL_KEY_GUARD_MS);
+}
+
+function isAutomation(item) {
+  return Boolean(item?.automation) || (typeof item?.requestId === 'string' && item.requestId.startsWith('automation-'));
+}
+
+/**
+ * Where a prompt belongs: 'background' for an automation run or the reply of a task that is not
+ * on screen, 'here' for the task on screen and for a request no task owns (it asks at once).
+ */
+export function approvalPlace(app, item) {
+  if (isAutomation(item)) return 'background';
+  const reply = app?.replyFor?.(item?.requestId);
+  return reply && reply.taskId !== app.currentTaskId ? 'background' : 'here';
+}
+
+/** The prompt the modal shows next: one for the task on screen first; the rest only on Review. */
+export function pickApproval(queue, placeOf, reviewing) {
+  const list = Array.isArray(queue) ? queue : [];
+  return list.find((item) => placeOf(item) === 'here') || (reviewing ? list[0] || null : null);
+}
+
+// ---- What the prompt says ----
+
+const TITLE_VALUE_MAX = 80;
+const TRUNCATION_MARK = '[truncated]';
+const PREVIEW_FILE_LINES = 20;
+const CUT_NOTE = 'The arguments are longer than 4 KB, so the end is not shown.';
+
+function oneLine(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+function cutText(value, max = TITLE_VALUE_MAX) {
+  const text = oneLine(value);
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+// A path keeps its end: the file name is what matters.
+function cutPath(value, max = TITLE_VALUE_MAX) {
+  const text = oneLine(value);
+  return text.length > max ? `…${text.slice(text.length - (max - 1))}` : text;
+}
+
+// Arguments main cut at 4 KB end in "[truncated]" and no longer parse: their string fields are
+// read up to where the text stops, escapes decoded, so the prompt can still show them.
+export function looseString(text, key) {
+  const source = String(text ?? '').replace(/\n?\[truncated\]\s*$/, '');
+  const match = new RegExp(`"${key}"\\s*:\\s*"`).exec(source);
+  if (!match) return null;
+  let index = match.index + match[0].length;
+  let raw = '';
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"') break;
+    if (char === '\\') {
+      const next = source[index + 1];
+      // A dangling escape at the cut is dropped.
+      if (next === undefined) break;
+      if (next === 'u') {
+        const hex = source.slice(index + 2, index + 6);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
+        raw += source.slice(index, index + 6);
+        index += 6;
+        continue;
+      }
+      raw += char + next;
+      index += 2;
+      continue;
+    }
+    raw += char;
+    index += 1;
+  }
+  try {
+    return JSON.parse(`"${raw}"`);
+  } catch {
+    return null;
+  }
+}
+function looseLiteral(text, key) {
+  const match = new RegExp(`"${key}"\\s*:\\s*(true|false|-?\\d+(?:\\.\\d+)?)`).exec(String(text ?? ''));
+  if (!match) return undefined;
+  return match[1] === 'true' ? true : match[1] === 'false' ? false : Number(match[1]);
+}
+
+// The arguments of a prompt: parsed when they parse, read loosely when main cut them.
+function argumentReader(request) {
+  const raw = typeof request?.arguments === 'string' ? request.arguments : '';
+  let value = null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) value = parsed;
+  } catch { /* cut at 4 KB, or not JSON */ }
+  return {
+    raw,
+    value,
+    cut: raw.trimEnd().endsWith(TRUNCATION_MARK),
+    string: (key) => (value ? (typeof value[key] === 'string' ? value[key] : null) : looseString(raw, key)),
+    flag: (key) => (value ? value[key] : looseLiteral(raw, key)),
+  };
+}
+
+/** The question the prompt asks, in words: "Edit src/app.js?", "Use echo on fake-tools?". */
+export function approvalTitle(request) {
+  if (request.reason === 'unsandboxed-input') return 'Type into this command outside the sandbox?';
+  if (request.reason === 'unsandboxed') return 'Run this command outside the sandbox?';
+  if (request.reason === 'egress') return request.host ? `Open an address on ${request.host}?` : 'Open an address?';
+  if (request.kind === 'agents') return 'Hand this to a subagent?';
+  const args = argumentReader(request);
+  const path = cutPath(args.string('path') || '');
+  const text = (key) => cutText(args.string(key) || '');
+  const tool = request.toolName;
+  if (request.kind === 'workspace') {
+    switch (tool) {
+      case 'edit_file': return path ? `Edit ${path}?` : 'Edit a file?';
+      // It creates or replaces the file: "write" says both.
+      case 'write_file': return path ? `Write ${path}?` : 'Write a file?';
+      case 'run_command': return args.flag('background') === true ? 'Start a background command?' : 'Run a command?';
+      case 'job_input': return 'Type into a background command?';
+      case 'job_stop': return 'Stop a background command?';
+      case 'read_file': return path ? `Read ${path}?` : 'Read a file?';
+      case 'list_files': return `List the files in ${path || 'the folder'}?`;
+      case 'search': return text('query') ? `Search the folder for "${text('query')}"?` : 'Search the folder?';
+      default: return `Use ${cutText(tool)}?`;
+    }
+  }
+  // The two resource tools of every MCP server: the server is named in the arguments.
+  if (request.serverId === 'MCP' && (tool === 'read_resource' || tool === 'list_resources')) {
+    const server = text('server') || 'an MCP server';
+    return tool === 'read_resource' ? `Read a resource from ${server}?` : `List the resources of ${server}?`;
+  }
+  if (request.kind === 'computer') {
+    switch (tool) {
+      case 'read_clipboard': return 'Read your clipboard?';
+      case 'write_clipboard': return 'Put text on your clipboard?';
+      case 'open': {
+        const target = args.string('path') ? path : text('url');
+        return target ? `Open ${target}?` : 'Open something on your computer?';
+      }
+      case 'reveal': return path ? `Show ${path} in the Finder?` : 'Show a file in the Finder?';
+      default: break;
+    }
+  }
+  if (request.kind === 'web') {
+    if (tool === 'search') return text('query') ? `Search the web for "${text('query')}"?` : 'Search the web?';
+    if (tool === 'open_page') return text('url') ? `Open ${text('url')}?` : 'Open a page?';
+  }
+  return `Use ${cutText(tool)} on ${cutText(request.serverName)}?`;
+}
+
+/** The line above the title: whose call it is (another task, an automation, a subagent). */
+export function approvalContext(request, taskTitle = '') {
+  let text = 'Tool call';
+  if (request.automation) text += ` · Automation: ${request.automation}`;
+  else if (isAutomation(request)) text += ' · Automation';
+  else if (taskTitle) text += ` · ${taskTitle}`;
+  if (request.subagent) text += ` · Subagent: ${request.subagent}`;
+  return text;
+}
+
+const DIFF_CONTEXT = 3;
+const DIFF_MAX_CELLS = 40_000;
+const DIFF_MAX_ROWS = 200;
+
+function textLines(text) {
+  const value = String(text ?? '');
+  return value === '' ? [] : value.split(/\r?\n/);
+}
+
+/**
+ * A small line diff of an edit (old_text → new_text): {type: 'same'|'del'|'add', text} rows, at
+ * most DIFF_CONTEXT unchanged lines around each change, longer unchanged runs as one
+ * {type: 'gap', count}, and at most DIFF_MAX_ROWS rows (then {type: 'gap', count, more: true}).
+ */
+export function lineDiff(before, after) {
+  const old = textLines(before);
+  const now = textLines(after);
+  let start = 0;
+  while (start < old.length && start < now.length && old[start] === now[start]) start += 1;
+  let endOld = old.length;
+  let endNew = now.length;
+  while (endOld > start && endNew > start && old[endOld - 1] === now[endNew - 1]) {
+    endOld -= 1;
+    endNew -= 1;
+  }
+  if (start === endOld && start === endNew) return [];
+  const removed = old.slice(start, endOld);
+  const added = now.slice(start, endNew);
+  const middle = [];
+  if (removed.length * added.length <= DIFF_MAX_CELLS) {
+    // Longest common subsequence of the lines in between; removals print before additions.
+    const table = Array.from({ length: removed.length + 1 }, () => new Uint16Array(added.length + 1));
+    for (let i = removed.length - 1; i >= 0; i -= 1) {
+      for (let j = added.length - 1; j >= 0; j -= 1) {
+        table[i][j] = removed[i] === added[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < removed.length && j < added.length) {
+      if (removed[i] === added[j]) {
+        middle.push({ type: 'same', text: removed[i] });
+        i += 1;
+        j += 1;
+      } else if (table[i + 1][j] >= table[i][j + 1]) {
+        middle.push({ type: 'del', text: removed[i] });
+        i += 1;
+      } else {
+        middle.push({ type: 'add', text: added[j] });
+        j += 1;
+      }
+    }
+    for (; i < removed.length; i += 1) middle.push({ type: 'del', text: removed[i] });
+    for (; j < added.length; j += 1) middle.push({ type: 'add', text: added[j] });
+  } else {
+    middle.push(...removed.map((text) => ({ type: 'del', text })), ...added.map((text) => ({ type: 'add', text })));
+  }
+  const rows = [
+    ...old.slice(0, start).map((text) => ({ type: 'same', text })),
+    ...middle,
+    ...old.slice(endOld).map((text) => ({ type: 'same', text })),
+  ];
+  // Unchanged lines further than DIFF_CONTEXT from every change fold into a gap.
+  const near = new Array(rows.length).fill(false);
+  let last = -Infinity;
+  rows.forEach((row, index) => {
+    if (row.type !== 'same') last = index;
+    if (index - last <= DIFF_CONTEXT) near[index] = true;
+  });
+  last = Infinity;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (rows[index].type !== 'same') last = index;
+    if (last - index <= DIFF_CONTEXT) near[index] = true;
+  }
+  const shown = [];
+  rows.forEach((row, index) => {
+    if (near[index]) shown.push(row);
+    else if (shown.at(-1)?.type === 'gap') shown.at(-1).count += 1;
+    else shown.push({ type: 'gap', count: 1 });
+  });
+  if (shown.length <= DIFF_MAX_ROWS) return shown;
+  const rest = shown.slice(DIFF_MAX_ROWS - 1).reduce((total, row) => total + (row.type === 'gap' ? row.count : 1), 0);
+  return [...shown.slice(0, DIFF_MAX_ROWS - 1), { type: 'gap', count: rest, more: true }];
+}
+
+const COMMAND_SANDBOX = { on: 'In the sandbox', offline: 'In the sandbox, without network', off: 'Without a sandbox' };
+
+/**
+ * What the prompt shows of the call, readable: an edit as a line diff, a new file's first
+ * lines, a command as typed with where and how it runs; anything else as indented JSON (or the
+ * text main sent, when it was cut and no longer parses).
+ */
+export function approvalPreview(request) {
+  const args = argumentReader(request);
+  const cutNote = args.cut ? CUT_NOTE : '';
+  if (request.kind === 'workspace') {
+    const path = args.string('path') || '';
+    if (request.toolName === 'edit_file') {
+      const before = args.string('old_text');
+      const after = args.string('new_text');
+      if (before !== null && after !== null) {
+        const note = [args.flag('replace_all') === true ? 'Every occurrence is replaced.' : '', cutNote].filter(Boolean).join(' ');
+        return { kind: 'diff', label: 'Change', path, lines: lineDiff(before, after), note };
+      }
+    }
+    if (request.toolName === 'write_file') {
+      const content = args.string('content');
+      if (content !== null) {
+        const lines = textLines(content);
+        // A final line break ends the last line; it is no line of its own.
+        if (lines.length && lines.at(-1) === '' && !args.cut) lines.pop();
+        const note = [content === '' ? 'The file is empty.' : '', cutNote].filter(Boolean).join(' ');
+        // Cut arguments hold only the start of the file: what is left is a lower bound.
+        return { kind: 'file', label: 'Content', path, lines: lines.slice(0, PREVIEW_FILE_LINES), more: Math.max(0, lines.length - PREVIEW_FILE_LINES), atLeast: args.cut, note };
+      }
+    }
+    if (request.toolName === 'run_command') {
+      const command = args.string('command');
+      if (command !== null) {
+        const timeout = args.flag('timeout_seconds');
+        const notes = [
+          request.folderName ? `In the folder "${request.folderName}"` : '',
+          request.reason === 'unsandboxed' ? 'Outside the sandbox' : COMMAND_SANDBOX[request.sandbox] || '',
+          args.flag('background') === true ? 'Keeps running in the background' : '',
+          args.flag('tty') === true ? 'In a terminal' : '',
+          Number.isFinite(timeout) ? `Time limit ${timeout} s` : '',
+        ].filter(Boolean);
+        return { kind: 'command', label: 'Command', text: command, notes, note: cutNote };
+      }
+    }
+    if (request.toolName === 'job_input') {
+      const input = args.string('text');
+      if (input !== null) {
+        const job = args.string('job');
+        const notes = [job ? `Background command ${job}` : '', args.flag('enter') === false ? '' : 'Then presses Enter'].filter(Boolean);
+        return { kind: 'command', label: 'Input', text: input, notes, note: cutNote };
+      }
+    }
+  }
+  if (args.value) return { kind: 'json', label: 'Arguments', text: JSON.stringify(args.value, null, 2), note: '' };
+  return { kind: 'text', label: 'Arguments', text: args.raw || '{}', note: cutNote };
+}
+
+/** The notice bar's sentence for the prompts waiting in the background. */
+export function approvalNoticeText(items, whoOf) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  const text = `${whoOf(list[0])} is waiting for your approval`;
+  return list.length > 1 ? `${text} · ${list.length} tool calls waiting` : text;
 }
 
 // Built-in workspace tools (lib/workspace-tools.cjs) act on the folder the user opened.
@@ -614,7 +1053,7 @@ const COMPUTER_SUMMARIES = {
   open: 'The model wants to open something in the app that owns it.',
   reveal: 'The model wants to show a file of your project in the Finder.',
 };
-function approvalSummary(request) {
+export function approvalSummary(request) {
   // Handing work to a subagent (lib/subagents.cjs; it asks in Manual): its own calls ask too.
   if (request.kind === 'agents') {
     const args = approvalArguments(request);
@@ -635,7 +1074,9 @@ function approvalSummary(request) {
     }
     const summary = WORKSPACE_SUMMARIES[request.toolName];
     if (!summary) return `The model wants to read files in ${where}.`;
-    return summary(where, approvalArguments(request)) + (request.toolName === 'run_command' ? SANDBOX_NOTES[request.sandbox] || '' : '');
+    // Read loosely, so a command cut at 4 KB still says it keeps running.
+    const background = argumentReader(request).flag('background') === true;
+    return summary(where, { background }) + (request.toolName === 'run_command' ? SANDBOX_NOTES[request.sandbox] || '' : '');
   }
   // An address the model put together itself: it could carry what the reply read to that site.
   if (request.reason === 'egress') {
@@ -661,49 +1102,149 @@ function approvalSummary(request) {
     ? `The model wants to run "${request.toolName}" on ${request.serverName}. You trust this server's label that the tool only reads data.`
     : `The model wants to run "${request.toolName}" on ${request.serverName}. This tool can change data there.`;
 }
-function showNextApproval() {
-  const dialog = $('#tool-approval-dialog');
-  if (!dialog) return;
-  const request = approvals.queue[0] || null;
-  approvals.showing = request;
-  if (!request) {
-    // `showing` is cleared first, so this close is not read as a denial.
-    if (dialog.open) dialog.close();
-    return;
+
+// ---- The modal and the notice bar ----
+
+function setText(selector, text) {
+  const node = $(selector);
+  if (node) node.textContent = text;
+}
+
+// The task a prompt comes from, when it is not the one on screen.
+function backgroundTask(app, request) {
+  const reply = app?.replyFor?.(request.requestId);
+  return reply && reply.taskId !== app.currentTaskId ? app.tasks?.find?.((item) => item.id === reply.taskId) || null : null;
+}
+
+function diffRow(row) {
+  const kind = { del: ' is-del', add: ' is-add', gap: ' is-meta' }[row.type] || '';
+  const line = element('span', `diff-line${kind}`);
+  line.append(element('span', 'approval-diff-sign', row.type === 'del' ? '-' : row.type === 'add' ? '+' : ' '));
+  line.append(row.type === 'gap'
+    ? `⋯ ${row.count} ${row.more ? 'more' : 'unchanged'} line${row.count === 1 ? '' : 's'}` : row.text);
+  return line;
+}
+
+function renderApprovalPreview(preview) {
+  const box = $('#approval-preview');
+  if (!box) return;
+  const nodes = [element('span', 'small-label', preview.label)];
+  if ((preview.kind === 'diff' || preview.kind === 'file') && preview.path) nodes.push(element('p', 'approval-path', preview.path));
+  if (preview.kind === 'diff') {
+    const block = element('div', 'code-output approval-diff');
+    block.setAttribute('role', 'group');
+    block.setAttribute('aria-label', 'Changed lines');
+    block.append(...preview.lines.map(diffRow));
+    nodes.push(block);
+  } else if (preview.kind === 'file') {
+    if (preview.lines.length) nodes.push(element('pre', 'code-output approval-file', preview.lines.join('\n')));
+    if (preview.more > 0) nodes.push(element('p', 'approval-more', `… ${preview.atLeast ? 'at least ' : ''}${preview.more} more line${preview.more === 1 ? '' : 's'}`));
+  } else if (preview.kind === 'command') {
+    nodes.push(element('pre', 'code-output approval-command', preview.text));
+    if (preview.notes.length) nodes.push(element('p', 'approval-notes', preview.notes.join(' · ')));
+  } else {
+    nodes.push(element('pre', 'code-output approval-arguments', preview.text));
   }
-  const automation = typeof request.requestId === 'string' && request.requestId.startsWith('automation-');
-  // Several tasks can work at once: a prompt from a task in the background names it.
-  const reply = approvals.app?.replyFor?.(request.requestId);
-  const task = reply && reply.taskId !== approvals.app.currentTaskId
-    ? approvals.app.tasks.find((item) => item.id === reply.taskId) : null;
-  $('#approval-eyebrow').textContent = automation ? 'Tool call · Automation' : task ? `Tool call · ${task.title}` : 'Tool call';
-  // A call a subagent of that reply makes says which one.
-  if (request.subagent) $('#approval-eyebrow').textContent += ` · Subagent: ${request.subagent}`;
+  if (preview.note) nodes.push(element('p', 'approval-note', preview.note));
+  box.replaceChildren(...nodes);
+}
+
+function renderApprovalCount() {
+  const queue = $('#approval-queue');
+  if (!queue) return;
+  queue.hidden = approvals.queue.length < 2;
+  queue.textContent = `${approvals.queue.length} waiting`;
+}
+
+// Fills the modal with one prompt and opens it. The focus starts on the heading, never on a
+// button, and the guard clock starts again for every prompt.
+function renderApproval(request) {
+  const dialog = $('#tool-approval-dialog');
+  approvals.showing = request;
+  setText('#approval-eyebrow', approvalContext(request, backgroundTask(approvals.app, request)?.title || ''));
   // A call that always asks (a command outside the sandbox, the clipboard) is allowed one at a
   // time; an address the model made up can be allowed for its site, for the rest of this reply.
   const egress = request.reason === 'egress' && Boolean(request.host);
   const always = Boolean(request.reason) && !egress;
   const outside = request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input';
-  $('#approval-title').textContent = request.reason === 'unsandboxed-input'
-    ? 'Type into this command outside the sandbox?'
-    : outside ? 'Run this command outside the sandbox?'
-      : egress ? `Open an address on ${request.host || 'this site'}?`
-        : request.kind === 'agents' ? 'Hand this to a subagent?' : `Allow ${request.serverName} · ${request.toolName}?`;
-  $('#approval-summary').textContent = approvalSummary(request);
-  $('#approval-arguments').textContent = request.arguments || '{}';
+  setText('#approval-title', approvalTitle(request));
+  setText('#approval-summary', approvalSummary(request));
+  const preview = approvalPreview(request);
+  renderApprovalPreview(preview);
+  // The raw arguments stay one click away, except when the preview already is them.
+  const raw = $('#approval-raw');
+  if (raw) {
+    raw.open = false;
+    raw.hidden = preview.kind === 'json' || preview.kind === 'text';
+  }
+  setText('#approval-arguments', request.arguments || '{}');
   const all = $('#approval-all');
   if (all) {
     all.hidden = always;
     all.textContent = egress ? `Allow ${request.host || 'this site'} in this reply` : 'Allow all in this reply';
   }
   dialog.classList.toggle('is-unsandboxed', outside);
-  const queue = $('#approval-queue');
-  if (queue) {
-    queue.hidden = approvals.queue.length < 2;
-    queue.textContent = `${approvals.queue.length} waiting`;
+  renderApprovalCount();
+  if (!dialog.open) {
+    approvals.returnTo = document.activeElement;
+    dialog.showModal();
   }
-  if (!dialog.open) dialog.showModal();
-  $('#approval-once')?.focus();
+  approvals.shownAt = clock();
+  $('#approval-title')?.focus?.({ preventScroll: true });
+  // Opened at its top: the first line of the summary is never scrolled away.
+  const body = $('#approval-body');
+  if (body) body.scrollTop = 0;
+  for (const block of $('#approval-preview')?.querySelectorAll?.('.code-output') || []) block.scrollTop = 0;
+}
+
+// The bar over the views for prompts of tasks that are not on screen; it never takes the focus.
+function renderApprovalNotice() {
+  const notice = $('#approval-notice');
+  if (!notice) return;
+  const waiting = approvals.showing ? [] : approvals.queue;
+  notice.hidden = !waiting.length;
+  setText('#approval-notice-text', approvalNoticeText(waiting, (item) => {
+    if (item.automation) return `Automation "${cutText(item.automation, 60)}"`;
+    if (isAutomation(item)) return 'An automation';
+    const reply = approvals.app?.replyFor?.(item.requestId);
+    const task = reply ? approvals.app.tasks?.find?.((entry) => entry.id === reply.taskId) : null;
+    return task?.title ? `"${cutText(task.title, 60)}"` : 'A task';
+  }));
+}
+
+/**
+ * Brings the prompts in line with what is on screen: the modal shows a prompt of the task on
+ * screen (or, after Review, any waiting one) and keeps the one it shows; the others wait in the
+ * notice bar. app.js calls it when another task is opened, so that task's prompts ask now.
+ */
+export function syncApprovalPrompt() {
+  const app = approvals.app;
+  const dialog = $('#tool-approval-dialog');
+  if (!app || !dialog) return;
+  if (!approvals.queue.length) approvals.reviewing = false;
+  if (approvals.showing && dialog.open && approvals.queue.includes(approvals.showing)) {
+    renderApprovalCount();
+  } else {
+    const next = pickApproval(approvals.queue, (item) => approvalPlace(app, item), approvals.reviewing);
+    if (next) {
+      renderApproval(next);
+    } else {
+      // `showing` is cleared first, so this close is not read as a denial.
+      approvals.showing = null;
+      if (dialog.open) {
+        dialog.close();
+        // The dialog gives the focus back to what had it; when that is gone (the notice's
+        // Review button hides once it is used), the message box takes it.
+        const active = document.activeElement;
+        if (!active || active === document.body) {
+          [approvals.returnTo, $('#chat-input')].find((node) => node?.isConnected && !node.disabled
+            && node.checkVisibility?.() !== false)?.focus?.();
+        }
+      }
+      approvals.returnTo = null;
+    }
+  }
+  renderApprovalNotice();
 }
 
 async function answerApproval(app, decision) {
@@ -715,28 +1256,34 @@ async function answerApproval(app, decision) {
   const siblings = decision === 'request' && !request.reason
     ? approvals.queue.filter((item) => item.requestId === request.requestId && !item.reason) : [];
   approvals.queue = approvals.queue.filter((item) => !siblings.includes(item));
-  showNextApproval();
+  approvals.showing = null;
+  syncApprovalPrompt();
   const bridge = approvalBridge();
   for (const item of [request, ...siblings]) {
     const result = await bridge?.respond({ approvalId: item.approvalId, decision: item === request ? decision : 'once' });
-    if (!result?.ok || !result.data?.accepted) app.showToast('That tool request had already ended');
+    if (!result?.ok || !result.data?.accepted) app.showToast?.('That tool request had already ended');
   }
 }
 
-function bindApprovals(app) {
+export function bindApprovals(app) {
   const bridge = approvalBridge();
   const dialog = $('#tool-approval-dialog');
-  if (!bridge?.onRequest || !dialog) return;
+  if (!app || approvalsBound.has(app) || !bridge?.onRequest || !dialog) return;
+  approvalsBound.add(app);
   approvals.app = app;
   bridge.onRequest((request) => {
     if (!request || typeof request.approvalId !== 'string') return;
     approvals.queue.push({
       approvalId: request.approvalId,
       requestId: String(request.requestId || ''),
+      // 'MCP' for the resource tools of all servers; the summary and title depend on it.
+      serverId: typeof request.serverId === 'string' ? request.serverId.slice(0, 120) : '',
       serverName: String(request.serverName || request.serverId || 'MCP server'),
       kind: ['workspace', 'web', 'computer', 'agents'].includes(request.kind) ? request.kind : 'mcp',
       // The subagent making this call (its description), when one does.
       subagent: typeof request.subagent === 'string' ? request.subagent.slice(0, 120) : '',
+      // The automation whose run makes this call, when one does.
+      automation: typeof request.automation === 'string' ? request.automation.trim().slice(0, 120) : '',
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
@@ -748,33 +1295,52 @@ function bindApprovals(app) {
       claimsReadOnly: request.claimsReadOnly === true,
       sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',
     });
-    if (!approvals.showing) {
-      showNextApproval();
-      return;
-    }
-    // One prompt is on screen; only the waiting count changes.
-    const queue = $('#approval-queue');
-    if (queue) {
-      queue.hidden = false;
-      queue.textContent = `${approvals.queue.length} waiting`;
-    }
+    // One prompt on screen keeps it (only the waiting count changes); one for a task in the
+    // background waits in the notice bar.
+    syncApprovalPrompt();
   });
   bridge.onClosed?.((info) => {
     approvals.queue = approvals.queue.filter((item) => item.approvalId !== info?.approvalId);
-    if (approvals.showing?.approvalId === info?.approvalId) showNextApproval();
+    if (approvals.showing?.approvalId === info?.approvalId) approvals.showing = null;
+    syncApprovalPrompt();
   });
   $('#approval-once')?.addEventListener('click', () => void answerApproval(app, 'once'));
   $('#approval-all')?.addEventListener('click', () => void answerApproval(app, 'request'));
   $('#approval-deny')?.addEventListener('click', () => void answerApproval(app, 'deny'));
+  $('#approval-notice-review')?.addEventListener('click', () => {
+    approvals.reviewing = true;
+    syncApprovalPrompt();
+  });
   // Escape denies. Chromium closes a modal that opened without a user gesture straight away,
-  // without a cancel event, so any close that did not come from an answer is a denial too.
+  // without a cancel event, so any close that did not come from an answer is a denial too (but
+  // not a late close event of a dialog that is open again with the next prompt).
   dialog.addEventListener('cancel', (event) => {
     event.preventDefault();
     void answerApproval(app, 'deny');
   });
   dialog.addEventListener('close', () => {
-    if (approvals.showing) void answerApproval(app, 'deny');
+    if (approvals.showing && !dialog.open) void answerApproval(app, 'deny');
   });
+  // The key guard runs before anything else sees the key. A keyup counts from its keydown: one
+  // pressed before the prompt appeared, or too soon after, clicks nothing when it is released.
+  const guard = (event) => {
+    const pressedAt = approvals.held.get(event.key);
+    if (event.type === 'keydown') {
+      if (!event.repeat) approvals.held.set(event.key, event.timeStamp);
+    } else {
+      approvals.held.delete(event.key);
+    }
+    if (!dialog.open || !approvals.showing) return;
+    const keydown = event.type === 'keydown';
+    const downAt = keydown && !event.repeat ? event.timeStamp : pressedAt;
+    if (blocksApprovalKey({ key: event.key, repeat: keydown && event.repeat, at: keydown ? event.timeStamp : pressedAt, shownAt: approvals.shownAt, downAt })) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  window.addEventListener('keydown', guard, true);
+  window.addEventListener('keyup', guard, true);
+  window.addEventListener('blur', () => approvals.held.clear());
 }
 
 // ---- Workspace folder --------------------------------------------------------------
@@ -906,8 +1472,13 @@ export function bindComposerUi(app) {
   bound.add(app);
   bindPopover('#model-menu', '#model-button', 'end', () => {
     menuTab = ['image', 'video'].includes(app.settings.composerMode) ? app.settings.composerMode : 'chat';
+    menuError = '';
     renderModelMenu(app);
     void refreshProfiles(app);
+  }, () => {
+    // No models yet: the keyboard starts on "Open Assistant", the one thing to do.
+    const assistant = $('#model-menu-assistant');
+    return modelMenuStart($('#model-menu-list')) || (assistant && !assistant.hidden ? assistant : null);
   });
   bindPopover('#permission-menu', '#permission-button', 'start', () => renderPermission(app));
   bindPopover('#mode-menu', '#mode-chip', 'start', () => renderModeMenu(app));
@@ -934,6 +1505,15 @@ export function bindComposerUi(app) {
     if (menu && button && menu.matches(':popover-open')) placeAbove(menu, button, 'end');
   });
   $('#model-tabs')?.addEventListener('keydown', (event) => {
+    // Down from the tabs goes into the list of models.
+    if (event.key === 'ArrowDown') {
+      const option = modelMenuStart($('#model-menu-list'));
+      if (option) {
+        event.preventDefault();
+        option.focus();
+      }
+      return;
+    }
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     const tabs = [...document.querySelectorAll('#model-tabs [data-model-tab]')];
     const index = tabs.findIndex((tab) => tab.dataset.modelTab === menuTab);
