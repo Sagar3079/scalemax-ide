@@ -83,6 +83,19 @@ const REPLY_OUTCOMES = { stopped: 'stopped', failed: 'failed', closed: 'cut off'
 const TASK_MOOD_LABELS = {
   thinking: 'Working', working: 'Working', waiting: 'Waiting for you', done: 'New reply', error: 'Reply failed',
 };
+// The Assistant's provider form: a custom endpoint's starting URL, and how long Test connection
+// waits before it says the endpoint did not answer.
+const DEFAULT_CUSTOM_BASE_URL = 'https://api.openai.com/v1';
+const TEST_TIMEOUT_MS = 20_000;
+// Two base URLs name the same endpoint (spaces and trailing slashes aside).
+function sameBaseUrl(a, b) {
+  const clean = (value) => String(value ?? '').trim().replace(/\/+$/, '');
+  return clean(a) === clean(b);
+}
+// "host:port" of a typed base URL, for messages.
+function hostOf(baseUrl) {
+  try { return new URL(baseUrl).host || 'the endpoint'; } catch { return 'the endpoint'; }
+}
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -204,7 +217,17 @@ const app = {
   provider: null,
   providerKind: 'scalemax',
   providerBase: '',
+  // The saved (active) provider's models: the composer's menu, costs and context use these.
   providerCatalog: [],
+  // The Assistant form's models (saved, or from its last Test connection) and the endpoint they
+  // belong to; see syncProviderForm.
+  formCatalog: [],
+  formCatalogFor: null,
+  formEdited: false,
+  formProfileId: null,
+  formSavedKey: '',
+  // A custom endpoint's model typed as an exact ID ("Other model ID…") instead of picked.
+  modelOther: false,
   enabledModels: new Set(),
   selectedModel: '',
   attachment: null,
@@ -498,14 +521,10 @@ const app = {
       this.provider = null;
     }
     const meta = this.provider || {};
-    this.providerKind = meta.kind === 'custom' ? 'custom' : 'scalemax';
     this.providerCatalog = Array.isArray(meta.models) ? meta.models : [];
     this.enabledModels = new Set(Array.isArray(meta.enabledModels) ? meta.enabledModels : []);
-    // Only surface an endpoint once it has actually been verified and saved.
-    this.providerBase = meta.configured ? (meta.baseUrl || '') : '';
-    if ($('#provider-kind')) $('#provider-kind').value = this.providerKind;
+    this.syncProviderForm();
     this.renderProviderStatus();
-    this.applyProviderKind();
     this.renderProviderModels();
   },
 
@@ -513,50 +532,95 @@ const app = {
     return $('#provider-kind')?.value === 'custom' ? 'custom' : 'scalemax';
   },
 
+  // ---- The Assistant's provider form ----------------------------------------------
+  // The form shows the saved provider (its type, endpoint, model and model list) until the user
+  // changes something: typing, Test connection or picking a model marks it edited, and a render
+  // in between keeps those edits. Saving, clearing or choosing another provider shows the saved
+  // provider again. What Test connection finds stays in the form (formCatalog) until it is
+  // saved: the composer's model menu and the costs keep using the saved provider's models
+  // (providerCatalog), so they never list models that cannot be chosen yet.
+  savedFormKey(meta = this.provider || {}) {
+    return [meta.profileId, meta.kind, meta.baseUrl, meta.model, Boolean(meta.configured), (meta.models || []).length].join('|');
+  },
+
+  syncProviderForm() {
+    const meta = this.provider || {};
+    const kind = meta.kind === 'custom' ? 'custom' : 'scalemax';
+    this.formEdited = false;
+    this.formProfileId = meta.profileId ?? null;
+    this.formSavedKey = this.savedFormKey(meta);
+    this.providerKind = kind;
+    // The ScaleMax endpoint that accepted the key (Endpoint, under the key); a custom one is typed.
+    this.providerBase = kind === 'scalemax' && meta.configured ? (meta.baseUrl || '') : '';
+    this.formCatalog = Array.isArray(meta.models) ? meta.models : [];
+    this.formCatalogFor = { kind, baseUrl: meta.baseUrl || '' };
+    if ($('#provider-kind')) $('#provider-kind').value = kind;
+    if ($('#provider-base-url')) $('#provider-base-url').value = kind === 'custom' && meta.baseUrl ? meta.baseUrl : DEFAULT_CUSTOM_BASE_URL;
+    if ($('#provider-model')) $('#provider-model').value = kind === 'custom' ? (meta.model || '') : '';
+    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.selectedModel = meta.model || '';
+    // A custom model the endpoint does not list is shown as typed, under "Other model ID…".
+    this.modelOther = kind === 'custom' && Boolean(meta.model)
+      && !this.formModelOptions().some((model) => model.id === meta.model);
+    this.applyProviderKind();
+  },
+
+  // The user changed the form: it is theirs until it is saved (see syncProviderForm).
+  markFormEdited() {
+    this.formEdited = true;
+  },
+
   applyProviderKind() {
     const kind = this.providerKindValue();
     this.providerKind = kind;
     const custom = kind === 'custom';
     if ($('#provider-base-url-group')) $('#provider-base-url-group').hidden = !custom;
-    if ($('#provider-model-text-group')) $('#provider-model-text-group').hidden = !custom;
-    if ($('#provider-model-select-group')) $('#provider-model-select-group').hidden = custom;
     if ($('#provider-detected-group')) $('#provider-detected-group').hidden = custom;
-    if ($('#provider-api-key')) {
-      $('#provider-api-key').placeholder = this.provider?.hasKey
-        ? 'Key stored — leave blank to keep it'
-        : custom ? 'Your provider API key' : 'sm_live_…';
-    }
-    this.renderProviderStatus();
+    this.renderKeyPlaceholder();
+    this.renderModelSelect();
+  },
+
+  // "Key stored" only while the form still points at the endpoint that key belongs to: another
+  // endpoint never inherits it (lib/provider.cjs), so the field asks for one again.
+  renderKeyPlaceholder() {
+    const input = $('#provider-api-key');
+    if (!input) return;
+    const meta = this.provider || {};
+    const kind = this.providerKindValue();
+    const sameEndpoint = kind === (meta.kind === 'custom' ? 'custom' : 'scalemax')
+      && (kind !== 'custom' || sameBaseUrl($('#provider-base-url')?.value, meta.baseUrl));
+    input.placeholder = meta.hasKey && sameEndpoint ? 'Key stored — leave blank to keep it'
+      : kind === 'custom' ? 'Your API key' : 'sm_live_…';
   },
 
   renderProviderStatus() {
     const meta = this.provider || {};
+    // The saved provider changed under the form (another provider chosen in the model menu, a
+    // model switch, the catalog reloaded): show it, unless the user is editing this provider.
+    if ((meta.profileId ?? null) !== this.formProfileId
+      || (!this.formEdited && this.savedFormKey(meta) !== this.formSavedKey)) this.syncProviderForm();
     const configured = Boolean(meta.configured);
     const model = meta.model || '';
     const baseUrl = meta.baseUrl || '';
     const kindLabel = meta.kind === 'custom' ? 'Custom provider' : 'ScaleMax';
+    const catalog = Array.isArray(meta.models) ? meta.models : [];
+    const entry = catalog.find((item) => item.id === model);
+    const modelName = entry?.displayName && entry.displayName !== model ? `${entry.displayName} (${model})` : model;
     if ($('#app-status')) {
       $('#app-status').textContent = configured ? `${kindLabel}: ${model}` : 'Provider not configured';
     }
     if ($('#provider-status')) {
-      const count = Array.isArray(meta.models) ? meta.models.length : 0;
+      const count = catalog.length;
       $('#provider-status').textContent = configured
-        ? `Connected via ${kindLabel} — ${model} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
+        ? `Connected via ${kindLabel} — ${modelName} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
         : meta.keyStorage === 'session'
           ? 'The API key was session-only and expired after restart. Enter it again and save.'
           : 'Provider not configured. Choose a provider, add your API key, and test the connection.';
     }
     if ($('#provider-detected-base')) {
-      $('#provider-detected-base').textContent = this.providerBase || baseUrl || 'Not connected';
+      $('#provider-detected-base').textContent = this.providerBase || 'Not connected';
     }
-    if ($('#provider-base-url') && meta.kind === 'custom' && baseUrl) $('#provider-base-url').value = baseUrl;
-    if ($('#provider-model') && meta.kind === 'custom' && model) $('#provider-model').value = model;
-    if ($('#provider-api-key')) {
-      $('#provider-api-key').placeholder = meta.hasKey
-        ? 'Key stored — leave blank to keep it'
-        : meta.kind === 'custom' ? 'Your provider API key' : 'sm_live_…';
-    }
-    if (meta.kind === 'custom' || configured) this.selectedModel = model || this.selectedModel;
+    this.renderKeyPlaceholder();
     // The local-first shell reuses the sidebar identity slot for the open folder and provider state.
     this.renderSidebarFolder();
     if ($('#user-email')) $('#user-email').textContent = configured ? model : 'Provider not configured';
@@ -767,39 +831,95 @@ const app = {
     action.dataset.noticeAction = missing ? 'new-task' : 'open';
   },
 
-  // Chat-capable, available models for the Assistant's "Model for chat" picker.
-  modelOptions() {
-    const catalog = this.providerCatalog || [];
-    return catalog.filter((model) => model.available !== false && model.chat !== false);
+  // Chat-capable, available models for the Assistant's "Model for chat" picker: those of the
+  // endpoint the form shows (saved, or found by its last Test connection). After the type or the
+  // base URL changes, the list belongs to another endpoint and none are offered until a new test.
+  formModelOptions() {
+    const source = this.formCatalogFor;
+    const kind = this.providerKindValue();
+    if (!source || source.kind !== kind) return [];
+    const typed = $('#provider-base-url')?.value;
+    if (kind === 'custom' && typed !== undefined && !sameBaseUrl(typed, source.baseUrl)) return [];
+    return (Array.isArray(this.formCatalog) ? this.formCatalog : [])
+      .filter((model) => model.available !== false && model.chat !== false);
+  },
+
+  // The model the form would save: the one picked in the list, or for a custom endpoint the
+  // exact ID typed (no list, or "Other model ID…").
+  formModel() {
+    const custom = this.providerKindValue() === 'custom';
+    const options = this.formModelOptions();
+    if (custom && (this.modelOther || !options.length)) return $('#provider-model')?.value.trim() || '';
+    return options.some((model) => model.id === this.selectedModel) ? this.selectedModel : '';
   },
 
   renderModelSelect() {
+    const custom = this.providerKindValue() === 'custom';
+    const options = this.formModelOptions();
+    const typing = custom && (this.modelOther || !options.length);
+    // ScaleMax always lists its models (after Test connection); a custom endpoint shows the list
+    // once a test found models, and the exact-ID field when it listed none or "Other" is chosen.
+    if ($('#provider-model-select-group')) $('#provider-model-select-group').hidden = custom && !options.length;
+    if ($('#provider-model-text-group')) $('#provider-model-text-group').hidden = !typing;
+    if ($('#provider-model-hint')) {
+      $('#provider-model-hint').textContent = options.length
+        ? 'Type the exact model ID the endpoint expects.'
+        : 'Test the connection to list the endpoint\'s models, or type the exact ID it expects.';
+    }
     const button = $('#model-picker-button');
     const list = $('#model-picker-list');
     if (!button || !list) return;
-    const options = this.modelOptions();
-    if (this.selectedModel && !options.some((model) => model.id === this.selectedModel)) {
-      this.selectedModel = '';
+    const other = custom && this.modelOther && options.length > 0;
+    // The choice is kept while another endpoint is shown; formModel() only uses a listed one.
+    const chosen = other ? null : options.find((model) => model.id === this.selectedModel) || null;
+    if (chosen) {
+      const name = chosen.displayName || chosen.id;
+      // The space only separates the two in the accessible name (a flex box drops it on screen).
+      button.replaceChildren(element('span', 'picker-button-name', name),
+        ...(name !== chosen.id ? [' ', element('span', 'picker-button-id', chosen.id)] : []));
+    } else {
+      button.textContent = other ? 'Other model ID…'
+        : (options.length ? 'Choose a model' : 'Test the connection to load models');
     }
-    const active = this.selectedModel || this.provider?.model || '';
-    const chosen = options.find((model) => model.id === active);
-    if (chosen) this.selectedModel = chosen.id;
-    button.textContent = chosen
-      ? (chosen.displayName && chosen.displayName !== chosen.id
-        ? `${chosen.displayName} — ${chosen.id}` : chosen.id)
-      : (options.length ? 'Choose a model' : 'Test the connection to load models');
     button.disabled = options.length === 0;
-    list.replaceChildren(...options.map((model) => {
+    const nodes = options.map((model) => {
       const option = element('button', 'picker-option');
       option.dataset.modelId = model.id;
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(model.id === chosen?.id));
-      option.append(
-        element('span', 'picker-option-name', model.displayName || model.id),
-        element('span', 'picker-option-id', model.id),
-      );
+      const name = model.displayName || model.id;
+      // The name the endpoint gives, and the ID once below it (not twice when it gives none).
+      option.append(element('span', 'picker-option-name', name));
+      if (name !== model.id) option.append(' ', element('span', 'picker-option-id', model.id));
       return option;
-    }));
+    });
+    if (custom && options.length) {
+      const option = element('button', 'picker-option picker-option-other');
+      option.dataset.modelOther = 'true';
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(other));
+      option.append(element('span', 'picker-option-name', 'Other model ID…'), ' ',
+        element('span', 'picker-option-note', 'Type an ID the endpoint does not list'));
+      nodes.push(option);
+    }
+    list.replaceChildren(...nodes);
+  },
+
+  // Picks a listed model, or "Other model ID…" (the ID field, focused).
+  pickFormModel(option) {
+    this.markFormEdited();
+    if (option.dataset.modelOther === 'true') {
+      this.modelOther = true;
+      const input = $('#provider-model');
+      if (input && !input.value.trim() && this.selectedModel) input.value = this.selectedModel;
+    } else {
+      this.modelOther = false;
+      this.selectedModel = option.dataset.modelId;
+    }
+    this.toggleModelPicker(false);
+    this.renderModelSelect();
+    if (this.modelOther) $('#provider-model')?.focus();
+    else $('#model-picker-button')?.focus();
   },
 
   toggleModelPicker(open) {
@@ -807,6 +927,7 @@ const app = {
     const button = $('#model-picker-button');
     if (!list || !button) return;
     const next = open ?? list.hidden;
+    if (!next && list.hidden) return;
     list.hidden = !next;
     button.setAttribute('aria-expanded', String(next));
     // The list opens in the top layer (a manual popover), so the Assistant page's scrolling and
@@ -817,6 +938,31 @@ const app = {
       else if (!next && shown) list.hidePopover();
     }
     if (next) this.placeModelPicker();
+  },
+
+  // Arrow keys move through the options, Home/End jump, Escape closes back to the button.
+  modelPickerKeys(event) {
+    const list = $('#model-picker-list');
+    const button = $('#model-picker-button');
+    if (!list || !button) return;
+    if (event.key === 'Escape' && !list.hidden) {
+      event.preventDefault();
+      this.toggleModelPicker(false);
+      button.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = [...list.querySelectorAll('.picker-option')];
+    if (!options.length) return;
+    event.preventDefault();
+    if (list.hidden) this.toggleModelPicker(true);
+    const at = options.indexOf(document.activeElement);
+    const selected = options.findIndex((option) => option.getAttribute('aria-selected') === 'true');
+    const from = at >= 0 ? at : (selected >= 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp') ? selected : -1);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+      : event.key === 'ArrowDown' ? (at < 0 && from >= 0 ? from : Math.min(options.length - 1, from + 1))
+        : (at < 0 && from >= 0 ? from : Math.max(0, from - 1));
+    options[index]?.focus();
   },
 
   // Under the button, or above it when there is more room there; never past the window, scrolling
@@ -842,17 +988,38 @@ const app = {
     list.style.setProperty('width', `${Math.round(rect.width)}px`);
   },
 
+  // Says what is missing before Save, next to the field that needs it.
+  formProblem(message, focus) {
+    this.showToast(message);
+    if ($('#provider-status')) $('#provider-status').textContent = message;
+    focus?.focus();
+  },
+
   async saveProvider() {
     const bridge = this.getProviderBridge();
     if (!bridge?.save) { this.showToast('Provider connections require the desktop app'); return; }
     const kind = this.providerKindValue();
-    const model = kind === 'custom' ? ($('#provider-model')?.value.trim() || '') : (this.selectedModel || '');
+    const options = this.formModelOptions();
+    const model = this.formModel();
+    if (!model) {
+      if (kind === 'custom' && !options.length) {
+        this.formProblem('Type the model ID, or Test connection to list the endpoint\'s models.', $('#provider-model'));
+      } else if (kind === 'custom' && this.modelOther) {
+        this.formProblem('Type the model ID, or pick one of the listed models.', $('#provider-model'));
+      } else if (!options.length) {
+        this.formProblem('Test the connection first: it loads the models to choose from.', $('#provider-test'));
+      } else {
+        this.formProblem('Choose a model to use for chat.', $('#model-picker-button'));
+      }
+      return;
+    }
     const input = {
       kind,
       model,
       // Kept for the stored record's shape: the chat model is the only "enabled" one.
-      enabledModels: kind === 'custom' || !model ? [] : [model],
-      models: this.providerCatalog || [],
+      enabledModels: kind === 'custom' ? [] : [model],
+      // The list the form shows belongs to this endpoint (formModelOptions checked it).
+      models: options.length ? this.formCatalog : [],
     };
     if (kind === 'custom') input.baseUrl = $('#provider-base-url')?.value.trim() || '';
     else if (this.providerBase) input.baseUrl = this.providerBase;
@@ -869,11 +1036,10 @@ const app = {
     this.provider = result.data;
     this.providerCatalog = Array.isArray(result.data.models) ? result.data.models : this.providerCatalog;
     this.enabledModels = new Set(Array.isArray(result.data.enabledModels) ? result.data.enabledModels : []);
-    this.providerBase = result.data.baseUrl || this.providerBase;
-    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.syncProviderForm();
     this.renderProviderStatus();
     this.renderProviderModels();
-    this.showToast('Provider settings saved');
+    this.showToast(`Provider saved: ${result.data.profileName || 'provider'} · ${result.data.model}`);
     void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
@@ -894,6 +1060,7 @@ const app = {
     if (!bridge?.discover) { this.showToast('Provider connections require the desktop app'); return; }
     const button = $('#provider-test');
     if (button) button.disabled = true;
+    this.markFormEdited();
     this.setTestDot('pending');
     if ($('#provider-status')) $('#provider-status').textContent = 'Testing connection and loading models…';
     try {
@@ -901,11 +1068,15 @@ const app = {
       const apiKey = $('#provider-api-key')?.value ?? '';
       if (apiKey.trim()) input.apiKey = apiKey.trim();
       if (input.kind === 'custom') input.baseUrl = $('#provider-base-url')?.value.trim() || '';
+      const where = input.kind === 'custom' ? hostOf(input.baseUrl) : 'ScaleMax';
+      // What the user picked or typed before testing again stays chosen when the endpoint lists it.
+      const wanted = this.formModel() || this.selectedModel || this.provider?.model || '';
       let slowTimer;
       const result = await Promise.race([
         bridge.discover(input),
         new Promise((resolve) => {
-          slowTimer = setTimeout(() => resolve({ ok: false, error: { message: 'The provider did not respond in time.' } }), 20000);
+          slowTimer = setTimeout(() => resolve({ ok: false, error: {
+            message: `${where} didn't answer within ${TEST_TIMEOUT_MS / 1000} s. Check that the server is running and reachable.` } }), TEST_TIMEOUT_MS);
         }),
       ]).finally(() => clearTimeout(slowTimer));
       if (!result?.ok) {
@@ -915,26 +1086,26 @@ const app = {
         this.showToast(message);
         return;
       }
-      this.providerBase = result.data.baseUrl;
-      this.providerCatalog = Array.isArray(result.data.models) ? result.data.models : [];
-      // Keep the chosen model if the provider still offers it; otherwise pick the first chat model.
-      const options = this.modelOptions();
-      const keep = options.find((model) => model.id === (this.selectedModel || this.provider?.model));
-      const first = keep || options[0];
+      if (result.data.kind === 'scalemax') {
+        this.providerBase = result.data.baseUrl;
+        if ($('#provider-detected-base')) $('#provider-detected-base').textContent = result.data.baseUrl;
+      }
+      this.formCatalog = Array.isArray(result.data.models) ? result.data.models : [];
+      this.formCatalogFor = { kind: result.data.kind, baseUrl: result.data.baseUrl };
+      // The previous choice when the endpoint still lists it, else its first chat model, so Save
+      // works right away. An exact ID typed for a custom endpoint that it does not list is kept.
+      const options = this.formModelOptions();
+      const keep = options.find((model) => model.id === wanted);
+      const typedOther = result.data.kind === 'custom' && !keep && Boolean($('#provider-model')?.value.trim());
+      const first = keep || (typedOther ? null : options.find((model) => model.chat === true) || options[0]);
+      this.modelOther = typedOther;
       this.selectedModel = first ? first.id : '';
-      this.enabledModels = new Set(first ? [first.id] : []);
-      this.provider = {
-        ...(this.provider || {}),
-        kind: result.data.kind,
-        baseUrl: result.data.baseUrl,
-        models: this.providerCatalog,
-        enabledModels: [...this.enabledModels],
-      };
-      this.renderProviderModels();
-      this.renderProviderStatus();
-      const count = this.providerCatalog.length;
+      this.renderModelSelect();
+      const count = this.formCatalog.length;
+      const chosenName = first ? (first.displayName || first.id) : '';
       if ($('#provider-status')) {
-        $('#provider-status').textContent = `Connection succeeded — ${count} model${count === 1 ? '' : 's'} found at ${result.data.baseUrl}.`;
+        $('#provider-status').textContent = `Connection succeeded — ${count} model${count === 1 ? '' : 's'} found at ${result.data.baseUrl}.`
+          + (first ? ` ${chosenName} is selected; Save provider to use it.` : typedOther ? ' Save provider to use the model ID you typed.' : '');
       }
       this.setTestDot('ok');
       this.showToast('Provider connection succeeded');
@@ -952,8 +1123,8 @@ const app = {
     this.provider = result.data;
     this.providerCatalog = [];
     this.enabledModels = new Set();
-    this.providerBase = '';
-    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.syncProviderForm();
+    this.setTestDot('');
     this.renderProviderStatus();
     this.renderProviderModels();
     this.showToast('Provider cleared');
@@ -973,18 +1144,32 @@ const app = {
       event.preventDefault();
       void this.clearProvider();
     });
-    $('#provider-kind')?.addEventListener('change', () => this.applyProviderKind());
+    $('#provider-kind')?.addEventListener('change', () => {
+      this.markFormEdited();
+      this.applyProviderKind();
+    });
+    // A new base URL is another endpoint: its models are listed after a test of their own.
+    $('#provider-base-url')?.addEventListener('input', () => {
+      this.markFormEdited();
+      this.renderKeyPlaceholder();
+      this.renderModelSelect();
+    });
+    for (const selector of ['#provider-api-key', '#provider-model']) {
+      $(selector)?.addEventListener('input', () => this.markFormEdited());
+    }
     $('#model-picker-button')?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       this.toggleModelPicker();
     });
+    $('#model-picker')?.addEventListener('keydown', (event) => this.modelPickerKeys(event));
     $('#model-picker-list')?.addEventListener('click', (event) => {
-      const option = event.target.closest('.picker-option[data-model-id]');
-      if (!option) return;
-      this.selectedModel = option.dataset.modelId;
-      this.toggleModelPicker(false);
-      this.renderModelSelect();
+      const option = event.target.closest('.picker-option');
+      if (option) this.pickFormModel(option);
+    });
+    // Leaving the picker with Tab closes it.
+    $('#model-picker')?.addEventListener('focusout', (event) => {
+      if (!event.relatedTarget || !event.relatedTarget.closest?.('#model-picker')) this.toggleModelPicker(false);
     });
     document.addEventListener('click', (event) => {
       if (!event.target.closest('#model-picker')) this.toggleModelPicker(false);
