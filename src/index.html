@@ -101,6 +101,13 @@
 
       <main id="main-content" tabindex="-1">
         <div id="global-error" class="notice danger-notice" role="alert" aria-atomic="true" hidden></div>
+        <!-- A tool call of a task that is not on screen (or of an automation) waits here until the
+             user reviews it (src/composer-ui.js syncApprovalPrompt). It never takes the keyboard focus. -->
+        <div id="approval-notice" class="approval-notice" role="status" hidden>
+          <span class="sm-state-tag approval-notice-tag" data-state="waiting" aria-hidden="true">Waiting for you</span>
+          <span id="approval-notice-text" class="approval-notice-text"></span>
+          <button id="approval-notice-review" class="button secondary compact approval-notice-review" type="button" aria-haspopup="dialog" aria-controls="tool-approval-dialog" aria-describedby="approval-notice-text">Review</button>
+        </div>
 
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
@@ -862,15 +869,21 @@
     </div>
   </dialog>
 
+  <!-- Asks before a tool call (src/composer-ui.js). The focus starts on the heading, never on a
+       button, and Enter and Space do nothing for a moment after a prompt appears, so typing
+       cannot answer it. The preview shows the call readably; the raw arguments stay one click away. -->
   <dialog id="tool-approval-dialog" class="consent-dialog" aria-labelledby="approval-title" aria-describedby="approval-summary">
     <div class="dialog-header">
-      <div><span id="approval-eyebrow" class="dialog-context">Tool call</span><h2 id="approval-title">Allow this tool call?</h2></div>
+      <div><span id="approval-eyebrow" class="dialog-context">Tool call</span><h2 id="approval-title" tabindex="-1">Allow this tool call?</h2></div>
       <span id="approval-queue" class="badge" hidden></span>
     </div>
-    <div class="dialog-body">
+    <div id="approval-body" class="dialog-body">
       <p id="approval-summary" class="body-copy"></p>
-      <span class="small-label">Arguments</span>
-      <pre id="approval-arguments" class="code-output approval-arguments"></pre>
+      <div id="approval-preview" class="approval-preview"></div>
+      <details id="approval-raw" class="approval-raw">
+        <summary>Show raw arguments</summary>
+        <pre id="approval-arguments" class="code-output approval-arguments"></pre>
+      </details>
       <div class="button-row consent-actions">
         <button id="approval-deny" class="button secondary" type="button">Deny</button>
         <button id="approval-all" class="button secondary" type="button">Allow all in this reply</button>

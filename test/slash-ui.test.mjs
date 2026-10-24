@@ -181,3 +181,65 @@ test('the menu: "/" opens it, arrows move, Escape closes, Enter runs or complete
   assert.match(menu.children[0].textContent, /No command by that name/);
   assert.equal(key('Enter').defaultPrevented, false);
 });
+
+test('the menu is a manual popover over everything, placed inside the window: below the box, or above it near the bottom', async () => {
+  const input = fakeNode('textarea');
+  const parent = fakeNode();
+  input.parentElement = parent;
+  let rect = { top: 300, bottom: 372, left: 100, right: 700, width: 600, height: 72 };
+  input.getBoundingClientRect = () => rect;
+  const menu = fakeNode();
+  menu.hidden = true;
+  const calls = [];
+  let open = false;
+  const style = new Map();
+  Object.assign(menu, {
+    scrollHeight: 260,
+    style: { setProperty: (name, value) => style.set(name, value), removeProperty: (name) => style.delete(name) },
+    hasAttribute: (name) => menu.getAttribute(name) !== null,
+    showPopover() { calls.push('show'); open = true; },
+    hidePopover() { calls.push('hide'); open = false; },
+    matches: (selector) => selector === ':popover-open' && open,
+  });
+  const nodes = { '#chat-input': input, '#slash-menu': menu };
+  globalThis.document = { querySelector: (selector) => nodes[selector] || null, createElement: (tag) => fakeNode(tag) };
+  window.innerHeight = 700;
+  window.innerWidth = 1000;
+  const resize = [];
+  window.addEventListener = (type, listener) => { if (type === 'resize') resize.push(listener); };
+  bindSlashUi({ currentTask: () => ({ folder: { name: 'p', path: '/p' } }), workspace: { root: '/p' }, updateSendEnabled() {}, handleSend: async () => true });
+  assert.equal(menu.getAttribute('popover'), 'manual', 'it never takes the focus from the message box');
+  const type = async (value) => {
+    input.value = value;
+    input.selectionStart = input.selectionEnd = value.length;
+    for (const listener of input.listeners.input) listener();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const px = (name) => Number.parseFloat(style.get(name));
+
+  // The box in the middle of the window: the menu opens below it, as tall as it needs.
+  await type('/');
+  assert.deepEqual(calls, ['show']);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.side, 'below');
+  assert.equal(px('top'), 376);
+  assert.equal(style.has('bottom'), false);
+  assert.ok(px('max-height') <= 700 - 372 - 4 - 8);
+  assert.equal(px('left'), 112);
+  assert.equal(px('width'), 576);
+
+  // Near the bottom of the window: it opens above the box and never runs off the window.
+  rect = { top: 560, bottom: 632, left: 100, right: 700, width: 600, height: 72 };
+  for (const listener of resize) listener();
+  assert.equal(menu.dataset.side, 'above');
+  assert.equal(px('bottom'), 700 - 560 + 4);
+  assert.equal(style.has('top'), false);
+  assert.ok(px('max-height') <= 280 && px('max-height') <= 560 - 4 - 8);
+  assert.deepEqual(calls, ['show'], 'shown once, only moved');
+
+  // Escape closes it.
+  const event = { key: 'Escape', target: input, shiftKey: false, isComposing: false, preventDefault() {}, stopPropagation() {} };
+  for (const listener of parent.listeners.keydown) listener(event);
+  assert.deepEqual(calls, ['show', 'hide']);
+  assert.equal(menu.hidden, true);
+});
