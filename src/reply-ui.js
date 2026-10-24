@@ -17,6 +17,7 @@
 import { renderMarkdown } from './markdown.js';
 import {
   toolActivity, normalizeSteps, stepSummary, normalizeChanges, normalizeTodos, normalizeMetrics, metricsLabel, durationText, AGENT_KINDS,
+  STEP_OUTCOMES, stepOutcomeLabel, stepTitleForm,
 } from './domain.mjs';
 import { renderMascot, mascotSpec, setMascotState, companionStateFor, mascotCaption } from './mascot.js';
 
@@ -26,8 +27,12 @@ const MAX_LIVE_OUTPUT = 16 * 1024;
 const MAX_LIVE_TEXT = 1024 * 1024;
 // Closer than this to the bottom, the transcript follows the reply as it grows.
 const FOLLOW_PX = 48;
-const STATE_TEXT = { running: 'running', approval: 'waiting for approval', ok: 'done', error: 'failed', stopped: 'stopped' };
-const ICON_PATHS = { ok: 'm5 12.5 4.5 4.5L19 7.5', error: 'M7 7l10 10M17 7 7 17', stopped: 'M8 8h8v8H8z' };
+const STATE_TEXT = { running: 'running', approval: 'waiting for approval', ok: 'done', error: 'failed', stopped: 'stopped', declined: 'not run' };
+// 'declined': a call that was not run on purpose (denied, Plan, a hook): a neutral dash, not a cross.
+const ICON_PATHS = { ok: 'm5 12.5 4.5 4.5L19 7.5', error: 'M7 7l10 10M17 7 7 17', stopped: 'M8 8h8v8H8z', declined: 'M7 12h10' };
+// The tense a step's title takes in each state: what it will do while it waits for approval (or
+// never ran), what it is doing while it runs, what it did once done (domain.mjs stepTitleForm).
+const TITLE_FORMS = { approval: 'intent', running: 'progressive', stopped: 'intent', declined: 'intent' };
 const AGENT_STATUS_TEXT = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped' };
 const MAX_AGENT_DESCRIPTION = 80;
 const MAX_AGENT_ERROR = 300;
@@ -112,12 +117,14 @@ export function applyProgress(reply, event, now = Date.now()) {
       reply.current = null;
       reply.reasoningDone = replyReasoning(reply);
       reply.reasoningRound = '';
+      reply.reasoningKept = '';
       return { kind: 'status' };
     case 'delta':
     case 'text-set': {
       if (typeof event.text !== 'string') return null;
       const replace = event.phase === 'text-set';
       if (event.kind === 'reasoning') {
+        if (replace && !event.text && reply.reasoningRound) reply.reasoningKept = reply.reasoningRound;
         reply.reasoningRound = (replace ? event.text : reply.reasoningRound + event.text).slice(0, MAX_LIVE_TEXT);
         return { kind: 'reasoning' };
       }
@@ -128,6 +135,9 @@ export function applyProgress(reply, event, now = Date.now()) {
         reply.items.push(reply.current);
         added = true;
       }
+      // A retry starts the round again with nothing (text-set ''): what was written so far is kept
+      // apart, so a reply that then fails still has it (partialReply).
+      if (replace && !event.text && reply.current.text) reply.current.kept = reply.current.text;
       reply.current.text = (replace ? event.text : reply.current.text + event.text).slice(0, MAX_LIVE_TEXT);
       reply.phase = 'writing';
       reply.activity = null;
@@ -170,7 +180,11 @@ export function applyProgress(reply, event, now = Date.now()) {
       if (!step) return null;
       const duration = stepDuration(step, at);
       if (duration !== null) step.durationMs = duration;
-      step.state = event.ok === true ? 'ok' : 'error';
+      // Not run on purpose (lib/tool-loop.cjs `outcome`): denied, refused in Plan, blocked by a hook.
+      const outcome = event.ok !== true && STEP_OUTCOMES.includes(event.outcome) ? event.outcome : '';
+      step.state = event.ok === true ? 'ok' : outcome ? 'declined' : 'error';
+      if (outcome) step.outcome = outcome;
+      if (outcome === 'hook' && typeof event.hook === 'string') step.hook = event.hook.slice(0, 60);
       reply.phase = 'working';
       reply.activity = null;
       return { kind: 'step', item: step };
@@ -181,9 +195,14 @@ export function applyProgress(reply, event, now = Date.now()) {
       return { kind: 'todos' };
     }
     case 'retry':
-      // The provider failed part way and the round is asked again (its text was reset already).
+      // The provider failed and the round is asked again (any text it showed was reset already):
+      // `attempt` of `of` retries, when main says.
       reply.phase = 'retrying';
       reply.activity = null;
+      reply.retry = {
+        attempt: Number.isSafeInteger(event.attempt) && event.attempt > 0 ? event.attempt : 1,
+        of: Number.isSafeInteger(event.of) && event.of > 0 ? event.of : 0,
+      };
       return { kind: 'status' };
     case 'subagent': {
       // The subagent of the agent_task step `callId`: how it is doing, or one of its own progress
@@ -245,7 +264,8 @@ export function statusText(reply) {
   switch (reply.phase) {
     case 'approval':
       if (!activity) return 'Waiting for your approval…';
-      return activity.friendly ? `Waiting for your approval: ${activity.text.toLowerCase()}` : `Waiting for your approval · ${activity.text}`;
+      // What it will do once allowed ("…to run a command"), not what it is doing.
+      return activity.friendly ? `Waiting for your approval to ${lowerFirst(stepTitleForm(activity.text, 'intent'))}` : `Waiting for your approval · ${activity.text}`;
     case 'tool':
       if (!activity) return 'Working…';
       return activity.friendly ? `${activity.text}…` : `Running ${activity.text}…`;
@@ -255,14 +275,20 @@ export function statusText(reply) {
       return 'Writing…';
     case 'working':
       return 'Working…';
-    case 'retrying':
+    case 'retrying': {
+      const retry = reply.retry;
+      if (retry?.of) return `Retrying (${Math.min(retry.attempt, retry.of)} of ${retry.of})…`;
       return 'The provider did not answer in full; trying again…';
+    }
     default:
       if (reply.thinking) return 'Thinking…';
       return reply.items.length ? 'Working…' : 'Writing…';
   }
 }
 
+function lowerFirst(text) {
+  return text ? text[0].toLowerCase() + text.slice(1) : text;
+}
 function textNode(item) {
   const node = element('div', 'msg-text md live-text');
   node.append(renderMarkdown(item.text));
@@ -289,13 +315,30 @@ function stepTime(step) {
   const text = Number.isSafeInteger(step.durationMs) ? durationText(step.durationMs) : '';
   return text ? element('span', 'reply-step-time', text) : null;
 }
+/**
+ * "Edit src/a.js — waiting for your approval", "Running npm test", "Edited src/a.js",
+ * "Edit src/a.js — Denied by you": the title in the tense of its state, and what kept a call
+ * from running in place of a failure.
+ */
 function stepRow(step) {
   const row = element('div', 'reply-step-row');
-  row.append(stepIcon(step.state), element('span', 'reply-step-title', step.title),
-    element('span', 'sr-only', `, ${STATE_TEXT[step.state] || ''}`));
+  const title = element('span', 'reply-step-title', stepTitleForm(step.title, TITLE_FORMS[step.state] || 'past'));
+  const why = step.state === 'approval' ? 'waiting for your approval'
+    : step.state === 'declined' ? stepOutcomeLabel(step.outcome, step.hook) : '';
+  // A hook that blocked a call says so in its own title already ("… (blocked, 0.2s)").
+  const shown = Boolean(why) && step.outcome !== 'blocked';
+  if (shown) title.append(element('span', 'reply-step-why', ` — ${why}`));
+  row.append(stepIcon(step.state), title);
+  if (!shown) row.append(element('span', 'sr-only', `, ${why ? why.toLowerCase() : STATE_TEXT[step.state] || ''}`));
   const time = stepTime(step);
   if (time) row.append(time);
   return row;
+}
+// How a finished step shows: done, failed, stopped, or not run on purpose.
+function finishedState(step) {
+  if (step.stopped) return 'stopped';
+  if (step.ok) return 'ok';
+  return step.outcome ? 'declined' : 'error';
 }
 // A subagent's teammate: a small head printed like the companion, in the subagent's state.
 // `settled`: drawn again in a state it already had, so no entrance motion.
@@ -565,6 +608,11 @@ export function tickReply(reply) {
   }
 }
 
+// Why a call was not run (denied, Plan, a hook), as fields to spread into a kept step.
+function outcomeFields(item) {
+  if (item.state !== 'declined' || !item.outcome) return {};
+  return { outcome: item.outcome, ...(item.hook ? { hook: item.hook } : {}) };
+}
 // The running time a stopped step keeps, as a field to spread into it.
 function durationField(item, now) {
   const duration = stepDuration(item, now);
@@ -578,6 +626,7 @@ function stoppedAgent(agent, now) {
     : {
       type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool,
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
+      ...outcomeFields(item),
       ...durationField(item, now),
     }));
   const status = agent.status === 'queued' || agent.status === 'running' ? 'stopped' : agent.status;
@@ -592,17 +641,19 @@ export function partialReply(reply, now = Date.now()) {
   if (!reply || reply.kind !== 'chat') return null;
   const items = reply.items;
   const last = items[items.length - 1];
-  const text = last?.type === 'text' ? last.text.trim() : '';
+  // A retry that started the round again keeps what was written before it (applyProgress).
+  const text = last?.type === 'text' ? (last.text.trim() || String(last.kept || '').trim()) : '';
   const earlier = last?.type === 'text' ? items.slice(0, -1) : items;
   const steps = normalizeSteps(earlier.map((item) => (item.type === 'text'
     ? { type: 'note', text: item.text }
     : {
       type: 'tool', title: item.title, ok: item.state === 'ok', server: item.server, tool: item.tool, output: item.output,
       ...(item.state === 'running' || item.state === 'approval' ? { stopped: true } : {}),
+      ...outcomeFields(item),
       ...durationField(item, now),
       ...(item.agent ? { agent: stoppedAgent(item.agent, now) } : {}),
     })));
-  const reasoning = replyReasoning(reply);
+  const reasoning = [reply.reasoningDone, reply.reasoningRound || reply.reasoningKept || ''].filter(Boolean).join('\n\n');
   const changes = reply.changes || null;
   const todos = normalizeTodos(reply.todos);
   if (!text && !steps.length && !reasoning && !changes && !todos.length) return null;
@@ -643,7 +694,7 @@ export function timedSteps(steps, reply, now = Date.now()) {
  */
 function finishedAgentNode(step) {
   const agent = step.agent;
-  const state = step.stopped || agent.status === 'stopped' ? 'stopped' : step.ok ? 'ok' : 'error';
+  const state = agent.status === 'stopped' ? 'stopped' : finishedState(step);
   const node = element('details', 'reply-step reply-agent');
   node.dataset.state = state;
   const head = element('summary', 'reply-step-summary');
@@ -651,7 +702,7 @@ function finishedAgentNode(step) {
     element('span', 'reply-agent-meta', agentMeta(agent)));
   const list = renderMessageSteps(agent.steps).querySelector('.msg-steps-list') || element('div', 'msg-steps-list');
   list.classList.add('reply-agent-items');
-  if (!step.ok && step.preview) list.append(element('div', 'reply-step-error', step.preview));
+  if (state === 'error' && step.preview) list.append(element('div', 'reply-step-error', step.preview));
   node.append(head, list);
   return node;
 }
@@ -661,7 +712,8 @@ export function renderMessageSteps(value) {
   const steps = normalizeSteps(value);
   const details = element('details', 'msg-steps');
   const summary = element('summary', 'msg-steps-summary', stepSummary(steps));
-  const failed = steps.filter((step) => step.type === 'tool' && !step.ok && !step.stopped).length;
+  // Calls nobody let run (denied, Plan, a hook) are not failures.
+  const failed = steps.filter((step) => step.type === 'tool' && finishedState(step) === 'error').length;
   if (failed) summary.append(element('span', 'msg-steps-failed', ` · ${failed} failed`));
   const list = element('div', 'msg-steps-list');
   for (const step of steps) {
@@ -675,7 +727,7 @@ export function renderMessageSteps(value) {
       list.append(finishedAgentNode(step));
       continue;
     }
-    const state = step.stopped ? 'stopped' : step.ok ? 'ok' : 'error';
+    const state = finishedState(step);
     const node = element(step.output ? 'details' : 'div', 'reply-step');
     node.dataset.state = state;
     const row = stepRow({ ...step, state });
@@ -685,8 +737,9 @@ export function renderMessageSteps(value) {
       node.append(head, outputNode(step.output));
     } else {
       node.append(row);
-      // A failed call says why.
-      if (!step.ok && step.preview) node.append(element('div', 'reply-step-error', step.preview));
+      // A failed call says why; a hook that blocked one says what it said, without alarm.
+      if (state === 'error' && step.preview) node.append(element('div', 'reply-step-error', step.preview));
+      else if (step.outcome === 'blocked' && step.preview) node.append(element('div', 'reply-step-why-detail', step.preview));
     }
     list.append(node);
   }

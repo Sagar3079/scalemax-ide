@@ -38,6 +38,8 @@ const { default: app } = await import('../src/app.js');
 const { bindComposerContext } = await import('../src/context-ui.js');
 const { applyProgress } = await import('../src/reply-ui.js');
 const { openFileInTab, saveActiveTab, resetTabs } = await import('../src/workspace-ui.js');
+// setup() quiets these; the tests of the Send button use the real one.
+const realUpdateSendEnabled = app.updateSendEnabled;
 
 const input = nodes['#chat-input'];
 const ROOT = '/Users/you/project';
@@ -511,5 +513,118 @@ test('the companion switch hides every mascot and is saved with the settings', (
     delete nodes['#companion-toggle'];
     delete document.body;
     app.settings.companion = true;
+  }
+});
+
+// ---- A reply that fails, Retry, and no model -------------------------------------------------
+
+const HTTP_500 = { ok: false, error: { code: 'PROVIDER_ERROR', message: 'The provider refused the request (HTTP 500): Internal server error (stub)' } };
+
+test('a reply that fails before writing anything stays in the task as failed, and Retry asks again without a second message', async () => {
+  const answers = [HTTP_500, { ok: true, data: { text: 'Fixed.' } }];
+  const { task, sent, toasts } = setup({ send: () => answers.shift() });
+  input.value = 'Fix the date bug';
+  assert.equal(await app.handleSend(), true);
+  assert.deepEqual(task.messages.map((message) => [message.role, message.text, message.interrupted]), [['user', 'Fix the date bug', undefined], ['assistant', '', 'failed']]);
+  assert.equal(task.messages[1].notice, 'The reply ended early: The provider refused the request (HTTP 500): Internal server error (stub)');
+  assert.deepEqual(toasts, [], 'the reply says why itself, not a toast that disappears');
+  // Finished while away: the sidebar says FAILED, not DONE.
+  app.unreadTasks.add(task.id);
+  app.renderTaskRow(task);
+  assert.equal(app.taskMoods.get(task.id), 'error');
+  app.unreadTasks.delete(task.id);
+  // Retry: the same request, the user's message once.
+  assert.equal(await app.retryReply(task.id), true);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1].messages, [{ role: 'user', content: 'Fix the date bug' }], 'a failure that never got going is left out');
+  assert.deepEqual(task.messages.map((message) => message.role), ['user', 'assistant', 'assistant']);
+  assert.equal(task.messages[2].text, 'Fixed.');
+  assert.equal(await app.retryReply(task.id), false, 'nothing failed any more');
+  assert.equal(sent.length, 2);
+});
+
+test('text a failing reply wrote before a retry reset it is kept, and the next request tells the model', async () => {
+  let calls = 0;
+  const { task, sent } = setup({
+    send: async () => {
+      calls += 1;
+      if (calls > 1) return { ok: true, data: { text: 'Go on.' } };
+      const reply = [...app.replies.values()][0];
+      for (const event of [
+        { phase: 'delta', kind: 'text', text: 'The deploy pipeline has three' },
+        { phase: 'text-set', kind: 'text', text: '' },
+        { phase: 'retry', attempt: 1, of: 3 },
+      ]) applyProgress(reply, event);
+      return { ok: false, error: { code: 'NETWORK', message: 'The provider could not be reached.' } };
+    },
+  });
+  input.value = 'Explain the deploy pipeline';
+  assert.equal(await app.handleSend(), true);
+  const failed = task.messages[1];
+  assert.deepEqual([failed.text, failed.interrupted, failed.notice], ['The deploy pipeline has three', 'failed', 'The reply ended early: The provider could not be reached.']);
+  input.value = 'Please continue';
+  assert.equal(await app.handleSend(), true);
+  assert.deepEqual(sent[1].messages.map((turn) => turn.role), ['user', 'assistant', 'user', 'user']);
+  assert.match(sent[1].messages[2].content, /^\[Note from ScaleMax, the app: your previous reply broke off because of a connection or provider error/);
+});
+
+test('Retry sends a custom command again as that command, and waits while the task is busy', async () => {
+  const answers = [HTTP_500, HTTP_500, { ok: true, data: { text: 'Done.' } }];
+  const { task, sent } = setup({ send: () => answers.shift() });
+  input.value = 'Fix issue 42 carefully.';
+  assert.equal(await app.handleSend({ command: 'fix' }), true);
+  assert.equal(task.messages[0].command, 'fix');
+  // Busy: another reply of this task runs, or older context is being compacted.
+  app.replies.set(task.id, { taskId: task.id, requestId: 'other' });
+  assert.equal(await app.retryReply(task.id), false);
+  app.replies.clear();
+  app.compactingTasks.add(task.id);
+  assert.equal(await app.retryReply(task.id), false);
+  app.compactingTasks.clear();
+  assert.equal(sent.length, 1);
+  // Failed again: still one user message, two failed replies, Retry on the newest.
+  assert.equal(await app.retryReply(task.id), true);
+  assert.equal(sent[1].command, 'fix');
+  assert.deepEqual(task.messages.map((message) => message.interrupted || message.role), ['user', 'failed', 'failed']);
+  assert.equal(await app.retryReply(task.id), true);
+  assert.deepEqual(sent[2].messages, [{ role: 'user', content: 'Fix issue 42 carefully.' }]);
+  assert.equal(task.messages.at(-1).text, 'Done.');
+});
+
+test('without a model the desktop app sends nothing: the draft stays, the task is untouched, and Enter says how to connect one', async () => {
+  const { task, sent, toasts } = setup();
+  delete task.folder;
+  app.provider = { configured: false };
+  window.scalemaxAPI.getPlatform = () => 'darwin';
+  input.value = 'Hi! Can you help me understand my project?';
+  assert.equal(await app.handleSend(), false);
+  assert.equal(await app.handleSend({ internal: true }), false, 'nor a message the app writes ("Run this plan")');
+  assert.equal(sent.length, 0);
+  assert.deepEqual(task.messages, [], 'no canned demo reply');
+  assert.equal(task.title, 'New Task');
+  assert.equal(task.folder, undefined, 'the task is not tied to the open folder');
+  assert.equal(input.value, 'Hi! Can you help me understand my project?');
+  assert.equal(Boolean(app.demoBusy), false);
+  // No prompt element in this page: it falls back to a toast.
+  assert.match(toasts[0], /Connect a model/);
+  // The prompt in the message box, and Send held while no model is connected.
+  const notice = fakeElement({ hidden: true });
+  const send = fakeElement();
+  nodes['#connect-model-notice'] = notice;
+  nodes['#send-btn'] = send;
+  try {
+    assert.equal(await app.handleSend(), false);
+    assert.equal(notice.hidden, false);
+    realUpdateSendEnabled.call(app);
+    assert.equal(send.disabled, true);
+    assert.match(send.title, /Connect a model/);
+    // Connected: the prompt goes and Send works again.
+    app.provider = { configured: true, model: 'model-a' };
+    realUpdateSendEnabled.call(app);
+    assert.equal(notice.hidden, true);
+    assert.equal(send.disabled, false);
+  } finally {
+    delete nodes['#connect-model-notice'];
+    delete nodes['#send-btn'];
   }
 });

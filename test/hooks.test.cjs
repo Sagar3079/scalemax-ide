@@ -142,6 +142,9 @@ test('PreToolUse: exit 2 blocks with stderr, JSON can block or allow, other exit
   assert.equal(exit2.reason, 'no writes outside src/');
   assert.match(exit2.steps[0].title, /\(blocked, /);
   assert.equal(exit2.steps[0].ok, false);
+  // Blocking is what it is for: its step says so (not a failure), and the run names the hook.
+  assert.equal(exit2.steps[0].outcome, 'blocked');
+  assert.equal(exit2.hook, 'echo "no writes outside src/" >&2; exit 2');
   const json = await hookSet(root, [hook('echo \'{"decision":"block","reason":"policy says no"}\'')]).run('PreToolUse', WRITE);
   assert.deepEqual([json.block, json.reason], [true, 'policy says no']);
   const allow = await hookSet(root, [hook('echo \'{"decision":"allow"}\'')]).run('PreToolUse', WRITE);
@@ -153,6 +156,7 @@ test('PreToolUse: exit 2 blocks with stderr, JSON can block or allow, other exit
   assert.deepEqual([broken.block, broken.allow], [false, false]);
   assert.match(broken.steps[0].title, /\(failed, /);
   assert.equal(broken.steps[0].ok, false);
+  assert.equal(broken.steps[0].outcome, undefined, 'a hook that failed is a failure');
   assert.equal(broken.steps[0].preview, 'broken');
   // The first hook that blocks ends the run: the next one never starts, and an allow before it
   // does not count.

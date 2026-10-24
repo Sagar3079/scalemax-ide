@@ -7,6 +7,7 @@ import {
   normalizeTodos, normalizeMessageImages, openTodos,
   automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
+  retryableReply,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps, renderTodoList,
@@ -68,6 +69,8 @@ const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 // A task works in one folder: chat waits until there is one, and a task's folder never changes
 // after its first message (see openFolderForTask).
 const NEEDS_FOLDER_HINT = 'Choose a project folder to start…';
+// The name of a custom slash command a user message was the prompt of (lib/slash-commands.cjs NAME).
+const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?::[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,2}$/;
 const CHAT_PLACEHOLDER = 'Describe an idea, ask a question, or plan your next step…';
 const UNSAVED_FILES = 'Save or close your unsaved files first.';
 // Error codes main reports for a folder that was moved or deleted (lib/workspace.cjs).
@@ -446,6 +449,7 @@ const app = {
         if (todos.length) normalized.todos = todos;
         const images = message.role === 'user' ? normalizeMessageImages(message.images) : [];
         if (images.length) normalized.images = images;
+        if (message.role === 'user' && typeof message.command === 'string' && COMMAND_NAME.test(message.command)) normalized.command = message.command;
         // Generated images and videos (files stay in the app's media folder).
         const media = normalizeMediaItems(message.media);
         if (media.length) normalized.media = media;
@@ -638,6 +642,53 @@ const app = {
     const model = this.provider?.model || '';
     if ($('#statusbar-model')) $('#statusbar-model').textContent = model || 'No model';
     renderModelButton(this);
+    this.renderModelSetup();
+  },
+
+  // ---- Without a model ------------------------------------------------------------------
+  // The desktop app never answers without a model: Send waits, Enter says how to connect one
+  // (showConnectModel), the empty task lists it as a first step next to the folder, and the
+  // sidebar footer and the status bar open Assistant. The browser preview keeps its demo reply.
+
+  /** Brings the "connect a model" places up to date with the provider (renderProviderStatus). */
+  renderModelSetup() {
+    const missing = !this.canReply() && !this.isBrowserPreview();
+    if (missing) {
+      // renderProviderStatus wrote "Provider not configured" in both just before.
+      const status = $('#statusbar-provider');
+      if (status) status.replaceChildren(this.assistantLink('Provider not configured', 'statusbar-link'));
+      const footer = $('#user-email');
+      if (footer) footer.replaceChildren(this.assistantLink('Connect a model', 'sidebar-connect-link'));
+    }
+    this.renderFolderPicker();
+    this.updateSendEnabled();
+  },
+
+  // A button that opens Assistant, where a model is connected.
+  assistantLink(text, className) {
+    const button = element('button', `assistant-link ${className}`, text);
+    button.dataset.openAssistant = 'true';
+    button.title = 'Open Assistant to connect a model';
+    return button;
+  },
+
+  /** Assistant, where the provider and its key are set up. */
+  openAssistant() {
+    this.switchView('assistant');
+    $('#provider-kind')?.focus();
+  },
+
+  /** Enter without a model: the message box says so, with a way to connect one. */
+  showConnectModel() {
+    const notice = $('#connect-model-notice');
+    if (!notice) {
+      this.showToast('Connect a model to start: open Assistant.');
+      return;
+    }
+    notice.hidden = false;
+    // Said again when it already showed, for a screen reader.
+    const text = $('#connect-model-notice-text');
+    if (text) text.textContent = 'Connect a model to start';
   },
 
   // Every model the provider offers is available; there is no per-model enable step any more.
@@ -775,15 +826,25 @@ const app = {
     else node.removeAttribute('title');
   },
 
-  // The chat's first step while no folder is chosen: open one, or pick a recent one.
+  // The chat's first steps on an empty task: a folder while none is chosen (open one, or pick a
+  // recent one), and a model while none is connected.
   renderFolderPicker() {
     const picker = $('#folder-picker');
     if (!picker) return;
     const task = this.currentTask();
-    const show = this.startFolderSettled && Boolean(task) && !task.messages.length
-      && taskFolderStatus(task, this.workspace.root) === 'none';
+    const empty = this.startFolderSettled && Boolean(task) && !task.messages.length;
+    const show = empty && taskFolderStatus(task, this.workspace.root) === 'none';
+    const needsModel = empty && !this.canReply() && !this.isBrowserPreview();
     picker.hidden = !show;
-    $('.sm-home-page')?.classList.toggle('needs-folder', show);
+    const modelStep = $('#model-picker');
+    if (modelStep) modelStep.hidden = !needsModel;
+    // With both steps showing the folder comes first: its button stays the primary one.
+    const connect = $('#model-picker-open');
+    if (connect) {
+      connect.classList.toggle('primary', !show);
+      connect.classList.toggle('secondary', show);
+    }
+    $('.sm-home-page')?.classList.toggle('needs-folder', show || needsModel);
     if (!show) return;
     const recent = (Array.isArray(this.workspace.recent) ? this.workspace.recent : [])
       .filter((item) => typeof item?.path === 'string' && item.path).slice(0, PICKER_RECENT);
@@ -1649,6 +1710,20 @@ const app = {
       if (event.currentTarget.dataset.noticeAction === 'new-task') this.newTask();
       else void this.openTaskFolder();
     });
+    // Connecting a model: the empty task's step, the message box's prompt, the sidebar footer
+    // and the status bar all open Assistant.
+    $('#model-picker-open')?.addEventListener('click', () => this.openAssistant());
+    $('#connect-model-notice-action')?.addEventListener('click', () => this.openAssistant());
+    for (const selector of ['#statusbar-provider', '#user-email']) {
+      $(selector)?.addEventListener('click', (event) => {
+        if (event.target.closest?.('[data-open-assistant]')) this.openAssistant();
+      });
+    }
+    // Retry under a reply that failed.
+    $('#chat-messages')?.addEventListener('click', (event) => {
+      const retry = event.target.closest?.('.msg-retry-btn[data-task-id]');
+      if (retry && !retry.disabled) void this.retryReply(retry.dataset.taskId);
+    });
     this.bindComposerHint();
     $('#chat-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -2054,6 +2129,8 @@ const app = {
     const reply = this.currentReply();
     // The companion rests under the newest reply when none is running (a running one has its own).
     const companionAt = !reply && messages[messages.length - 1]?.role === 'assistant' ? messages.length - 1 : -1;
+    // The newest reply failed: Retry asks for it again (none while a reply of this task runs).
+    const retryAt = reply ? -1 : retryableReply(task)?.index ?? -1;
     container.replaceChildren(...messages.map((message, index) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
@@ -2111,9 +2188,19 @@ const app = {
         if (card) bubble.append(card);
       }
       if (message.notice) {
-        const notice = element('span', 'msg-notice', message.notice);
+        // A reply that failed says why in the failure's red; other notes stay quiet.
+        const failed = message.role === 'assistant' && message.interrupted === 'failed';
+        const notice = element('span', `msg-notice${failed ? ' is-failed' : ''}`, message.notice);
         notice.setAttribute('role', 'note');
-        bubble.append(notice);
+        if (index === retryAt) {
+          const row = element('div', 'msg-failure');
+          row.append(notice, this.renderRetryButton(task));
+          bubble.append(row);
+        } else {
+          bubble.append(notice);
+        }
+      } else if (index === retryAt) {
+        bubble.append(this.renderRetryButton(task));
       }
       if (index === companionAt) bubble.append(this.renderCompanionMoment(task, message));
       // A reply that was stopped or failed can still carry billed usage, so the footer shows for
@@ -2223,6 +2310,19 @@ const app = {
       row.dataset.state = 'idle';
     }, COMPANION_MOMENT_MS - since);
     return row;
+  },
+
+  /** Retry under a failed reply (retryReply); it waits while anything else runs in the task. */
+  renderRetryButton(task) {
+    const button = element('button', 'button secondary compact msg-retry-btn', 'Retry');
+    button.dataset.taskId = task.id;
+    button.title = 'Ask for this reply again, without sending your message twice';
+    button.disabled = this.retryBusy(task.id);
+    return button;
+  },
+  // Something else runs in the task (a reply, the preview's demo reply, a compaction).
+  retryBusy(taskId) {
+    return Boolean(this.replies.has(taskId) || this.demoBusy || this.compactingTasks.has(taskId));
   },
 
   // ---- Replies in progress (src/reply-ui.js): one per task, several tasks at once ----------
@@ -2378,6 +2478,8 @@ const app = {
     if (todos.length) message.todos = todos;
     const images = role === 'user' ? normalizeMessageImages(extra.images) : [];
     if (images.length) message.images = images;
+    // The custom slash command this message is the prompt of: a Retry sends it as that command again.
+    if (role === 'user' && typeof extra.command === 'string' && COMMAND_NAME.test(extra.command)) message.command = extra.command;
     const media = normalizeMediaItems(extra.media);
     if (media.length) message.media = media;
     if (typeof extra.mediaRequest === 'string' && extra.mediaRequest) message.mediaRequest = extra.mediaRequest.slice(0, 300);
@@ -2531,27 +2633,19 @@ const app = {
         return sent;
       }
     }
-    // A task that asked for a worktree of its own gets it before its first message (src/gitflow-ui.js).
-    if (wantsWorktree(task) && !(await prepareWorktree(this, task, text))) return false;
-    // No chat without a folder, and a task only sends from its own folder.
-    if (taskFolderStatus(task, this.workspace.root) === 'none') {
-      this.showToast('Choose a project folder first.');
-      this.focusFolderChoice();
+    // No model connected: nothing is sent and nothing changes. The draft stays in the message
+    // box, the task keeps its title and folder, and the message box says how to connect one. Only
+    // the browser preview answers with a labelled demo reply (src/web-shim.js has no model).
+    if (!this.canReply() && !this.isBrowserPreview()) {
+      this.showConnectModel();
       return false;
     }
-    if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
-      const outcome = await this.openTaskFolder(task);
-      // Deleted while its folder opened: nothing is sent for a task that is gone.
-      if (!this.tasks.includes(task) || this.leaving) return false;
-      if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.activeRequestId || this.demoBusy) {
-        // The switch already said why when it was refused or failed.
-        if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
-        return false;
-      }
-    }
+    // A task that asked for a worktree of its own gets it before its first message (src/gitflow-ui.js).
+    if (wantsWorktree(task) && !(await prepareWorktree(this, task, text))) return false;
     // The reply works in this folder, through a session of its own in main, even if another
     // task's folder is opened while it runs. main refuses folders never opened (FOLDER_NOT_OPENED).
-    const folder = task.folder?.path || this.workspace.root;
+    const folder = await this.replyFolder(task);
+    if (!folder) return false;
     // `/compact` is an exact app command, not a prompt: never append or send it as a user turn.
     if (text === '/compact') {
       const compacted = await this.compactCurrentTask();
@@ -2568,24 +2662,25 @@ const app = {
       this.updateSendEnabled();
       return Boolean(sent);
     }
-    const bridge = this.getProviderBridge();
+    const live = this.canReply();
     // A project's own hooks run only once the user allowed them as they are (src/hooks-ui.js asks).
-    if (bridge?.send && this.provider?.configured) await reviewProjectHooks(this, folder);
+    if (live) await reviewProjectHooks(this, folder);
     // Check automatic compaction against this pending user text before it is persisted/cleared.
     // If compaction fails, the exact draft remains in the composer and no hidden task turn exists.
-    if (bridge?.send && this.provider?.configured && !(await this.compactIfNeeded(task, text))) return false;
+    if (live && !(await this.compactIfNeeded(task, text))) return false;
     // Deleted while older context was compacted: a reply started now could neither be seen nor
     // stopped, so nothing is sent and the draft stays in the message box.
     if (!this.tasks.includes(task) || this.leaving) return false;
     // Pictures waiting in the message box go with this message (src/context-ui.js).
     const context = internal ? { images: [] } : takeComposerContext(this);
-    if (!this.appendMessage('user', text, taskId, { images: context.images })) return false;
+    // A custom command's name stays with its prompt, so a Retry asks main for the same command.
+    if (!this.appendMessage('user', text, taskId, { images: context.images, command })) return false;
     // Only the sent text is cleared; "/init" puts the user's draft back itself.
     if (input.value.trim() === text) input.value = '';
     this.updateSendEnabled();
 
-    if (!bridge?.send || !this.provider?.configured) {
-      // No provider yet — keep the workspace demoable with a labelled reply.
+    if (!live) {
+      // The browser preview only: a labelled demo reply keeps it usable without a model.
       if (this.demoBusy) return true;
       this.demoBusy = true;
       this.updateSendEnabled();
@@ -2596,7 +2691,79 @@ const app = {
       }, 400);
       return true;
     }
+    return this.runReply(task, { text, attachment, command, folder });
+  },
 
+  /** Whether a model is connected, so a message gets a real reply. */
+  canReply() {
+    return Boolean(this.getProviderBridge()?.send && this.provider?.configured);
+  },
+
+  /** The browser preview (src/web-shim.js) instead of the desktop app. */
+  isBrowserPreview() {
+    try {
+      return window.scalemaxAPI?.getPlatform?.() === 'browser';
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * The folder a reply of `task` works in, once it is the open one: a task without a folder asks
+   * for one, and a task whose folder is not open opens it first. '' when nothing can be sent
+   * (the reason was already shown).
+   */
+  async replyFolder(task) {
+    // No chat without a folder, and a task only sends from its own folder.
+    if (taskFolderStatus(task, this.workspace.root) === 'none') {
+      this.showToast('Choose a project folder first.');
+      this.focusFolderChoice();
+      return '';
+    }
+    if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
+      const outcome = await this.openTaskFolder(task);
+      // Deleted while its folder opened: nothing is sent for a task that is gone.
+      if (!this.tasks.includes(task) || this.leaving) return '';
+      if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.replies.has(task.id) || this.demoBusy) {
+        // The switch already said why when it was refused or failed.
+        if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
+        return '';
+      }
+    }
+    return task.folder?.path || this.workspace.root;
+  },
+
+  /**
+   * Retry under a reply that failed (the task's last message): the same request for the same
+   * task again, without a second user message. The failed reply stays where it is, with what it
+   * had written and done; the model is told it broke off (domain.mjs historyMessages `retry`).
+   */
+  async retryReply(taskId = this.currentTaskId) {
+    const task = this.tasks.find((item) => item.id === taskId);
+    const target = retryableReply(task);
+    if (!task || !target || this.replies.has(taskId) || this.demoBusy || this.compactingTasks.has(taskId)) return false;
+    if (!this.canReply()) {
+      this.showConnectModel();
+      return false;
+    }
+    const folder = await this.replyFolder(task);
+    if (!folder) return false;
+    await reviewProjectHooks(this, folder);
+    if (!(await this.compactIfNeeded(task))) return false;
+    // Something else started meanwhile (another Retry, a message), or the task is gone.
+    if (!this.tasks.includes(task) || this.leaving || this.replies.has(taskId) || this.demoBusy
+      || retryableReply(task)?.message !== target.message) return false;
+    const command = typeof target.asked.command === 'string' ? target.asked.command : '';
+    return this.runReply(task, { text: target.asked.text, command, folder, retry: true });
+  },
+
+  /**
+   * The reply to the task's newest user message (`text`), or with `retry` to the one before a
+   * reply that failed. Resolves to true once it ended, however it ended.
+   */
+  async runReply(task, { text, attachment = null, command = '', folder, retry = false }) {
+    const taskId = task.id;
+    const bridge = this.getProviderBridge();
     // The reply shows at once; the task can be left while it works (the sidebar shows a spinner).
     const requestId = `chat-${taskId}-${Date.now()}`;
     const live = this.beginReply(taskId, requestId);
@@ -2613,7 +2780,7 @@ const app = {
       // app-owned summary plus an uncompacted raw tail; interrupted replies still get their note.
       // A model that cannot read pictures (its catalog entry, or a refusal this session) gets a
       // note where they were instead.
-      const messages = taskHistoryMessages(task, { images: picturesAllowed(this) });
+      const messages = taskHistoryMessages(task, { images: picturesAllowed(this), retry });
       if (attachment) {
         const last = messages[messages.length - 1];
         const block = `Attached file: ${attachment.path}\n\n\`\`\`\n${attachment.content}\n\`\`\``;
@@ -2649,7 +2816,8 @@ const app = {
       // Main reads the command's file again for its mode, model and allowed-tools.
       if (command) payload.command = command;
       // The to-do list the previous reply left open, so this one picks it up (lib/todo-tools.cjs).
-      const todos = openTodos({ messages: task.messages.slice(0, -1) });
+      // A retry picks up the list of the reply that failed.
+      const todos = openTodos({ messages: retry ? task.messages : task.messages.slice(0, -1) });
       if (todos.length) payload.todos = todos;
       const temperature = requestTemperature(this.settings);
       if (temperature !== undefined) payload.temperature = temperature;
@@ -2676,9 +2844,11 @@ const app = {
       let reason = result?.error?.message || 'Provider request failed';
       // The model cannot read pictures: from now on this task's pictures are left out for it (with
       // a note to the model), so the next message goes through instead of failing the same way.
-      if (result?.error?.code === 'IMAGES_UNSUPPORTED' && this.provider?.model) {
+      // That changes what later messages send, so it is also said in a toast.
+      const picturesRefused = result?.error?.code === 'IMAGES_UNSUPPORTED' && Boolean(this.provider?.model);
+      if (picturesRefused) {
         this.noPictureModels.add(this.provider.model);
-        reason = `${reason} Pictures are left out for this model from now on: send your message again to go on without them.`;
+        reason = `${reason} Pictures are left out for this model from now on: press Retry, or send your message again, to go on without them.`;
       }
       const failureMetrics = normalizeMetrics(result?.error?.metrics);
       let partial = partialReply(reply);
@@ -2697,6 +2867,10 @@ const app = {
       // A provider can have billed completed tool rounds even when the next round failed before
       // producing visible text. Keep an explicit partial reply with its incomplete accounting.
       if (!partial && failureMetrics) partial = { text: '', steps: [], reasoning: '', changes: null };
+      // A reply that failed always stays in the task, even with nothing written: the user sees
+      // why under it (with Retry), the sidebar marks the task failed, and the next request tells
+      // the model the reply broke off. Only a Stop before anything was written leaves nothing.
+      if (!partial && !cancelled) partial = { text: '', steps: [], reasoning: '', changes: null, todos: [] };
       if (partial) {
         const notice = cancelled
           ? (partial.text ? 'Stopped before the reply was finished.' : 'Stopped before an answer was written.')
@@ -2706,10 +2880,10 @@ const app = {
           changes: partial.changes, metrics: failureMetrics, plan: planning && Boolean(partial.text), todos: partial.todos,
         });
         // The notice under the reply says why; a task in the background also gets a toast.
-        if (!cancelled && taskId !== this.currentTaskId) say(reason);
+        if (!cancelled && (taskId !== this.currentTaskId || picturesRefused)) say(reason);
       } else {
         if (taskId === this.currentTaskId) this.renderChat();
-        say(cancelled ? 'Response cancelled' : reason);
+        say('Response cancelled');
       }
       // A stopped step may still have changed files, so every Workspace step counts here.
       this.showReplyChanges(folder, { changes: partial?.changes, steps: partial?.steps });
@@ -2851,8 +3025,17 @@ const app = {
     const busy = Boolean(this.activeRequestId || this.demoBusy || this.compactingTasks.has(this.currentTaskId));
     // No chat (or image / video) without a folder, and a task only sends from its own folder.
     const ready = taskFolderStatus(this.currentTask(), this.workspace.root) === 'ready';
+    // Nor without a model (the browser preview answers with its demo reply instead).
+    const noModel = !this.canReply() && !this.isBrowserPreview();
     if (input) input.disabled = false;
-    if (send) send.disabled = busy || !ready || !input?.value.trim() || composerBusy();
+    if (send) {
+      send.disabled = busy || !ready || noModel || !input?.value.trim() || composerBusy();
+      send.title = noModel ? 'Connect a model in Assistant to send' : '';
+    }
+    // Connected now: the prompt to connect one has done its job.
+    const connect = $('#connect-model-notice');
+    if (connect && !noModel) connect.hidden = true;
+    for (const retry of $$('.msg-retry-btn')) retry.disabled = this.retryBusy(retry.dataset.taskId);
     const compact = $('#compact-btn');
     if (compact) {
       compact.disabled = busy || !ready || !this.provider?.configured || !compactionBoundary(this.currentTask());
@@ -2895,6 +3078,7 @@ const app = {
     if (!$('#folder-menu')?.matches(':popover-open')) $('#folder-chip')?.click();
   },
 
+  // The browser preview's answer without a model (src/web-shim.js); the desktop app never gives one.
   localDemoReply(text) {
     return `Local demo response — configure a provider in Assistant for real AI replies.\n\n${this.simulateResponse(text)}`;
   },
