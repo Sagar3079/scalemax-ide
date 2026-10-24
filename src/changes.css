@@ -175,7 +175,9 @@
   border-color: var(--riso-blue, #0078BF);
   color: var(--riso-blue-text, #005E96);
 }
-.changes-state.is-mixed {
+/* Partly undone in the editor's review: quiet text; the title says which changes. */
+.changes-state.is-mixed,
+.changes-state.is-partly {
   color: var(--riso-ink-2, #4A4D55);
   text-decoration: underline dotted;
   text-decoration-thickness: 1px;

@@ -1247,6 +1247,18 @@
   content: '⎇ ';
 }
 
+/* Tab indents in the editor; how to leave it shows while it has focus (it is also the editor's
+   accessible description, which needs the element even while it is not shown). */
+.ws-keys-hint {
+  display: none;
+  font-family: var(--ws-ui-font);
+  color: var(--riso-ink-2, #4A4D55);
+}
+
+.ws-keys-hint.is-shown {
+  display: inline;
+}
+
 /* ---- Motion and narrow windows ------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {

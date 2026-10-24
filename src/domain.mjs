@@ -871,9 +871,11 @@ export function historyMessages(messages, { images = false, pictureNote = false 
     }
     const interrupted = message.role === 'assistant' && INTERRUPTIONS.includes(message.interrupted);
     // Files of this reply the user undid afterwards: the model must not assume its edits exist.
-    const undone = message.role === 'assistant'
-      ? (normalizeChanges(message.changes)?.files || []).filter((file) => file.status === 'undone').map((file) => file.path) : [];
-    if (!interrupted && !undone.length) {
+    const changed = message.role === 'assistant' ? normalizeChanges(message.changes)?.files || [] : [];
+    const undone = changed.filter((file) => file.status === 'undone').map((file) => file.path);
+    // Files of it the user undid only partly, in the editor's review.
+    const partly = changed.filter((file) => file.partly && file.status !== 'undone');
+    if (!interrupted && !undone.length && !partly.length) {
       turns.push({ role: message.role, content: message.text });
       continue;
     }
@@ -893,6 +895,15 @@ export function historyMessages(messages, { images = false, pictureNote = false 
     if (undone.length) {
       const names = undone.slice(0, MAX_NOTE_STEPS).join(', ') + (undone.length > MAX_NOTE_STEPS ? ', …' : '');
       notes.push(`after that reply the user undid its changes to ${names}, so ${undone.length === 1 ? 'this file is' : 'these files are'} back as ${undone.length === 1 ? 'it was' : 'they were'} before it.`);
+    }
+    if (partly.length) {
+      const items = partly.slice(0, MAX_NOTE_STEPS).map(({ path, partly: { changes, lines } }) => {
+        const at = lines.length
+          ? ` (at ${lines.length === 1 ? 'line' : 'lines'} ${lines.slice(0, 5).join(', ')}${lines.length > 5 ? ', …' : ''})` : '';
+        return `${changes} ${changes === 1 ? 'change' : 'changes'} to ${path}${at}`;
+      });
+      const list = items.join('; ') + (partly.length > MAX_NOTE_STEPS ? '; …' : '');
+      notes.push(`after that reply the user undid some of its changes in the editor: ${list}. Those parts are back as they were before that reply; its other changes are still there.`);
     }
     turns.push({ role: 'user', content: `[Note from ScaleMax, the app: ${notes.join(' Also, ')}]` });
   }
@@ -926,6 +937,14 @@ export function normalizeChanges(value) {
     if (file.mixed === true) entry.mixed = true;
     // Counted as replaced whole (too different to compare line by line).
     if (file.approximate === true) entry.approximate = true;
+    // Part of it undone by the user in the editor's review (the counts are what is left).
+    if (isRecord(file.partly) && Number.isSafeInteger(file.partly.changes) && file.partly.changes >= 1) {
+      entry.partly = {
+        changes: Math.min(file.partly.changes, 1000),
+        lines: (Array.isArray(file.partly.lines) ? file.partly.lines : [])
+          .filter((line) => Number.isSafeInteger(line) && line >= 1 && line <= 10_000_000).slice(0, 20),
+      };
+    }
     files.push(entry);
   }
   if (!files.length) return null;
@@ -948,6 +967,8 @@ export function changesSummary(value) {
     const number = files.filter((file) => file.status === status).length;
     if (number) parts.push(`${number} ${status}`);
   }
+  const partly = files.filter((file) => file.partly && file.status === 'changed').length;
+  if (partly) parts.push(`${partly} partly undone`);
   return parts.join(' · ');
 }
 

@@ -7,7 +7,7 @@
  * src/domain.mjs). DOM is built with createElement and textContent only (no HTML).
  */
 import { normalizeChanges, changesSummary } from './domain.mjs';
-import { reloadTabs, reviewReplyChanges } from './workspace-ui.js';
+import { reloadTabs, reviewReplyChanges, settleReviews } from './workspace-ui.js';
 import { openCommitDialog } from './gitflow-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -30,8 +30,15 @@ const CURRENT_TEXT = {
   unknown: 'Open the task\'s folder to undo this file.',
 };
 const MIXED_TEXT = 'Also changed by someone else while the reply ran, so it cannot be undone here.';
+// Part of a file's change undone in the editor's review (lib/checkpoints.cjs editorUndo): the
+// counts are what is left, which can still be undone or kept here.
+function partlyText(file) {
+  const { changes, lines } = file.partly;
+  const at = lines.length ? ` (at ${lines.length === 1 ? 'line' : 'lines'} ${lines.slice(0, 5).join(', ')}${lines.length > 5 ? ', …' : ''})` : '';
+  return `${changes} ${changes === 1 ? 'change' : 'changes'} undone in the editor${at}.`;
+}
 // The review dialog: which reply and file it shows, and the control that opened it.
-const review = { app: null, taskId: '', id: '', path: '', opener: null, token: 0, current: 'unknown' };
+const review = { app: null, taskId: '', id: '', path: '', opener: null, token: 0, current: 'unknown', toEditor: false };
 // Replies with an undo or keep on the way (their buttons wait).
 const busy = new Set();
 
@@ -39,6 +46,14 @@ function findMessage(app, taskId, id) {
   const task = app?.tasks.find((item) => item.id === taskId) || null;
   const message = task?.messages.find((item) => item.changes?.id === id) || null;
   return { task, message };
+}
+// The task and reply whose changes are `id`, in any task (the editor knows only the id).
+function findReply(app, id) {
+  for (const task of app?.tasks || []) {
+    const message = task.messages?.find((item) => item.changes?.id === id);
+    if (message) return { task, message };
+  }
+  return { task: null, message: null };
 }
 // The reply ran commands: what they changed is not in the list.
 function ranCommands(message) {
@@ -117,8 +132,15 @@ export function renderChangesCard(app, message, taskId) {
     if (file.untracked) {
       row.append(element('span', 'changes-state', 'Not recorded'));
     } else if (file.status !== 'changed') {
-      row.append(element('span', `changes-state is-${file.status}`, STATUS_LABELS[file.status]));
+      const label = element('span', `changes-state is-${file.status}`, file.partly && file.status === 'kept' ? 'Kept, partly undone' : STATUS_LABELS[file.status]);
+      if (file.partly) label.title = partlyText(file);
+      row.append(label);
     } else {
+      if (file.partly) {
+        const state = element('span', 'changes-state is-partly', 'Partly undone in the editor');
+        state.title = `${partlyText(file)} The counts are what is left.`;
+        row.append(state);
+      }
       if (file.mixed) {
         const state = element('span', 'changes-state is-mixed', 'Also changed by others');
         state.title = MIXED_TEXT;
@@ -168,6 +190,8 @@ function applyChanges(app, taskId, id, summary) {
   else delete message.changes;
   void app.persist('tasks');
   if (app.currentTaskId === taskId) app.renderChat();
+  // The editor stops marking files of this reply that were kept or undone here.
+  settleReviews(app, id, changes);
 }
 // Files among `paths` open in the editor with unsaved edits (an undo would conflict with them).
 function unsavedAmong(app, taskId, paths) {
@@ -250,6 +274,63 @@ export async function keepFiles(app, taskId, id, paths, { all = false } = {}) {
   return true;
 }
 
+// ---- The editor's inline review (src/workspace-ui.js) ---------------------------------------
+// The editor's review of a file goes through the same record as the card: Keep all and Undo all
+// there are this file's Keep and Undo, and Undo on one change (which the editor saves itself) is
+// taken in as "partly undone", so the card, the review dialog and the note to the model agree.
+
+/** Records part of a file's change that the editor's review undid and saved (editorUndo). */
+export async function recordEditorUndo(app, { id, path, from, revision, changes = 1, lines = [] } = {}) {
+  const api = bridge();
+  const { task } = findReply(app, id);
+  if (!api?.undo || !task) return false;
+  let result;
+  try {
+    result = await api.undo({ id, part: { path, from, revision, changes, lines } });
+  } catch (error) {
+    result = { ok: false, error: { message: error?.message } };
+  }
+  if (!result?.ok) {
+    // The file is saved all the same; the card says it changed since the reply.
+    app.showToast(result?.error?.message || 'That undo could not be added to the reply\'s changes.');
+    return false;
+  }
+  applyChanges(app, task.id, id, result.data.changes);
+  if (review.id === id && $('#changes-dialog')?.open) await showFile(review.path);
+  return true;
+}
+
+// The file as the reply's record has it, with what the editor needs to say about it.
+function replyFile(app, id, path) {
+  const { task, message } = findReply(app, id);
+  const file = normalizeChanges(message?.changes)?.files.find((item) => item.path === path) || null;
+  return { task, file };
+}
+
+/** Keep all in the editor's review (or every change kept there): the card's Keep for the file. */
+export async function keepEditorReview(app, id, path, { quiet = false } = {}) {
+  const { task, file } = replyFile(app, id, path);
+  // Nothing left to keep in the record (kept or undone already, or the reply is gone).
+  if (!task || !file || file.status !== 'changed') return true;
+  const kept = await keepFiles(app, task.id, id, [path]);
+  if (kept && !quiet) app.showToast(`Kept the changes to ${path}`);
+  return kept;
+}
+
+/** Undo all in the editor's review: the card's Undo for the file. */
+export async function undoEditorReview(app, id, path, { unsaved = false } = {}) {
+  const { task, file } = replyFile(app, id, path);
+  if (!task) { app.showToast('That reply is no longer in a task.'); return false; }
+  if (!file || file.status !== 'changed') { app.showToast(`The changes to ${path} were already ${file?.status || 'decided'}.`); return false; }
+  if (file.untracked) { app.showToast(`${path} was not recorded, so it cannot be undone here.`); return false; }
+  if (file.mixed) { app.showToast(`${path} was also changed by someone else while the reply ran, so it cannot be undone as a whole. Undo its changes one at a time.`); return false; }
+  if (unsaved) {
+    app.showToast(`Undo all puts ${path} back as it was before the reply, so your unsaved edits are in the way. Undo them, or undo the reply's changes one at a time.`);
+    return false;
+  }
+  return undoFiles(app, task.id, id, [path]);
+}
+
 // ---- Review dialog ------------------------------------------------------------------
 
 function reviewFiles() {
@@ -271,6 +352,7 @@ function renderFileList() {
     item.disabled = Boolean(file.untracked);
     item.append(element('span', 'changes-dialog-name', file.path), counts(file));
     if (file.status !== 'changed') item.append(element('span', `changes-state is-${file.status}`, STATUS_LABELS[file.status]));
+    else if (file.partly) item.append(element('span', 'changes-state is-partly', 'Partly undone'));
     item.addEventListener('click', () => void showFile(file.path));
     return item;
   }));
@@ -367,8 +449,11 @@ async function showFile(path) {
     return;
   }
   review.current = result.data.current || 'unknown';
-  const status = file?.status === 'undone' ? 'Undone.' : file?.status === 'kept' ? 'Kept.'
-    : file?.mixed ? MIXED_TEXT : CURRENT_TEXT[review.current] ?? '';
+  const partly = file?.partly ? ` ${partlyText(file)}` : '';
+  const status = file?.status === 'undone' ? 'Undone.' : file?.status === 'kept' ? `Kept.${partly}`
+    : file?.mixed ? MIXED_TEXT
+      : file?.partly && review.current === 'same' ? `${partlyText(file)} What is left is shown here and can still be undone.`
+        : CURRENT_TEXT[review.current] ?? '';
   if (stateNode) stateNode.textContent = status;
   renderDiff(result.data);
   renderReviewActions(file);
@@ -398,6 +483,8 @@ export function bindChangesUi(app) {
   $('#changes-open')?.addEventListener('click', async () => {
     const target = review.path;
     const { message } = findMessage(app, review.taskId, review.id);
+    // Keyboard focus goes to the file in the editor, not back to what opened the review.
+    review.toEditor = true;
     dialog.close();
     app.switchView('workspace');
     // The editor marks this reply's changes in the file, with Keep and Undo on each.
@@ -407,6 +494,10 @@ export function bindChangesUi(app) {
     review.token += 1;
     const opener = review.opener;
     review.opener = null;
+    if (review.toEditor) {
+      review.toEditor = false;
+      return;
+    }
     // Back to the control that opened the review; after an undo or keep the card was drawn
     // again, so that is the same file's button in the new card.
     if (opener?.isConnected) opener.focus();

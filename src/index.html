@@ -365,7 +365,7 @@
                       <h3 id="workspace-empty-title">Open a project folder</h3>
                       <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this Mac.</p>
                       <button id="workspace-open-empty" class="button primary" type="button">Open folder</button>
-                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment</p>
+                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment · <kbd>Esc</kbd> then <kbd>Tab</kbd> leaves the editor</p>
                     </div>
                   </div>
                 </section>
@@ -413,6 +413,7 @@
             <footer class="ws-statusbar">
               <span id="editor-status" class="ws-status-main" role="status" aria-live="polite">Choose a file before editing or saving.</span>
               <span class="ws-status-spacer"></span>
+              <span id="editor-keys-hint" class="ws-status-item ws-keys-hint">Esc then Tab to leave the editor</span>
               <span id="editor-location" class="ws-status-item">Ln 1, Col 1</span>
               <span id="editor-language" class="ws-status-item">Plain text</span>
               <span id="editor-branch" class="ws-status-item">No branch</span>

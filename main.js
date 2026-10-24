@@ -701,6 +701,20 @@ function checkpointPaths(input) {
   }
   return paths;
 }
+// Part of one file undone in the editor's inline review, which saved it itself
+// (lib/checkpoints.cjs editorUndo): `{ path, from, revision, changes?, lines? }`.
+function checkpointPart(input) {
+  const part = input && typeof input === 'object' ? input.part : undefined;
+  if (part === undefined || part === null) return null;
+  const revision = /^[a-f0-9]{64}$/;
+  if (typeof part !== 'object' || typeof part.path !== 'string' || !part.path || part.path.length > 1024
+    || typeof part.from !== 'string' || !revision.test(part.from) || typeof part.revision !== 'string' || !revision.test(part.revision)
+    || (part.changes !== undefined && (!Number.isSafeInteger(part.changes) || part.changes < 1 || part.changes > 1000))
+    || (part.lines !== undefined && (!Array.isArray(part.lines) || part.lines.length > 20 || part.lines.some((line) => !Number.isSafeInteger(line) || line < 1)))) {
+    throw bridgeError('INVALID_CHECKPOINT', 'That undo in the editor could not be recorded.');
+  }
+  return { path: part.path, from: part.from, revision: part.revision, changes: part.changes ?? 1, lines: part.lines ?? [] };
+}
 
 function projectNotesEnabled() {
   try {
@@ -1239,6 +1253,15 @@ const checkpointChannels = {
   },
   'checkpoint:undo': (_event, input) => {
     const id = checkpointId(input);
+    // The editor's inline review already saved the file: this only records it, after checking
+    // the revisions, so a reply working elsewhere in the folder does not hold it up.
+    const part = checkpointPart(input);
+    if (part) {
+      return queueCheckpoint(id, () => withCheckpointFolder(id, (session) => {
+        requireSettled(id);
+        return checkpoints.editorUndo(id, part.path, part, { workspace: session });
+      }));
+    }
     const paths = checkpointPaths(input);
     return queueCheckpoint(id, () => withCheckpointFolder(id, (session, folder) => {
       requireSettled(id, folder.path);

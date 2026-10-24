@@ -630,13 +630,21 @@ function updateTab(tab, spec) {
 
 // The file changed on disk: the tab shows `text`. In CodeMirror that is one undoable change, so
 // the selection and scroll position stay; a file whose line breaks changed kind starts afresh.
+// A review ends with it: what is on disk now is no longer what one reply left, so marking it
+// against that reply's earlier text would mix in whatever changed it since (another reply, an
+// undo, a command). A reply that changed it reviews it anew (reviewReplyChanges).
 function loadText(tab, text) {
   tab.content = text;
   markSaved(tab, text);
+  forgetEditorUndos(tab);
   const current = editorState(tab);
   if (current) {
     const spec = codemirror.module.reloadSpec(current, text);
     if (spec) {
+      if (tab.review) {
+        tab.review = null;
+        Object.assign(spec, codemirror.module.reviewSpec(current, null));
+      }
       updateTab(tab, spec);
       return;
     }
@@ -698,6 +706,7 @@ function onEditorUpdate(app, update) {
   const tab = shownTab();
   if (!tab) return;
   if (update.docChanged) {
+    const wasDirty = tab.dirty;
     const dirty = isDirty(tab);
     if (dirty !== tab.dirty) {
       tab.dirty = dirty;
@@ -705,7 +714,9 @@ function onEditorUpdate(app, update) {
     }
     setText('#editor-status', dirty ? 'Unsaved changes.' : 'Ready.');
     // An undone change of a reply is saved straight away (after this update).
-    if (update.transactions.some((transaction) => transaction.isUserEvent('revert'))) {
+    const reverts = update.transactions.filter((transaction) => transaction.isUserEvent('revert'));
+    noteEditorUndos(tab, update.transactions, reverts, wasDirty);
+    if (reverts.length) {
       queueMicrotask(() => { if (state.tabs.includes(tab)) void saveActiveTab(app); });
     }
   }
@@ -837,10 +848,15 @@ export async function openFileInTab(app, path) {
       usedAt: Date.now(),
       view: null,
       review: null,
+      undos: [],
+      undoText: null,
     });
   }
   activate(app, result.data.path);
   setText('#editor-status', 'Loaded.');
+  // Keyboard focus goes to the file's text, as for a tab already open: the tree is drawn again
+  // when a file opens, so focus would otherwise be nowhere and the next Tab would indent line 1.
+  focusEditor();
   return true;
 }
 
@@ -923,7 +939,10 @@ async function writeTab(app, bridge, tab, root) {
   // Another folder opened while an earlier save of this tab ran: its tabs are gone.
   if (app.workspace.root !== root) return false;
   const content = tabText(tab);
-  const result = await bridge.write({ path: tab.path, content, revision: tab.revision });
+  const from = tab.revision;
+  // Changes of a reply undone in the review that this save writes (and nothing else).
+  const undone = takeEditorUndos(tab, content);
+  const result = await bridge.write({ path: tab.path, content, revision: from });
   if (!result?.ok) {
     app.showToast(result?.error?.message || 'Could not save that file');
     setText('#editor-status', result?.error?.message || 'Save failed.');
@@ -938,7 +957,73 @@ async function writeTab(app, bridge, tab, root) {
   setText('#editor-status', 'Saved.');
   app.showToast('File saved');
   if (typeof app.refreshGit === 'function') void app.refreshGit({ quiet: true });
+  // The reply's changes card, its review and the note to the model learn what was undone. Waited
+  // for, so the next save of this tab is recorded after this one.
+  if (undone && from !== tab.revision) await recordEditorUndo(app, tab, undone, from, tab.revision);
   return true;
+}
+
+// ---- Changes undone in the review, for the reply's record ------------------------------------
+// Undo on one change saves the tab (onEditorUpdate). When the tab held nothing else unsaved, that
+// save is exactly the reply's version with that part put back, so the reply's record (main's
+// lib/checkpoints.cjs editorUndo) takes it in: the changes card shows what is left and "Partly
+// undone in the editor", the review dialog's diff and Undo work on what is left, and the model is
+// told. A save that also carries typed edits is not recorded: the card then says the file
+// changed since, and undo there never overwrites those edits.
+
+function forgetEditorUndos(tab) {
+  tab.undos = [];
+  tab.undoText = null;
+}
+
+// The line (1-based, in the text after it) where each change of `transaction` starts.
+function changedLines(transaction) {
+  const lines = [];
+  transaction.changes.iterChangedRanges((_fromA, _toA, fromB) => lines.push(transaction.state.doc.lineAt(fromB).number));
+  return lines;
+}
+
+function noteEditorUndos(tab, transactions, reverts, wasDirty) {
+  if (!tab.undos) forgetEditorUndos(tab);
+  // Anything else typed, pasted or undone: the text is no longer only the reply's with parts put back.
+  if (!reverts.length || reverts.length !== transactions.length || !tab.review || !codemirror) {
+    forgetEditorUndos(tab);
+    return;
+  }
+  const { textOf } = codemirror.module;
+  // Clean before, or holding only undone changes not yet saved.
+  const clean = !wasDirty || (tab.undoText != null && textOf(reverts[0].startState) === tab.undoText);
+  if (!clean) {
+    forgetEditorUndos(tab);
+    return;
+  }
+  for (const transaction of reverts) {
+    tab.undoText = textOf(transaction.state);
+    tab.undos.push({ id: tab.review.id, text: tab.undoText, lines: changedLines(transaction) });
+  }
+}
+
+// The undone changes a save of `content` writes, taken off the tab's list; null when none (or
+// when the text holds more than undone changes).
+function takeEditorUndos(tab, content) {
+  const list = tab.undos || [];
+  let last = -1;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index].text === content) { last = index; break; }
+  }
+  if (last === -1) return null;
+  const taken = list.splice(0, last + 1);
+  // One reply's changes at a time (a new review of another reply forgets the list).
+  return { id: taken[0].id, changes: taken.length, lines: taken.flatMap((item) => item.lines).slice(0, 20) };
+}
+
+async function recordEditorUndo(app, tab, undone, from, revision) {
+  try {
+    const { recordEditorUndo: record } = await import('./changes-ui.js');
+    await record(app, { id: undone.id, path: tab.path, from, revision, changes: undone.changes, lines: undone.lines });
+  } catch (error) {
+    console.error('[ScaleMax] The undone change could not be recorded.', error);
+  }
 }
 
 /** Closes every tab; used when another folder is opened. */
@@ -976,17 +1061,20 @@ export function setGitDecorations(app, files, branch, isRepo) {
 
 // ---- Review of a reply's changes ----------------------------------------------
 // Like Cursor's and Claude Code's inline review: a file a reply changed shows, in its tab, each
-// change against the file as it was before the reply (CodeMirror's unified merge view), with
-// Keep and Undo on each change and a bar above the editor for all of them. Undo puts that part
-// back and saves through the normal, revision-checked save; Keep only stops marking it. Whether
-// the reply's changes as a whole are kept or undone stays with the changes card under the reply
-// (src/changes-ui.js), which "Open full review" opens.
+// change against the file as it was just before that reply (CodeMirror's unified merge view),
+// with Keep and Undo on each change and a bar above the editor for all of them. A review shows
+// one reply's changes, the same as that reply's review dialog: when another reply changes the
+// file, its review starts afresh against the text from before it. Undo on one change puts that
+// part back and saves through the normal, revision-checked save, and the reply's record learns
+// which part was undone (recordEditorUndo). Keep all and Undo all, and a review that ends with
+// every change kept, go through the same keep and undo as the reply's changes card
+// (src/changes-ui.js), so the card, the review dialog and the note to the model agree.
 
 /**
  * Marks in the editor what a reply (`changes`: normalizeChanges) changed in files open in clean
  * tabs, each still exactly as the reply left it. The earlier text is rebuilt from the reply's
- * diff (originalFromHunks). A tab already under review keeps its earlier text, so the changes
- * of several replies show together until they are kept or undone.
+ * diff (originalFromHunks), so the marks are exactly that reply's changes; a review of another
+ * reply in the same tab is replaced.
  */
 export async function reviewReplyChanges(app, changes, paths = null) {
   const api = window.scalemaxAPI?.checkpoints;
@@ -1004,17 +1092,33 @@ export async function reviewReplyChanges(app, changes, paths = null) {
     if (app.workspace.root !== root) return;
     const tab = state.tabs.find((item) => item.path === path);
     if (!tab || tab.dirty || !result?.ok || result.data.current !== 'same') continue;
-    if (tab.review) {
-      tab.review.id = changes.id;
+    // Already showing this reply's changes (Open in editor from its review dialog).
+    if (tab.review?.id === changes.id) continue;
+    const text = tabText(tab);
+    const original = originalFromHunks(text, result.data);
+    if (original === null || original === text) {
+      // The file is as this reply left it: another reply's marks would not be its changes.
+      if (tab.review) endReview(app, tab);
       continue;
     }
-    const original = originalFromHunks(tabText(tab), result.data);
-    if (original === null || original === tabText(tab)) continue;
+    forgetEditorUndos(tab);
     tab.review = { id: changes.id, original };
     // A tab never shown yet gets it with its first editor state (showActive).
     const current = editorState(tab);
     if (current) updateTab(tab, codemirror.module.reviewSpec(current, original));
     if (tab.path === state.shown) renderReview(app);
+  }
+}
+
+/**
+ * Ends the editor's review of files of a reply (request id `id`) that are no longer open for
+ * keep or undo in its record (`changes`, normalizeChanges: kept or undone from its card or
+ * review dialog, or the reply's changes are gone).
+ */
+export function settleReviews(app, id, changes) {
+  const open = new Set((changes?.files || []).filter((file) => file.status === 'changed').map((file) => file.path));
+  for (const tab of state.tabs) {
+    if (tab.review?.id === id && !open.has(tab.path)) endReview(app, tab);
   }
 }
 
@@ -1039,20 +1143,36 @@ function renderReview(app) {
   if (!changes?.length) {
     bar.hidden = true;
     // Every change kept or undone (or typed away): the review is over.
-    if (changes) {
-      queueMicrotask(() => {
-        const current = editorState(tab);
-        if (tab.review && current && !codemirror.module.reviewChanges(current)?.length) endReview(app, tab);
-      });
-    }
+    if (changes) queueMicrotask(() => finishReview(app, tab));
     return;
   }
   bar.hidden = false;
   setText('#editor-review-label', `${changes.length} ${changes.length === 1 ? 'change' : 'changes'} from the reply`);
 }
 
-// Runs a review action from the bar on the shown tab.
-function reviewAction(app, action) {
+// No change left to decide. When that came from the review alone (no edits of the user's own),
+// the reply's record says so too: kept, or undone when every change was undone (recordEditorUndo
+// has already said that). It waits for the save of a change just undone.
+function finishReview(app, tab) {
+  const current = editorState(tab);
+  if (!tab.review || !current || codemirror.module.reviewChanges(current)?.length) return;
+  const { id } = tab.review;
+  const reviewOnly = !tab.dirty || (tab.undoText != null && tabText(tab) === tab.undoText);
+  endReview(app, tab);
+  if (!reviewOnly) return;
+  void (async () => {
+    await tab.saving;
+    if (!state.tabs.includes(tab)) return;
+    const { keepEditorReview } = await import('./changes-ui.js');
+    await keepEditorReview(app, id, tab.path, { quiet: true });
+  })();
+}
+
+/**
+ * Runs an action of the review bar (#editor-review: previous, next, keep, undo, keep-all,
+ * undo-all, open) on the shown tab.
+ */
+export async function reviewAction(app, action) {
   const tab = activeTab();
   if (!tab?.review || !codemirror || tab.path !== state.shown) return;
   const { module, editor } = codemirror;
@@ -1061,13 +1181,24 @@ function reviewAction(app, action) {
     editor.nextChange(action === 'next' ? 1 : -1);
   } else if (action === 'keep' || action === 'undo') {
     const spec = action === 'keep' ? module.keepChangeSpec(current) : module.undoChangeSpec(current);
-    if (spec) editor.dispatch(spec);
-    else setText('#editor-status', 'Put the cursor in a change first (Next change).');
-  } else if (action === 'undo-all') {
-    const spec = module.undoAllSpec(current);
-    if (spec) editor.dispatch(spec);
-  } else if (action === 'keep-all') {
-    endReview(app, tab);
+    if (!spec) {
+      setText('#editor-status', 'Put the cursor in a change first (Next change).');
+      return;
+    }
+    editor.dispatch(spec);
+    // Back in the text, on the next change: F7, Keep and Undo go on from there.
+    focusEditor();
+    if (module.reviewChanges(editor.view.state)?.length) editor.nextChange(1);
+  } else if (action === 'keep-all' || action === 'undo-all') {
+    // The same keep and undo as the reply's changes card, for this file.
+    const { id } = tab.review;
+    await tab.saving;
+    const { keepEditorReview, undoEditorReview } = await import('./changes-ui.js');
+    const done = action === 'keep-all'
+      ? await keepEditorReview(app, id, tab.path)
+      : await undoEditorReview(app, id, tab.path, { unsaved: tab.dirty });
+    if (done && action === 'keep-all' && tab.review?.id === id) endReview(app, tab);
+    if (state.tabs.includes(tab) && tab.path === state.shown) focusEditor();
   } else if (action === 'open') {
     void openFullReview(app, tab);
   }
@@ -1335,7 +1466,7 @@ function bindReviewBar(app) {
   bar.replaceChildren(label, actions);
   bar.addEventListener('click', (event) => {
     const button = event.target.closest('[data-review-action]');
-    if (button) reviewAction(app, button.dataset.reviewAction);
+    if (button) void reviewAction(app, button.dataset.reviewAction);
   });
 }
 
@@ -1358,6 +1489,16 @@ function bindEditor(app) {
     if (input && document.activeElement === input) updateLocation();
   });
   bindReviewBar(app);
+  // While the editor has focus the statusbar says how to leave it (Tab indents there; Escape then
+  // Tab moves on, CodeMirror's tab focus mode).
+  const view = $('#editor-view');
+  const hint = $('#editor-keys-hint');
+  if (view && hint) {
+    view.addEventListener('focusin', () => hint.classList.add('is-shown'));
+    view.addEventListener('focusout', (event) => {
+      if (!view.contains(event.relatedTarget)) hint.classList.remove('is-shown');
+    });
+  }
 
   const tabs = $('#editor-tabs');
   tabs?.addEventListener('click', (event) => {
