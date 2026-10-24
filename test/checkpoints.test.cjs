@@ -292,3 +292,88 @@ test('a reused request id never overwrites the changes of the earlier reply', as
   assert.deepEqual(checkpoints.summary('chat-same-id').files.map((file) => file.path), ['one.md']);
   assert.equal(second.recorder.summary(), null);
 });
+
+// ---- Part of a file undone in the editor's inline review (editorUndo) ----------------------
+
+const LONG = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join('\n') + '\n';
+// A reply that changes lines 2, 7 and 12 of src/long.txt, then the editor's own save of a version
+// with some of those changes put back (as the inline review saves it).
+async function partial(t) {
+  const context = await setup(t);
+  const { root, workspace, checkpoints } = context;
+  fs.writeFileSync(path.join(root, 'src', 'long.txt'), LONG);
+  const { tools } = toolsFor(workspace, checkpoints, 'chat-part');
+  for (const line of [2, 7, 12]) await tools.call('edit_file', { path: 'src/long.txt', old_text: `line ${line}\n`, new_text: `LINE ${line}!\n` });
+  const after = await workspace.read('src/long.txt');
+  // The editor puts back the given lines and saves, revision-checked.
+  const editorSave = async (lines, revision) => {
+    let text = (await workspace.read('src/long.txt')).content;
+    for (const line of lines) text = text.replace(`LINE ${line}!\n`, `line ${line}\n`);
+    return (await workspace.write({ path: 'src/long.txt', content: text, revision })).revision;
+  };
+  return { ...context, after, editorSave };
+}
+
+test('a change undone in the editor is recorded: what is left is counted, diffed and still undone exactly', async (t) => {
+  const { root, workspace, checkpoints, after, editorSave } = await partial(t);
+  assert.deepEqual(checkpoints.summary('chat-part').files.map((file) => [file.added, file.removed]), [[3, 3]]);
+  const revision = await editorSave([7], after.revision);
+  const { status, changes } = await checkpoints.editorUndo('chat-part', 'src/long.txt', { from: after.revision, revision, changes: 1, lines: [7] }, { workspace });
+  assert.equal(status, 'changed');
+  assert.deepEqual(changes.files, [{ path: 'src/long.txt', kind: 'modified', added: 2, removed: 2, status: 'changed', partly: { changes: 1, lines: [7] } }]);
+  assert.deepEqual(checkpoints.summary('chat-part'), changes, 'saved with the reply\'s record');
+  // The review dialog shows what is left, and the file counts as the reply left it.
+  const diff = await checkpoints.diff('chat-part', 'src/long.txt', { workspace });
+  assert.equal(diff.current, 'same');
+  assert.deepEqual(diff.hunks.flatMap((hunk) => hunk.lines).filter((line) => line.type !== ' ').map((line) => `${line.type}${line.text}`),
+    ['-line 2', '+LINE 2!', '-line 12', '+LINE 12!']);
+  // Undo here puts back the version from before the reply, byte for byte.
+  const undone = await checkpoints.undo('chat-part', ['src/long.txt'], { workspace });
+  assert.deepEqual(undone.results, [{ path: 'src/long.txt', ok: true }]);
+  assert.equal(read(root, 'src/long.txt'), LONG);
+  assert.equal(undone.changes.files[0].status, 'undone');
+});
+
+test('undone in the editor bit by bit: the parts add up, and the last one makes the file undone', async (t) => {
+  const { workspace, checkpoints, after, editorSave } = await partial(t);
+  const first = await editorSave([2], after.revision);
+  await checkpoints.editorUndo('chat-part', 'src/long.txt', { from: after.revision, revision: first, lines: [2] }, { workspace });
+  const second = await editorSave([12], first);
+  const { changes } = await checkpoints.editorUndo('chat-part', 'src/long.txt', { from: first, revision: second, changes: 1, lines: [12] }, { workspace });
+  assert.deepEqual(changes.files[0].partly, { changes: 2, lines: [2, 12] });
+  assert.deepEqual([changes.files[0].added, changes.files[0].removed], [1, 1]);
+  const last = await editorSave([7], second);
+  const result = await checkpoints.editorUndo('chat-part', 'src/long.txt', { from: second, revision: last, lines: [7] }, { workspace });
+  assert.equal(result.status, 'undone');
+  assert.equal(result.changes.files[0].status, 'undone');
+  assert.equal((await checkpoints.diff('chat-part', 'src/long.txt', { workspace })).current, 'original');
+});
+
+test('an undo in the editor is only recorded on top of the reply\'s own version, never over other changes', async (t) => {
+  const { root, workspace, checkpoints, after, editorSave } = await partial(t);
+  const before = checkpoints.summary('chat-part');
+  const revision = await editorSave([7], after.revision);
+  const part = { from: after.revision, revision, lines: [7] };
+  // Not the version the reply left (someone saved in between).
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'src/long.txt', { ...part, from: revision }, { workspace }), { code: 'CHANGED_SINCE' });
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'src/long.txt', { ...part, from: 'nope' }, { workspace }), { code: 'INVALID_CHECKPOINT' });
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'src/long.txt', part, {}), TypeError);
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'README.md', part, { workspace }), { code: 'NOT_FOUND' });
+  // Changed again on disk after the editor saved it.
+  fs.writeFileSync(path.join(root, 'src', 'long.txt'), `${read(root, 'src/long.txt')}typed later\n`);
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'src/long.txt', part, { workspace }), { code: 'CHANGED_SINCE' });
+  assert.deepEqual(checkpoints.summary('chat-part'), before, 'nothing recorded');
+  // Kept files are no longer reviewed.
+  checkpoints.keep('chat-part', ['src/long.txt']);
+  await assert.rejects(checkpoints.editorUndo('chat-part', 'src/long.txt', part, { workspace }), { code: 'NOT_CHANGED' });
+});
+
+test('an undo in the editor of a file someone else also changed while the reply ran is not recorded', async (t) => {
+  const { root, workspace, checkpoints } = await setup(t);
+  const { tools } = toolsFor(workspace, checkpoints, 'chat-mixed-part');
+  await tools.call('edit_file', { path: 'src/app.js', old_text: '41', new_text: '42' });
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), "const answer = 42;\nconsole.log('by hand', answer);\n");
+  await tools.call('edit_file', { path: 'src/app.js', old_text: '42', new_text: '43' });
+  const now = await workspace.read('src/app.js');
+  await assert.rejects(checkpoints.editorUndo('chat-mixed-part', 'src/app.js', { from: now.revision, revision: now.revision }, { workspace }), { code: 'MIXED' });
+});

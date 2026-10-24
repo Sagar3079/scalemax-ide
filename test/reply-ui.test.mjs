@@ -185,6 +185,35 @@ test('a reply\'s changes are kept bounded, summarised, and undone files reach th
   assert.deepEqual(both, [{ role: 'user', content: '[Note from ScaleMax, the app: the user pressed Stop while you were writing your previous reply, so it ends where they stopped it. It had already done this: Edited src/a.js. Also, after that reply the user undid its changes to src/a.js, so this file is back as it was before it.]' }]);
 });
 
+test('changes partly undone in the editor are kept, summarised, and named to the model', async () => {
+  const { normalizeChanges, changesSummary, historyMessages } = await import('../src/domain.mjs');
+  const changes = normalizeChanges({
+    id: 'chat-task-1-3',
+    files: [
+      { path: 'src/format-date.js', kind: 'modified', added: 1, removed: 1, status: 'changed', partly: { changes: 1, lines: [21, 'x', -3, 0] } },
+      { path: 'src/pad.js', kind: 'modified', added: 1, removed: 0, status: 'undone' },
+      { path: 'src/odd.js', kind: 'modified', added: 1, removed: 0, partly: { changes: 0, lines: [2] } },
+      { path: 'src/kept.js', kind: 'modified', added: 2, removed: 2, status: 'kept', partly: { changes: 2, lines: [4, 9, 12, 15, 18, 30] } },
+    ],
+  });
+  assert.deepEqual(changes.files.map((file) => file.partly), [{ changes: 1, lines: [21] }, undefined, undefined, { changes: 2, lines: [4, 9, 12, 15, 18, 30] }]);
+  assert.equal(changesSummary(changes), '4 files changed · +5 −3 · 1 undone · 1 kept · 1 partly undone');
+  const turns = historyMessages([
+    { role: 'user', text: 'Tidy it.' },
+    { role: 'assistant', text: 'Tidied.', changes },
+    { role: 'user', text: 'Next?' },
+  ]);
+  assert.deepEqual(turns[2], {
+    role: 'user',
+    content: '[Note from ScaleMax, the app: after that reply the user undid its changes to src/pad.js, so this file is back as it was before it.'
+      + ' Also, after that reply the user undid some of its changes in the editor: 1 change to src/format-date.js (at line 21); 2 changes to src/kept.js (at lines 4, 9, 12, 15, 18, …).'
+      + ' Those parts are back as they were before that reply; its other changes are still there.]',
+  });
+  // Partly undone alone is a note too.
+  const alone = historyMessages([{ role: 'assistant', text: 'Tidied.', changes: { id: 'c', files: [{ path: 'a.js', status: 'changed', partly: { changes: 1, lines: [] } }] } }]);
+  assert.equal(alone[1].content, '[Note from ScaleMax, the app: after that reply the user undid some of its changes in the editor: 1 change to a.js. Those parts are back as they were before that reply; its other changes are still there.]');
+});
+
 test('a live reply keeps the latest changes, and a stopped one carries them', () => {
   const reply = createReply({ taskId: 't1', requestId: R });
   assert.equal(applyProgress(reply, { phase: 'changes', changes: { id: R, files: [] } }), null);
