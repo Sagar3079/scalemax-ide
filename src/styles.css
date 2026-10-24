@@ -3100,7 +3100,9 @@ input[type="range"] {
   gap: 8px;
 }
 
-/* Saved providers in Assistant. */
+/* Saved providers in Assistant: the list takes the whole first row, so "Name — active · not
+   connected" is never cut off (the column is at most 680px wide, 600px in a 900px window); the
+   name field and the buttons share the second. */
 .profile-row {
   display: flex;
   flex-wrap: wrap;
@@ -3109,12 +3111,12 @@ input[type="range"] {
 }
 
 .profile-row select {
-  flex: 1 1 220px;
+  flex: 1 1 100%;
   min-width: 0;
 }
 
 .profile-row input {
-  flex: 0 1 160px;
+  flex: 1 1 160px;
   min-width: 0;
 }
 
@@ -3833,6 +3835,9 @@ input[type="range"] {
 }
 
 .picker-button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   width: 100%;
   min-height: 32px;
   padding: 4px 12px;
@@ -3851,6 +3856,25 @@ input[type="range"] {
 }
 
 .picker-button:disabled {
+  color: var(--riso-ink-3);
+}
+
+/* The chosen model: its name, then its ID in mono (only when the endpoint names it). */
+.picker-button-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-button-id {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
   color: var(--riso-ink-3);
 }
 
@@ -3892,6 +3916,23 @@ input[type="range"] {
 
 .picker-option:hover {
   background: var(--riso-ink-tint);
+}
+
+.picker-option:focus-visible {
+  outline: 2px solid var(--riso-blue);
+  outline-offset: -2px;
+}
+
+/* "Other model ID…" closes a custom endpoint's list, under a rule. */
+.picker-option-other {
+  margin-top: 4px;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0 0 6px 6px;
+}
+
+.picker-option-note {
+  font-size: 11px;
+  color: var(--riso-ink-3);
 }
 
 .picker-option[aria-selected="true"] {

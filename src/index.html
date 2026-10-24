@@ -461,25 +461,28 @@
                 <input id="provider-api-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="sm_live_…" />
               </div>
 
-              <div class="form-group" id="provider-model-text-group">
-                <label for="provider-model">Provider model ID</label>
-                <input id="provider-model" type="text" placeholder="Exact model ID" autocomplete="off" spellcheck="false" autocapitalize="off" />
-              </div>
-
+              <!-- The models the endpoint lists (after Test connection, or saved with it). A custom
+                   endpoint's list ends with "Other model ID…", which shows the ID field below. -->
               <div class="form-group" id="provider-model-select-group" hidden>
                 <label id="model-picker-label">Model for chat</label>
                 <div class="picker" id="model-picker">
-                  <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label">Choose a model</button>
+                  <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label model-picker-button">Choose a model</button>
                   <div id="model-picker-list" class="picker-list" role="listbox" aria-labelledby="model-picker-label" popover="manual" hidden></div>
                 </div>
               </div>
 
+              <div class="form-group" id="provider-model-text-group">
+                <label for="provider-model">Model ID</label>
+                <input id="provider-model" type="text" placeholder="Exact model ID" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="provider-model-hint" />
+                <p id="provider-model-hint" class="status-text">Test the connection to list the endpoint's models, or type the exact ID it expects.</p>
+              </div>
+
               <div class="button-row">
-                <button id="provider-save" class="button primary" type="submit">Save provider</button>
                 <span class="test-control">
                   <button id="provider-test" class="button secondary" type="button">Test connection</button>
                   <span id="provider-test-dot" class="status-dot" role="status" aria-label="Connection status"></span>
                 </span>
+                <button id="provider-save" class="button primary" type="submit">Save provider</button>
                 <button id="provider-clear" class="button danger" type="button">Clear provider</button>
               </div>
               <p id="provider-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Provider not configured.</p>
