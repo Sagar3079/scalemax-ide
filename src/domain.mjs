@@ -129,6 +129,7 @@ const MAX_REASONING = 65536;
 const MAX_ERROR = 2000;
 const MAX_HISTORY = 10;
 const MAX_PREVIEW = 400;
+const MAX_NOTE = 200;
 const SCHEDULES = ['once', 'hourly', 'daily', 'weekly', 'monthly', 'interval'];
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const MIN_INTERVAL_MINUTES = 1;
@@ -1267,15 +1268,25 @@ function normalizeHistory(value, fallbackTime) {
   for (const entry of value) {
     if (!isRecord(entry)) continue;
     const status = own(entry, 'status');
-    if (!['success', 'error', 'interrupted'].includes(status)) continue;
+    // 'denied': the run answered, but tool calls it needed were not allowed (lib/automations.cjs).
+    if (!['success', 'denied', 'error', 'interrupted'].includes(status)) continue;
+    const note = boundedText(own(entry, 'note'), MAX_NOTE).trim();
     result.push({
       time: timestamp(own(entry, 'time'), fallbackTime),
       status,
       preview: boundedText(own(entry, 'preview'), MAX_PREVIEW),
+      ...(note ? { note } : {}),
     });
     if (result.length === MAX_HISTORY) break;
   }
   return result;
+}
+
+function automationPermission(automation) {
+  const permission = own(automation, 'permission');
+  if (!PERMISSION_MODES.includes(permission)) return {};
+  if (permission !== 'bypass') return { permission };
+  return own(automation, 'bypassConsent') === true ? { permission, bypassConsent: true } : { permission: 'basic' };
 }
 
 export function normalizeAutomations(value, now = Date.now()) {
@@ -1328,7 +1339,7 @@ export function normalizeAutomations(value, now = Date.now()) {
       pendingCatchUp: false,
       lastRun: timestamp(own(automation, 'lastRun'), null),
       lastStatus: interrupted ? 'interrupted'
-        : ['idle', 'success', 'error', 'interrupted'].includes(status) ? status : 'idle',
+        : ['idle', 'success', 'denied', 'error', 'interrupted'].includes(status) ? status : 'idle',
       lastError: boundedText(own(automation, 'lastError'), MAX_ERROR),
       history: normalizeHistory(own(automation, 'history'), fallbackTime),
       // The folder and mode it was made in: a run works there, whatever is open when it fires.
@@ -1336,6 +1347,10 @@ export function normalizeAutomations(value, now = Date.now()) {
       // remembered their folder; it runs in the open folder until it is edited (src/app.js).
       ...(own(automation, 'folder') !== undefined ? { folder: normalizeTaskFolder(own(automation, 'folder')) } : {}),
       mode: MODE_IDS.includes(own(automation, 'mode')) ? automation.mode : null,
+      // The permission its runs work under (main re-checks it, lib/automations.cjs runPermission):
+      // Bypass only with the consent the user gave for this automation, otherwise Basic. No key:
+      // made before automations had one; its runs use the chat permission.
+      ...automationPermission(automation),
       // When the user last made, edited, paused or resumed it: main keeps its own schedule state
       // over an older copy from the window (lib/automations.cjs mergeAutomations).
       ...(validTimestamp(own(automation, 'editedAt')) ? { editedAt: automation.editedAt } : {}),

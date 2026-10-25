@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startScheduler, mergeAutomations, mergeRun, automationContext } from '../src/scheduler.js';
+import {
+  startScheduler, mergeAutomations, mergeRun, automationContext, automationStatusLabel, automationHistoryLine,
+  automationPermissionHint, automationFolderChoices,
+} from '../src/scheduler.js';
 import { normalizeAutomations } from '../src/domain.mjs';
 
 // The window's side of automations: main fires them (lib/automations.cjs, tested in
@@ -221,4 +224,67 @@ test('the folder, the mode and when it was last edited survive a reload', () => 
   // Made before automations remembered their folder: nothing recorded, which is not "no folder".
   const [legacy] = normalizeAutomations([automation()]);
   assert.equal('folder' in legacy, false);
+});
+
+test('a run whose tool calls were denied says it needs approval; a run stopped by a delete says nothing', async (t) => {
+  const bridge = fakeBridge();
+  withBridge(t, bridge);
+  const app = fakeApp();
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  bridge.emit({ running: [], finished: { id: 'a1', name: 'Digest', status: 'denied', manual: false, note: '1 tool call denied: by you' } });
+  assert.deepEqual(app.toasts, ['Automation needs approval: Digest — 1 tool call denied: by you']);
+  bridge.emit({ running: [], finished: { id: 'a1', name: 'Digest', status: 'error', code: 'CANCELLED', message: 'Stopped: the automation was deleted.' } });
+  assert.equal(app.toasts.length, 1, 'the window said "Stopped and deleted" itself');
+});
+
+test('the status line can be redrawn on its own, and the window knows which automations run', async (t) => {
+  const bridge = fakeBridge();
+  withBridge(t, bridge);
+  const node = { textContent: '' };
+  globalThis.document = { querySelector: (selector) => (selector === '#scheduler-status' ? node : null) };
+  t.after(() => { delete globalThis.document; });
+  const app = fakeApp({ automations: [automation({ nextRun: Date.UTC(2030, 0, 1) })] });
+  app.provider = { configured: false };
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  const rendered = app.rendered;
+  assert.equal(node.textContent, 'Connect a provider in Assistant to run schedules.');
+  // A provider connected in Assistant: the line follows without a scheduler event.
+  app.provider = { configured: true };
+  scheduler.refreshStatus();
+  assert.match(node.textContent, /^Next run: Digest at /);
+  // Paused in the window: no stale "Next run".
+  app.automations[0].active = false;
+  scheduler.refreshStatus();
+  assert.equal(node.textContent, 'No schedules enabled.');
+  assert.equal(app.rendered, rendered, 'refreshStatus never redraws the list (renderAutomations calls it)');
+  assert.equal(scheduler.isRunning('a1'), false);
+  bridge.emit({ running: ['a1'] });
+  assert.equal(scheduler.isRunning('a1'), true);
+  bridge.emit({ running: [] });
+  assert.equal(scheduler.isRunning('a1'), false);
+});
+
+test('the Automation view names statuses, history lines, permissions and folder choices', () => {
+  assert.equal(automationStatusLabel('denied'), 'Needs approval');
+  assert.equal(automationStatusLabel('success'), 'success');
+  assert.equal(automationStatusLabel(undefined), 'idle');
+  const time = () => 'T';
+  assert.equal(automationHistoryLine({ time: 1, status: 'denied', preview: 'Nothing changed.', note: '1 tool call denied: by you' }, time),
+    'T · needs approval (1 tool call denied: by you) — Nothing changed.');
+  assert.equal(automationHistoryLine({ time: 1, status: 'success', preview: 'Done.' }, time), 'T · success — Done.');
+  assert.match(automationPermissionHint('bypass'), /without asking, also while no window is open/);
+  assert.match(automationPermissionHint('basic'), /While no window is open, they are denied/);
+  assert.equal(automationPermissionHint('nonsense'), automationPermissionHint('basic'));
+  const choices = automationFolderChoices({
+    current: { name: 'api', path: '/p/api' },
+    recent: [{ name: 'api', path: '/p/api' }, { name: 'web', path: '/p/web' }, { path: '/p/docs' }, null],
+    automations: [{ folder: { name: 'reports', path: '/p/reports' } }, { folder: null }, { folder: { name: 'web', path: '/p/web' } }],
+  });
+  assert.deepEqual(choices, [
+    { name: 'api', path: '/p/api' }, { name: 'web', path: '/p/web' }, { name: 'docs', path: '/p/docs' }, { name: 'reports', path: '/p/reports' },
+  ]);
 });

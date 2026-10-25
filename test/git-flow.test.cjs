@@ -510,3 +510,81 @@ test('inside the sandbox: a task worktree in the app data folder works, the main
   assert.equal((await flow.commit(made.path, { paths: ['made.txt'], message: 'user commit' })).subject, 'user commit');
   assert.match(sandbox.refusalHint('Operation not permitted'), /separate worktree/);
 });
+
+test('ScaleMax\'s own untracked notes never hold back a merge, a pull request or a removal, and are marked', async (t) => {
+  const { flow, root, base, env } = setup(t, { gitVersion: [2, 15, 0] });
+  const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
+  write(made.path, '.scalemax/SCALEMAX.md', '# notes\n');
+  let status = await flow.status(made.path);
+  assert.deepEqual(status.files.map((file) => [file.path, file.notes === true]), [['.scalemax/', true]]);
+  let info = await flow.worktreeInfo(made.path, { base });
+  assert.equal(info.dirty, false);
+  assert.equal(info.changed, 0);
+  assert.equal(info.notes, true);
+  // The task's own work is named when it holds the merge back; the notes never are.
+  write(made.path, 'src/app.js', 'export const answer = 42;\n');
+  write(made.path, 'src/new.js', 'export {};\n');
+  await assert.rejects(flow.mergeWorktree(made.path, { base, into: root }), {
+    code: 'WORKTREE_DIRTY', message: /2 changes that are not committed and would not be merged: src\/app\.js, src\/new\.js\. Commit them first\./,
+  });
+  await assert.rejects(flow.removeWorktree(made.path, { base }), { code: 'WORKTREE_DIRTY', message: /would be lost: src\/app\.js, src\/new\.js\./ });
+  await flow.commit(made.path, { paths: ['src/app.js', 'src/new.js'], message: 'fix: the answer is 42' });
+  // The main checkout's own uncommitted changes are named too.
+  write(root, 'README.md', '# Busy\n');
+  await assert.rejects(flow.mergeWorktree(made.path, { base, into: root }), { code: 'MAIN_DIRTY', message: /has uncommitted changes \(README\.md\)/ });
+  git(root, env, 'checkout', '-q', '--', 'README.md');
+  assert.equal((await flow.mergeWorktree(made.path, { base, into: root })).merged, true);
+  assert.equal(fs.existsSync(path.join(root, '.scalemax')), false, 'the notes stayed out of the merge');
+  // Something of the user's in .scalemax (a spec) is the user's work: the folder is not "notes".
+  write(made.path, '.scalemax/specs/login/tasks.md', '- [ ] one\n');
+  status = await flow.status(made.path);
+  assert.deepEqual(status.files.map((file) => [file.path, file.notes === true]), [['.scalemax/', false]]);
+  assert.equal((await flow.worktreeInfo(made.path, { base })).dirty, true);
+  fs.rmSync(path.join(made.path, '.scalemax', 'specs'), { recursive: true });
+  // With only the notes left, removing needs no forcing.
+  assert.deepEqual(await flow.removeWorktree(made.path, { base }), { removed: true, branch: 'scalemax/fix-the-answer' });
+  assert.equal(fs.existsSync(made.path), false);
+});
+
+test('notes in a .scalemax folder the repository tracks are marked one by one', async (t) => {
+  const { flow, root, env } = setup(t);
+  write(root, '.scalemax/commands/review.md', 'Review it.\n');
+  git(root, env, 'add', '-A');
+  git(root, env, 'commit', '-q', '-m', 'commands');
+  write(root, '.scalemax/SCALEMAX.md', '# notes\n');
+  write(root, '.scalemax/commands/test.md', 'Test it.\n');
+  const files = (await flow.status(root)).files.map((file) => [file.path, file.notes === true]).sort();
+  assert.deepEqual(files, [['.scalemax/SCALEMAX.md', true], ['.scalemax/commands/test.md', false]]);
+});
+
+test('a new branch from a task worktree: the branch it left is deleted when it had nothing of its own', async (t) => {
+  const { flow, root, base, env } = setup(t, { gitVersion: [2, 15, 0] });
+  const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
+  write(made.path, 'src/app.js', 'export const answer = 42;\n');
+  const done = await flow.commit(made.path, { paths: ['src/app.js'], message: 'fix: 42', branch: 'feature/answer', base });
+  assert.equal(done.branch, 'feature/answer');
+  assert.deepEqual(done.previous, { branch: 'scalemax/fix-the-answer', deleted: true, commits: 0 });
+  const exists = (name) => spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], { cwd: root, env }).status === 0;
+  assert.equal(exists('scalemax/fix-the-answer'), false);
+  assert.equal((await flow.worktreeInfo(made.path, { base })).branch, 'feature/answer');
+
+  // One with commits of its own is kept (they are on the new branch too).
+  const second = await flow.createWorktree(root, { taskId: 'task-2-abc', title: 'Second' });
+  write(second.path, 'a.txt', 'a\n');
+  await flow.commit(second.path, { paths: ['a.txt'], message: 'a' });
+  write(second.path, 'b.txt', 'b\n');
+  const again = await flow.commit(second.path, { paths: ['b.txt'], message: 'b', branch: 'feature/second', base });
+  assert.deepEqual(again.previous, { branch: 'scalemax/second', deleted: false, commits: 1 });
+  assert.equal(exists('scalemax/second'), true);
+
+  // Without the base, nothing is deleted; in the main checkout nothing is said at all.
+  const third = await flow.createWorktree(root, { taskId: 'task-3-abc', title: 'Third' });
+  write(third.path, 'c.txt', 'c\n');
+  const unknown = await flow.commit(third.path, { paths: ['c.txt'], message: 'c', branch: 'feature/third' });
+  assert.deepEqual(unknown.previous, { branch: 'scalemax/third', deleted: false, commits: null });
+  assert.equal(exists('scalemax/third'), true);
+  write(root, 'd.txt', 'd\n');
+  const plain = await flow.commit(root, { paths: ['d.txt'], message: 'd', branch: 'feature/plain', base });
+  assert.equal(plain.previous, undefined);
+  assert.equal(exists(base), true);
+});
