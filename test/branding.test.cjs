@@ -27,6 +27,53 @@ test('other platforms get the same menus without the macOS app menu', () => {
   assert.deepEqual(template.map((menu) => menu.role), ['fileMenu', 'editMenu', 'viewMenu', 'windowMenu', 'help']);
 });
 
+test('the menus list the window\'s commands with their shortcuts, and a click sends the command to that window', () => {
+  const sent = [];
+  const template = buildMenuTemplate({ platform: 'darwin', runCommand: (win, command) => sent.push([win, command]) });
+  const find = (id) => {
+    for (const menu of template) {
+      const item = (menu.submenu || []).find((entry) => entry.id === id);
+      if (item) return { menu: menu.label || menu.role, item };
+    }
+    return null;
+  };
+  const preferences = find('command:preferences');
+  assert.equal(preferences.menu, 'ScaleMax', 'Preferences sit in the app menu on a Mac');
+  assert.equal(preferences.item.accelerator, 'CmdOrCtrl+,');
+  assert.equal(find('command:new-task').menu, 'File');
+  assert.equal(find('command:new-task').item.accelerator, 'CmdOrCtrl+N');
+  assert.equal(find('command:search').item.accelerator, 'CmdOrCtrl+K');
+  assert.equal(find('command:recent-sessions').item.accelerator, 'CmdOrCtrl+Shift+O');
+  assert.equal(find('command:focus-composer').menu, 'View');
+  assert.deepEqual(['chat', 'workspace', 'assistant', 'experts', 'automation', 'more'].map((view) => find(`command:view:${view}`).item.accelerator),
+    ['CmdOrCtrl+1', 'CmdOrCtrl+2', 'CmdOrCtrl+3', 'CmdOrCtrl+4', 'CmdOrCtrl+5', 'CmdOrCtrl+6']);
+  // The View menu keeps Electron's own items (reload, zoom, full screen).
+  const view = template.find((menu) => menu.role === 'viewMenu');
+  for (const role of ['reload', 'toggleDevTools', 'zoomIn', 'togglefullscreen']) assert.ok(view.submenu.some((item) => item.role === role), role);
+  assert.ok(template.find((menu) => menu.role === 'fileMenu').submenu.some((item) => item.role === 'close'));
+  const win = { id: 1 };
+  find('command:new-task').item.click({}, win);
+  assert.deepEqual(sent, [[win, 'new-task']]);
+  // Elsewhere Preferences are in the File menu, before Quit.
+  const other = buildMenuTemplate({ platform: 'linux' });
+  const file = other.find((menu) => menu.role === 'fileMenu').submenu;
+  assert.ok(file.some((item) => item.id === 'command:preferences'));
+  assert.equal(file.at(-1).role, 'quit');
+});
+
+test('a menu command reaches the page as a fixed DOM event, and only a known command', async () => {
+  const scripts = [];
+  const contents = { isDestroyed: () => false, executeJavaScript: async (script) => { scripts.push(script); } };
+  const template = buildMenuTemplate({ platform: 'darwin' });
+  const item = template.flatMap((menu) => menu.submenu || []).find((entry) => entry.id === 'command:view:workspace');
+  item.click({}, { isDestroyed: () => false, webContents: contents });
+  assert.deepEqual(scripts, [`document.dispatchEvent(new CustomEvent('scalemax:command', { detail: "view:workspace" }))`]);
+  // No window (the app is in the Dock without one), or a closed one: nothing happens.
+  item.click({}, undefined);
+  item.click({}, { isDestroyed: () => true, webContents: contents });
+  assert.equal(scripts.length, 1);
+});
+
 test('help opens the ScaleMax website', () => {
   const opened = [];
   const help = buildMenuTemplate({ platform: 'darwin', openExternal: (url) => opened.push(url) }).at(-1);

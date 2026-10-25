@@ -7,7 +7,7 @@ import {
   normalizeTodos, normalizeMessageImages, openTodos,
   automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
-  retryableReply,
+  retryableReply, plainPreview, taskTitleParts,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps, renderTodoList,
@@ -21,7 +21,8 @@ import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
-import { bindSessionsUi, renderMessageActions } from './sessions-ui.js';
+import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
+import { shortcutCommand, isCommand, shortcutList } from './shortcuts.mjs';
 import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
@@ -138,6 +139,20 @@ function icon(name, className) {
   path.setAttribute('d', ICONS[name]);
   svg.append(path);
   return svg;
+}
+
+// Keys typed into these are text (src/shortcuts.mjs leaves "/" to them).
+const NOT_TEXT_INPUTS = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
+function isTypingIn(node) {
+  if (!node || typeof node.tagName !== 'string') return false;
+  const tag = node.tagName.toLowerCase();
+  if (tag === 'textarea' || tag === 'select') return true;
+  if (tag === 'input') return !NOT_TEXT_INPUTS.has(String(node.type || 'text').toLowerCase());
+  return node.isContentEditable === true || ['textbox', 'searchbox', 'combobox'].includes(node.getAttribute?.('role'));
+}
+// The code editor (CodeMirror, or the textarea used when it cannot load) keeps ⌘F for find.
+function isInEditor(node) {
+  return Boolean(node?.closest?.('#editor-view, #editor-input, .cm-editor'));
 }
 
 // The same control after the task list is rebuilt: a row by its task, a group button by its folder.
@@ -1124,8 +1139,12 @@ const app = {
   async testProvider() {
     const bridge = this.getProviderBridge();
     if (!bridge?.discover) { this.showToast('Provider connections require the desktop app'); return; }
+    // The button stays enabled while it tests (aria-busy, and a second press waits), so the
+    // keyboard focus stays on it; disabling it dropped the focus to the page.
     const button = $('#provider-test');
-    if (button) button.disabled = true;
+    if (this.testingProvider) return;
+    this.testingProvider = true;
+    button?.setAttribute('aria-busy', 'true');
     this.markFormEdited();
     this.setTestDot('pending');
     if ($('#provider-status')) $('#provider-status').textContent = 'Testing connection and loading models…';
@@ -1176,7 +1195,8 @@ const app = {
       this.setTestDot('ok');
       this.showToast('Provider connection succeeded');
     } finally {
-      if (button) button.disabled = false;
+      this.testingProvider = false;
+      button?.removeAttribute('aria-busy');
     }
   },
 
@@ -1316,6 +1336,7 @@ const app = {
         this.settleCurrentTask();
         this.showToast(`"${folder.name}" is already open`);
       }
+      this.refocusAfterFolder();
       return { ok: true, data: { root: folder.path } };
     }
     if (this.refuseFolderChange()) return null;
@@ -1338,7 +1359,22 @@ const app = {
       this.settleCurrentTask();
       this.showToast(`Opened ${folder.name}`);
     }
+    this.refocusAfterFolder();
     return result;
+  },
+
+  // After a folder opens, the control that opened it is often gone (the chat's folder picker, the
+  // Workspace's empty state) and the focus with it. From the chat (its folder picker or folder
+  // chip) the message box takes it, since typing comes next; elsewhere it moves only when it was
+  // lost (to the Workspace's file filter there).
+  refocusAfterFolder() {
+    if (document.querySelector('dialog[open]')) return;
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected || !active.getClientRects?.().length;
+    const fromChat = Boolean(active?.closest?.('#folder-picker, #folder-chip, #folder-menu'));
+    if (!lost && !fromChat) return;
+    if ($('#view-chat')?.classList.contains('active')) this.focusComposer();
+    else if ($('#view-workspace')?.classList.contains('active')) $('#workspace-filter')?.focus();
   },
 
   // The locked menu's "New task in another folder…": a new task, then the folder dialog.
@@ -1350,7 +1386,7 @@ const app = {
 
   // Why a folder did not open, for a toast. main passes file-system errors through with their code.
   folderErrorText(result, path) {
-    const name = folderName(path);
+    const name = this.folderLabel(path);
     const code = result?.error?.code;
     if (FOLDER_GONE.includes(code)) return `The folder "${name}" is no longer available.`;
     if (code === 'EPERM' || code === 'EACCES') {
@@ -1367,20 +1403,38 @@ const app = {
   // not the generated folder name it has on disk; any other folder by its own name.
   folderLabel(path) {
     if (!path) return '';
-    const task = this.tasks.find((item) => item.folder?.name && normalizeWorktree(item.worktree)?.path === path);
-    return task ? task.folder.name : folderName(path);
+    return this.worktreeLabel(path) || folderName(path);
   },
 
-  // The open folder as a task folder ({ name, path }), or null.
+  // A task worktree's name, "<main checkout> (<branch>)", or '' when `path` is not one: the name
+  // its own task got when the worktree was made (src/gitflow-ui.js), else one from its record.
+  worktreeLabel(path) {
+    if (!path) return '';
+    let record = null;
+    for (const task of this.tasks) {
+      const worktree = normalizeWorktree(task.worktree);
+      if (worktree?.path !== path) continue;
+      if (task.folder?.path === path && task.folder.name && task.folder.name !== folderName(path)) return task.folder.name;
+      record ||= worktree;
+    }
+    return record ? `${record.mainName} (${record.branch.replace(/^scalemax\//, '')})` : '';
+  },
+
+  // The open folder as a task folder ({ name, path }), or null. A task worktree is named after
+  // its project and branch, not the generated folder name it has on disk.
   rootFolder() {
     const root = this.workspace.root;
-    return root ? { name: folderName(root), path: root } : null;
+    return root ? { name: this.folderLabel(root), path: root } : null;
   },
 
   // The folder the chip, the chat header and the sidebar footer show: the task's own folder (fixed
-  // or draft), otherwise the open one that its next message takes.
+  // or draft), otherwise the open one that its next message takes. A task made in a worktree
+  // before its name was known shows the worktree's name.
   taskFolderShown(task = this.currentTask()) {
-    return task?.folder || this.rootFolder();
+    const folder = task?.folder;
+    if (!folder) return this.rootFolder();
+    const label = this.worktreeLabel(folder.path);
+    return label && label !== folder.name ? { ...folder, name: label } : folder;
   },
 
   // True when the current task is fixed to a folder other than `path`.
@@ -1817,21 +1871,15 @@ const app = {
     $('#automation-form')?.addEventListener('submit', (event) => this.createAutomation(event));
     $('#automation-list')?.addEventListener('click', (event) => this.changeAutomation(event));
     this.bindAutomationForm();
+    this.bindShortcuts();
     $('#search-btn')?.addEventListener('click', () => this.toggleSearch(true));
     $('#search-close')?.addEventListener('click', () => this.toggleSearch(false));
-    $('#search-input')?.addEventListener('input', () => this.renderSearch());
-    $('#search-results')?.addEventListener('click', (event) => {
-      const task = event.target.closest('.search-result[data-task-id]');
-      if (task) {
-        this.selectTask(task.dataset.taskId);
-        this.toggleSearch(false);
-        return;
-      }
-      const resource = event.target.closest('.search-result[data-resource-kind]');
-      if (!resource) return;
-      this.toggleSearch(false);
-      openResourceDetail(this, resource.dataset.resourceKind, resource.dataset.resourceId);
+    $('#search-input')?.addEventListener('input', () => {
+      this.searchActive = 0;
+      this.renderSearch();
     });
+    $('#search-input')?.addEventListener('keydown', (event) => this.searchKeys(event));
+    $('#search-results')?.addEventListener('click', (event) => this.openSearchResult(event.target.closest('.search-result')));
     $('#context-chips')?.addEventListener('click', (event) => {
       const chip = event.target.closest('.context-chip[data-context-kind]');
       if (!chip) return;
@@ -1859,6 +1907,113 @@ const app = {
       else item.removeAttribute('aria-current');
     });
     $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
+  },
+
+  // ---- Keyboard shortcuts --------------------------------------------------
+  // The keys are src/shortcuts.mjs's; the native menu (lib/app-branding.cjs) sends the same
+  // commands as a 'scalemax:command' event. The page takes its keys first and stops them, so a
+  // menu item acts only when it is clicked.
+
+  isMac() {
+    const platform = window.scalemaxAPI?.getPlatform?.();
+    if (platform && platform !== 'browser') return platform === 'darwin';
+    return /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '');
+  },
+
+  bindShortcuts() {
+    document.addEventListener('keydown', (event) => {
+      // A menu, the slash list, CodeMirror or a dialog already used the key.
+      if (event.defaultPrevented) return;
+      const active = document.activeElement;
+      const command = shortcutCommand(event, { mac: this.isMac(), typing: isTypingIn(active), inEditor: isInEditor(active) });
+      if (!command) return;
+      // A plain "/" is a character: inside a dialog it is left to the dialog.
+      const plain = !event.metaKey && !event.ctrlKey;
+      if (plain && document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      this.runCommand(command);
+    });
+    document.addEventListener('scalemax:command', (event) => {
+      if (isCommand(event.detail)) this.runCommand(event.detail);
+    });
+    const mac = this.isMac();
+    const mod = mac ? 'Meta' : 'Control';
+    const sign = (key) => (mac ? `⌘${key}` : `Ctrl+${key}`);
+    for (const [selector, key, label] of [
+      ['#new-task-btn', 'N', 'New task'], ['#search-btn', 'K', 'Search workspace'], ['#chat-input', 'L', ''],
+    ]) {
+      const node = $(selector);
+      node?.setAttribute('aria-keyshortcuts', `${mod}+${key}`);
+      if (node && label) node.title = `${label} (${sign(key)})`;
+    }
+    $$('#sidebar-nav .sidebar-item[data-view]').forEach((item, index) => {
+      item.setAttribute('aria-keyshortcuts', `${mod}+${index + 1}`);
+      item.title = `${item.textContent.trim()} (${sign(index + 1)})`;
+    });
+    this.renderShortcutList();
+  },
+
+  // Preferences > Keyboard shortcuts.
+  renderShortcutList() {
+    const list = $('#shortcuts-list');
+    if (!list) return;
+    list.replaceChildren(...shortcutList({ mac: this.isMac() }).map((entry) => {
+      const row = element('div', 'shortcut-row');
+      const keys = element('dd', 'shortcut-keys');
+      entry.keys.forEach((key, index) => {
+        if (index) keys.append(element('span', 'shortcut-or', 'or'));
+        keys.append(element('kbd', '', key));
+      });
+      const term = element('dt', 'shortcut-label', entry.label);
+      if (entry.note) term.append(element('span', 'shortcut-note', entry.note));
+      row.append(term, keys);
+      return row;
+    }));
+  },
+
+  runCommand(command) {
+    // While a dialog is up the shortcuts wait; the one that opened it goes back to its field.
+    const open = document.querySelector('dialog[open]');
+    if (open) {
+      const field = (command === 'search' && open.id === 'search-dialog' && $('#search-input'))
+        || (command === 'recent-sessions' && open.id === 'sessions-dialog' && $('#sessions-search'));
+      if (field) {
+        field.focus();
+        field.select?.();
+      }
+      return;
+    }
+    if (command === 'new-task') this.newTask();
+    else if (command === 'preferences') this.showView('more');
+    else if (command === 'search') this.toggleSearch(true);
+    else if (command === 'recent-sessions') openSessions(this);
+    else if (command === 'focus-composer') this.focusComposer();
+    else if (command.startsWith('view:')) this.showView(command.slice('view:'.length));
+  },
+
+  // The message box, from anywhere (⌘L, "/"): the chat comes up first.
+  focusComposer() {
+    if (!$('#view-chat')?.classList.contains('active')) this.switchView('chat');
+    const input = $('#chat-input');
+    if (input && !input.disabled) input.focus();
+  },
+
+  // A view from the keyboard: the focus goes with it (the message box in the chat, the page's
+  // title elsewhere), so it is not left on a control the view switch just hid.
+  showView(view) {
+    if (!Object.hasOwn(VIEW_NAMES, view)) return;
+    if (view === 'chat') {
+      this.focusComposer();
+      return;
+    }
+    this.switchView(view);
+    const section = $(`#view-${view}`);
+    const title = section?.getAttribute('aria-labelledby');
+    const target = (title && document.getElementById(title)) || $('#main-content');
+    if (!target) return;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.classList.add('focus-target');
+    target.focus();
   },
 
   makeTask(title) {
@@ -1960,7 +2115,7 @@ const app = {
         if (!result?.ok) {
           outcome = missing ? 'missing' : 'failed';
           if (current) {
-            this.showToast(missing && isTaskLocked(task) ? `This task's folder "${folder.name}" is no longer available.`
+            this.showToast(missing && isTaskLocked(task) ? `This task's folder "${this.taskFolderShown(task).name}" is no longer available.`
               : this.folderErrorText(result, folder.path));
           }
         }
@@ -1977,7 +2132,11 @@ const app = {
     const list = $('#tasks-list');
     const count = $('#task-count');
     const { groups, legacy } = taskGroups(this.tasks, this.currentTaskId);
-    if (count) count.textContent = String(groups.reduce((total, group) => total + group.tasks.length, legacy.length));
+    // How many projects (folders) there are, the groups below; not how many tasks.
+    if (count) {
+      count.textContent = String(groups.length);
+      count.setAttribute('aria-label', `${groups.length} ${groups.length === 1 ? 'project' : 'projects'}`);
+    }
     if (list) {
       // Rebuilding must not drop keyboard focus from the row or button the user is on.
       const focus = list.contains(document.activeElement) ? taskListFocus(document.activeElement) : '';
@@ -1990,6 +2149,9 @@ const app = {
   },
 
   renderTaskGroup(group, index, { legacy = false } = {}) {
+    // A task worktree goes by its project and branch ("api (fix-login)"), whatever name its tasks
+    // were given when they were made in it.
+    if (!legacy) group = { ...group, name: this.worktreeLabel(group.path) || group.name };
     const node = element('div', `task-group${legacy ? ' task-group-legacy' : ''}`);
     node.dataset.folderPath = group.path;
     const collapsed = this.collapsedFolders.has(group.path);
@@ -2029,7 +2191,11 @@ const app = {
     const title = task.messages.length ? task.title : 'New task';
     row.classList.toggle('is-draft', !task.messages.length);
     row.title = title;
-    const titleNode = element('span', 'task-title', title);
+    // A fork says so before its title: at the end, "(fork)" was the first thing the row cut off.
+    const parts = taskTitleParts(title);
+    const titleNode = element('span', 'task-title');
+    if (parts.fork) titleNode.append(element('span', 'task-fork-tag', 'fork'), ' ');
+    titleNode.append(parts.title);
     // A task that is working shows a spinner; one that finished while away, a dot. With the
     // companion on, a mini mascot prints in their place: working, waiting for you (an approval),
     // done (registered) or failed. Idle tasks show their time.
@@ -3868,7 +4034,10 @@ const app = {
     const dialog = $('#search-dialog');
     if (!dialog) return;
     if (open) {
-      if (!dialog.open) dialog.showModal();
+      if (!dialog.open) {
+        dialog.showModal();
+        this.searchActive = 0;
+      }
       this.renderSearch();
       $('#search-input')?.focus();
     } else if (dialog.open) {
@@ -3876,24 +4045,79 @@ const app = {
     }
   },
 
+  // The results are a list box the field drives (aria-activedescendant): ↑ ↓ move, Enter opens,
+  // and the field keeps the focus so typing goes on.
   renderSearch() {
     const list = $('#search-results');
     if (!list) return;
-    const query = ($('#search-input')?.value || '').trim();
+    const input = $('#search-input');
+    const query = (input?.value || '').trim();
     const results = searchItems(query, this.tasks, { experts: this.customExperts, skills: this.customSkills });
-    list.replaceChildren(...results.map((result) => {
-      const row = element('button', 'search-result');
+    this.searchActive = Math.min(Math.max(0, this.searchActive || 0), Math.max(0, results.length - 1));
+    list.replaceChildren(...results.map((result, index) => {
+      const row = element('div', 'search-result');
+      row.id = `search-option-${index}`;
+      row.setAttribute('role', 'option');
+      const active = index === this.searchActive;
+      row.setAttribute('aria-selected', String(active));
+      row.classList.toggle('is-active', active);
       if (result.kind === 'task') row.dataset.taskId = result.id;
       else {
         row.dataset.resourceKind = result.kind;
         row.dataset.resourceId = result.id;
       }
       const text = element('span', 'search-result-text');
-      text.append(element('span', 'task-title', result.title));
-      if (result.description) text.append(element('span', 'search-result-desc', result.description));
+      const title = element('span', 'task-title');
+      // A fork is marked before its title, as in the sidebar.
+      const parts = result.kind === 'task' ? taskTitleParts(result.title) : { title: result.title, fork: false };
+      if (parts.fork) title.append(element('span', 'task-fork-tag', 'fork'), ' ');
+      title.append(parts.title);
+      text.append(title);
+      // A task's words are its messages: Markdown is shown as the text it reads as.
+      const description = result.kind === 'task' ? plainPreview(result.description).replace(/\s+/g, ' ').trim() : result.description;
+      if (description) text.append(element('span', 'search-result-desc', description));
       row.append(text, element('span', 'badge', result.kind));
       return row;
     }));
+    if (input) {
+      input.setAttribute('aria-expanded', String(results.length > 0));
+      if (results.length) input.setAttribute('aria-activedescendant', `search-option-${this.searchActive}`);
+      else input.removeAttribute('aria-activedescendant');
+    }
+    const count = $('#search-count');
+    const said = !query ? '' : results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No results';
+    if (count && count.textContent !== said) count.textContent = said;
+    if (results.length) $(`#search-option-${this.searchActive}`)?.scrollIntoView?.({ block: 'nearest' });
+  },
+
+  // Opens the task or resource of a search result and closes the search.
+  openSearchResult(row) {
+    if (!row) return;
+    if (row.dataset.taskId) {
+      this.selectTask(row.dataset.taskId);
+      this.toggleSearch(false);
+      return;
+    }
+    if (!row.dataset.resourceKind) return;
+    this.toggleSearch(false);
+    openResourceDetail(this, row.dataset.resourceKind, row.dataset.resourceId);
+  },
+
+  searchKeys(event) {
+    const count = $('#search-results')?.querySelectorAll('.search-result').length || 0;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!count) return;
+      this.searchActive = ((this.searchActive || 0) + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+      this.renderSearch();
+    } else if ((event.key === 'Home' || event.key === 'End') && count && event.ctrlKey) {
+      event.preventDefault();
+      this.searchActive = event.key === 'Home' ? 0 : count - 1;
+      this.renderSearch();
+    } else if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      this.openSearchResult($(`#search-option-${this.searchActive || 0}`));
+    }
   },
 
   showToast(message) {
@@ -3906,11 +4130,35 @@ const app = {
     const host = document.querySelector('dialog[open]');
     if (host && toast.parentElement !== host) host.append(toast);
     if (!host && toast.parentElement !== document.body) document.body.append(toast);
+    this.placeToast(toast, host);
     toast.classList.add('show');
     this.toastTimer = window.setTimeout(() => {
       toast.classList.remove('show');
       if (toast.parentElement !== document.body) document.body.append(toast);
     }, 2200);
+  },
+
+  // Where a toast prints: centred on the main area just under its toolbar (and a worktree's bar),
+  // clear of the composer, its chips and the forms' Save buttons; over a dialog, just above it.
+  placeToast(toast, host) {
+    const set = (name, value) => toast.style.setProperty(name, `${Math.round(value)}px`);
+    if (host) {
+      const box = host.getBoundingClientRect();
+      const height = toast.offsetHeight || 32;
+      set('--toast-x', box.left + box.width / 2);
+      set('--toast-top', box.top - height - 8 >= 8 ? box.top - height - 8 : 8);
+      return;
+    }
+    const main = $('#main-content');
+    if (!main?.getBoundingClientRect) return;
+    const area = main.getBoundingClientRect();
+    let anchor = area.top;
+    const view = main.querySelector('.view.active');
+    for (const bar of view ? view.querySelectorAll('.view-toolbar, #worktree-bar') : []) {
+      if (!bar.hidden && bar.getClientRects().length) anchor = Math.max(anchor, bar.getBoundingClientRect().bottom);
+    }
+    set('--toast-x', area.left + area.width / 2);
+    set('--toast-top', anchor + 12);
   },
 
   // Surfaces unexpected renderer failures in the alert banner at the top of the

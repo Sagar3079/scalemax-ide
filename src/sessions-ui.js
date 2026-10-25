@@ -15,7 +15,7 @@ import {
   rewindPlan, rewoundTask, undoOrder, rewindReport, forkedTask, sessionResults, transcriptMarkdown, unsharedChangeIds, fullTaskTitle,
   normalizeWorktree,
 } from './sessions.mjs';
-import { taskTime } from './domain.mjs';
+import { taskTime, plainPreview, taskTitleParts } from './domain.mjs';
 import { reloadTabs } from './workspace-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -254,6 +254,33 @@ function forkFrom(app, taskId, index) {
 
 const picker = { app: null, results: [], active: 0, opener: null };
 
+// A preview shows the message as the text it reads as, not its Markdown ("## Done - Added
+// `src/x.js`"): plainPreview, kept per message until its text changes, then cut around the match
+// like sessionResults' snippet.
+const SNIPPET = 140;
+const plainTexts = new WeakMap();
+function plainOf(message) {
+  const kept = plainTexts.get(message);
+  if (kept?.text === message.text) return kept.plain;
+  const plain = plainPreview(message.text).replace(/\s+/g, ' ').trim();
+  plainTexts.set(message, { text: message.text, plain });
+  return plain;
+}
+/** The preview under a task in Recent sessions: its matching (or last) message as plain text, cut around the match. */
+export function sessionPreview(task, query) {
+  const messages = (Array.isArray(task?.messages) ? task.messages : [])
+    .filter((message) => message && typeof message === 'object' && typeof message.text === 'string');
+  const needle = String(query || '').trim().toLowerCase();
+  const hit = needle ? messages.find((message) => message.text.toLowerCase().includes(needle)) : null;
+  const message = hit || [...messages].reverse().find((item) => item.text.trim());
+  if (!message) return '';
+  const flat = plainOf(message);
+  const at = hit ? flat.toLowerCase().indexOf(needle) : -1;
+  if (at < 0) return flat.length > SNIPPET ? `${flat.slice(0, SNIPPET)}…` : flat;
+  const start = Math.max(0, at - 40);
+  return `${start ? '…' : ''}${flat.slice(start, start + SNIPPET)}${start + SNIPPET < flat.length ? '…' : ''}`;
+}
+
 function renderPicker() {
   const list = $('#sessions-list');
   const input = $('#sessions-search');
@@ -275,11 +302,18 @@ function renderPicker() {
     item.classList.toggle('is-current', result.id === picker.app.currentTaskId);
     item.dataset.taskId = result.id;
     const head = element('span', 'sessions-item-head');
-    head.append(element('span', 'sessions-item-title', result.title), element('span', 'sessions-item-time', taskTime(result.updatedAt)));
+    // A fork is marked before its title, as in the sidebar.
+    const parts = taskTitleParts(result.title);
+    const title = element('span', 'sessions-item-title');
+    if (parts.fork) title.append(element('span', 'task-fork-tag', 'fork'), ' ');
+    title.append(parts.title);
+    head.append(title, element('span', 'sessions-item-time', taskTime(result.updatedAt)));
     const meta = element('span', 'sessions-item-meta', `${result.folderName || 'No folder'} · ${plural(result.messages, 'message')}`);
     if (result.folderPath) meta.title = result.folderPath;
     item.append(head, meta);
-    if (result.snippet) item.append(element('span', 'sessions-item-snippet', result.snippet));
+    const task = picker.app.tasks.find((entry) => entry.id === result.id);
+    const snippet = task ? sessionPreview(task, query) : result.snippet;
+    if (snippet) item.append(element('span', 'sessions-item-snippet', snippet));
     item.addEventListener('click', () => choose(result.id));
     return item;
   }));
@@ -378,18 +412,7 @@ export function bindSessionsUi(app) {
   }
   $('#sessions-btn')?.addEventListener('click', () => openSessions(app));
   $('#export-transcript-btn')?.addEventListener('click', () => void exportTranscript(app));
-  // ⌘⇧O (Ctrl+Shift+O elsewhere) opens Recent sessions from anywhere, unless another dialog is up.
-  document.addEventListener('keydown', (event) => {
-    if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'o') return;
-    if ($('#sessions-dialog')?.open) {
-      event.preventDefault();
-      $('#sessions-search')?.focus();
-      return;
-    }
-    if (document.querySelector('dialog[open]')) return;
-    event.preventDefault();
-    openSessions(app);
-  });
+  // ⌘⇧O (Ctrl+Shift+O elsewhere) opens it from anywhere: src/shortcuts.mjs, run by src/app.js.
   const button = $('#sessions-btn');
   if (button) button.title = `Recent sessions (${SHORTCUT})`;
 }

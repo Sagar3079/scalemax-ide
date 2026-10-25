@@ -7,6 +7,7 @@ import {
   MODE_IDS, MODE_TOOLS, modeInfo, modeSummary, normalizeMode,
   normalizeMetrics, normalizeCompaction, taskHistoryMessages, compactionMessages, compactionBoundary, compactionInput,
   automaticCompactionPlan, estimateTokens, metricsLabel, taskMetrics, taskMetricsLabel, COMPACTION_TAIL_MESSAGES,
+  DEFAULT_SETTINGS, plainPreview, taskTitleParts,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -747,4 +748,49 @@ test('the companion is on unless turned off, and a reply keeps how long it took'
     { role: 'assistant', text: 'odd', elapsedMs: -3 },
   ] }]);
   assert.deepEqual(task.messages.map((message) => message.elapsedMs), [undefined, 72_000, undefined]);
+});
+
+// ---- Polish: theme default, previews, fork titles ----
+
+test('a new install follows the system theme; a saved Light or Dark stays as chosen', () => {
+  assert.equal(DEFAULT_SETTINGS.theme, 'system');
+  assert.equal(normalizeSettings({}).theme, 'system');
+  assert.equal(normalizeSettings(undefined).theme, 'system');
+  assert.equal(normalizeSettings({ theme: 'light' }).theme, 'light');
+  assert.equal(normalizeSettings({ theme: 'dark' }).theme, 'dark');
+  assert.equal(normalizeSettings({ theme: 'sepia' }).theme, 'system');
+});
+
+test('plainPreview shows a reply\'s Markdown as the text it reads as', () => {
+  // Lena's Recent sessions preview: "## Done - Added `src/health.js`…".
+  const reply = '## Done\n- Added `src/health.js` exporting `health()` (status + uptime).\n- Registered `GET /health` in `src/server.js`.\n\nTests pass.';
+  assert.equal(plainPreview(reply).replace(/\s+/g, ' '),
+    'Done: Added src/health.js exporting health() (status + uptime). Registered GET /health in src/server.js. Tests pass.');
+  assert.equal(plainPreview('Use **bold**, *em*, _under_ and ~~old~~; snake_case_name and 2 * 3 * 4 stay.'),
+    'Use bold, em, under and old; snake_case_name and 2 * 3 * 4 stay.');
+  assert.equal(plainPreview('> quoted\n1. one\n2) two\n- [x] done\n```js\nconst a = 1;\n```\n---\n| A | B |\n|---|---|\n| 1 | 2 |'),
+    'quoted\none\ntwo\ndone\nconst a = 1;\nA · B\n1 · 2');
+  assert.equal(plainPreview('See [the docs](https://x.y/z), ![a chart](c.png) and <https://ex.com>.'), 'See the docs, a chart and https://ex.com.');
+  assert.equal(plainPreview('Escaped \\*stars\\* and \\`ticks\\` stay; ``code with ` tick`` loses its fence.'),
+    'Escaped *stars* and `ticks` stay; code with ` tick loses its fence.');
+  assert.equal(plainPreview('# Summary #\nText\n\nTitle\n====='), 'Summary:\nText\n\nTitle');
+  assert.equal(plainPreview('### Done.'), 'Done.', 'a heading that ends a sentence gets no colon');
+  assert.equal(plainPreview(''), '');
+  assert.equal(plainPreview(null), '');
+});
+
+test('plainPreview takes linear time on long replies full of stray marks', () => {
+  for (const text of ['**a '.repeat(20000), '[a'.repeat(20000), '[a](b'.repeat(10000), '<a'.repeat(20000), '`'.repeat(5000), '*a '.repeat(20000)]) {
+    const started = performance.now();
+    plainPreview(text);
+    assert.ok(performance.now() - started < 1500, `${text.slice(0, 6)}… took too long`);
+  }
+});
+
+test('a fork\'s "(fork)" comes off the end of its title, to be shown before it', () => {
+  assert.deepEqual(taskTitleParts('Update the README with a one-line descri… (fork)'), { title: 'Update the README with a one-line descri…', fork: true });
+  assert.deepEqual(taskTitleParts('Fix login (fork) (fork)'), { title: 'Fix login', fork: true });
+  assert.deepEqual(taskTitleParts('Explain (fork) handling'), { title: 'Explain (fork) handling', fork: false });
+  assert.deepEqual(taskTitleParts('(fork)'), { title: '(fork)', fork: false }, 'a title that is only the mark stays as it is');
+  assert.deepEqual(taskTitleParts(undefined), { title: '', fork: false });
 });

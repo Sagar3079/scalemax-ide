@@ -1020,6 +1020,20 @@ textarea,
   margin-inline-start: -24px;
 }
 
+/* Without the mini mascot (the companion off, or a row drawn before its state), the spinner and
+   the dot sit centred in the same 16px slot, so the title starts at 32px in every row. */
+.task-item > .task-status.is-unread:first-child {
+  margin-inline: -20px 4px;
+}
+
+.task-item > .task-status.is-running:first-child {
+  margin-inline: -22px 2px;
+}
+
+body:not(.companion-off) .task-item > .task-status.has-mascot:first-child {
+  margin-inline: -24px 0;
+}
+
 .task-item:hover {
   background: var(--riso-ink-tint);
   color: var(--riso-ink);
@@ -1045,6 +1059,20 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A fork's mark before its title ("fork Update the README…"); "(fork)" at the end was cut off. */
+.task-fork-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--riso-rule-strong);
+  border-radius: 3px;
+  color: var(--riso-rail-ink-3);
+  font-family: var(--sm-font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 14px;
+  vertical-align: 1px;
 }
 
 .task-time {
@@ -1075,7 +1103,10 @@ textarea,
 }
 
 .task-item.has-state .task-title {
-  flex: 1 1 0;
+  /* A real basis, so the state line (100%) never fits beside the title on the first line: with a
+     zero basis it did whenever the mark was narrower than the mascot (the companion off), and the
+     title was squeezed to nothing. */
+  flex: 1 1 50%;
 }
 
 .task-state-line {
@@ -1292,6 +1323,11 @@ textarea,
 
 .button:disabled {
   opacity: 0.55;
+}
+
+/* Working (Test connection): it keeps the focus, so it is not disabled; it says so instead. */
+.button[aria-busy="true"] {
+  cursor: progress;
 }
 
 .button-row {
@@ -1788,6 +1824,63 @@ input[type="range"] {
   font-weight: 500;
   line-height: 20px;
   color: var(--riso-ink);
+}
+
+/* Preferences > Keyboard shortcuts: what on the left, the keys on the right, rows on 1px rules. */
+.shortcuts-list {
+  margin: 0;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 8px 0;
+}
+
+.shortcut-row + .shortcut-row {
+  border-top: 1px solid var(--riso-rule);
+}
+
+.shortcut-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink);
+}
+
+.shortcut-note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-3);
+}
+
+.shortcut-keys {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--riso-ink-3);
+}
+
+.shortcut-keys kbd {
+  /* The interface face, so ⌘⇧O does not read as ⌘⇧0 in the mono. */
+  font-family: var(--sm-font-ui);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--riso-ink-2);
+}
+
+/* A view's title takes the focus when the view is opened from the keyboard (⌘1–⌘6); it is not a
+   control, so it shows no ring. */
+.focus-target:focus {
+  outline: none;
 }
 
 .about-card {
@@ -4904,23 +4997,46 @@ dialog::backdrop {
   outline-offset: -2px;
 }
 
+/* The result ↑ ↓ points at (the field keeps the focus ring): a blue tint and a bar at its edge,
+   so only one thing on screen looks focused. */
+.search-result.is-active {
+  background: var(--riso-blue-tint);
+  box-shadow: inset 2px 0 0 var(--riso-blue);
+}
+
+.search-result {
+  cursor: pointer;
+}
+
+/* A toast prints at the top of the main area, under its toolbar (src/app.js placeToast sets
+   --toast-x/--toast-top), never over the composer's chips or a form's Save buttons; it lets clicks
+   through. Light: an ink sheet with paper text. Dark: a raised deep sheet on a rule, not a white
+   block. */
 #toast {
   position: fixed;
-  left: 50%;
-  bottom: 40px;
+  left: var(--toast-x, 50%);
+  top: var(--toast-top, 52px);
   z-index: 1000;
-  transform: translate(-50%, 12px);
-  max-width: min(480px, 80vw);
+  transform: translate(-50%, -6px);
+  max-width: min(480px, calc(100vw - 32px));
   padding: 8px 16px;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: var(--riso-ink);
   color: var(--riso-paper);
   font-size: 12px;
+  line-height: 16px;
   box-shadow: var(--sm-shadow-lift);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--sm-dur-2) var(--sm-ease-out),
     transform var(--sm-dur-2) var(--sm-ease-out);
+}
+
+[data-theme="dark"] #toast {
+  border-color: var(--riso-rule-strong);
+  background: color-mix(in srgb, var(--riso-ink) 8%, var(--riso-paper-raised));
+  color: var(--riso-ink);
 }
 
 #toast.show {

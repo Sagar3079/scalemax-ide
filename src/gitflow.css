@@ -522,10 +522,11 @@
 .sessions-item:hover {
   background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
 }
+/* The row ↑ ↓ points at. The search field keeps the focus ring, so the row is marked another
+   way (a tint and a bar at its edge): only one thing looks focused. */
 .sessions-item.is-active {
   background: var(--riso-blue-tint, color-mix(in srgb, #0078BF 11%, transparent));
-  outline: 2px solid var(--riso-blue, #0078BF);
-  outline-offset: -2px;
+  box-shadow: inset 2px 0 0 var(--riso-blue, #0078BF);
 }
 .sessions-item-head {
   display: flex;
@@ -584,7 +585,8 @@
   border-radius: 3px;
   background: var(--riso-paper, #F3F4F1);
   color: var(--riso-ink-2, #4A4D55);
-  font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  /* The interface face: in the mono, ⌘⇧O read as ⌘⇧0. */
+  font-family: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, sans-serif);
   font-size: 11px;
   line-height: 16px;
   text-align: center;
