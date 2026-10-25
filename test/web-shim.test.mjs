@@ -70,7 +70,7 @@ test('the preview stands in for automations and MCP listings without running any
 
 test('the preview stands in for Git, worktrees and transcripts without pretending to run them', async () => {
   assert.deepEqual((await api.git.status({ folder: '/preview/demo-project' })).data, { isRepo: false });
-  for (const method of ['branches', 'suggestMessage', 'commit', 'push', 'pull', 'switchBranch', 'createPr']) {
+  for (const method of ['branches', 'suggestMessage', 'commit', 'push', 'pull', 'fetch', 'restoreStash', 'switchBranch', 'createPr']) {
     assert.equal((await api.git[method]({ folder: '/preview/demo-project' })).error.code, 'UNAVAILABLE', method);
   }
   for (const method of ['create', 'info', 'merge', 'remove', 'reveal']) {

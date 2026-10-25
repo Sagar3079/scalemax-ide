@@ -420,6 +420,9 @@
                         <button id="git-commit" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="commit-dialog">Commit…</button>
                         <button id="git-pull" class="button secondary compact" type="button">Pull</button>
                         <button id="git-switch" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="branch-dialog">Switch branch…</button>
+                        <button id="git-stash-restore" class="button secondary compact" type="button" hidden>Restore stashed changes</button>
+                        <!-- The quiet fetch behind Refresh Git: "Fetched just now", or why it could not. -->
+                        <span id="git-fetch-state" class="git-fetch-state" role="status" aria-live="polite"></span>
                       </div>
                       <p id="git-status" class="status-text" role="status" aria-live="polite">Open a repository to review its changes.</p>
                       <div id="git-files" class="ws-git-files" aria-label="Changed files"></div>
@@ -1033,7 +1036,7 @@
           <label class="commit-check"><input id="commit-where-new" type="radio" name="commit-where" value="new" /> Create a new branch first</label>
           <input id="commit-branch" class="commit-branch" type="text" aria-label="New branch name" autocomplete="off" autocapitalize="off" spellcheck="false" />
         </div>
-        <label class="commit-check"><input id="commit-skip-hooks" type="checkbox" /> Skip hooks (<code>--no-verify</code>)</label>
+        <label class="commit-check"><input id="commit-skip-hooks" type="checkbox" /> <span class="commit-check-text">Skip hooks (<code>--no-verify</code>)</span></label>
         <p class="commit-hint commit-hooks-note">The repository's commit hooks run first (pre-commit, commit-msg), with your Git identity and settings, as in a terminal.</p>
       </section>
       <section id="commit-after" class="commit-after" aria-label="Push and pull request" hidden>
@@ -1072,7 +1075,7 @@
     </div>
     <div class="dialog-body">
       <div id="branch-list" class="branch-list" role="radiogroup" aria-label="Branches"></div>
-      <label id="branch-stash-row" class="commit-check" hidden><input id="branch-stash" type="checkbox" /> Stash my uncommitted changes first (<code>git stash pop</code> brings them back)</label>
+      <label id="branch-stash-row" class="commit-check" hidden><input id="branch-stash" type="checkbox" /> <span class="commit-check-text">Stash my uncommitted changes first. “Restore stashed changes” in the Git panel brings them back.</span></label>
       <p id="branch-status" class="commit-status" role="status" aria-live="polite"></p>
       <div class="button-row consent-actions">
         <button id="branch-cancel" class="button secondary" type="button">Cancel</button>
@@ -1110,6 +1113,23 @@
     <div class="dialog-search"><label for="sessions-search">Search task titles and messages</label><input id="sessions-search" type="search" placeholder="Type to search" autocomplete="off" spellcheck="false" role="combobox" aria-controls="sessions-list" aria-expanded="true" aria-autocomplete="list" /></div>
     <div id="sessions-list" class="sessions-list" role="listbox" aria-label="Recent sessions"></div>
     <p class="sessions-keys"><kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>↩</kbd> open · <kbd>⌘⇧O</kbd> from anywhere</p>
+  </dialog>
+
+  <!-- One question before an action that cannot be taken back: delete a task, merge or remove a
+       worktree (src/confirm-dialog.js askConfirm). Cancel has the focus; Escape cancels. -->
+  <dialog id="confirm-dialog" class="consent-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <div class="dialog-header">
+      <div><span id="confirm-context" class="dialog-context"></span><h2 id="confirm-title">Are you sure?</h2></div>
+    </div>
+    <div class="dialog-body">
+      <p id="confirm-message" class="body-copy confirm-message"></p>
+      <ul id="confirm-details" class="consent-list confirm-details" hidden></ul>
+      <p id="confirm-note" class="commit-hint confirm-note" hidden></p>
+      <div class="button-row consent-actions">
+        <button id="confirm-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="confirm-accept" class="button danger" type="button">OK</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>

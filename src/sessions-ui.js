@@ -12,7 +12,7 @@
  * The pure half is src/sessions.mjs. DOM is built with createElement and textContent only.
  */
 import {
-  rewindPlan, rewoundTask, undoOrder, rewindReport, forkedTask, sessionResults, transcriptMarkdown, unsharedChangeIds,
+  rewindPlan, rewoundTask, undoOrder, rewindReport, forkedTask, sessionResults, transcriptMarkdown, unsharedChangeIds, fullTaskTitle,
   normalizeWorktree,
 } from './sessions.mjs';
 import { taskTime } from './domain.mjs';
@@ -322,7 +322,9 @@ async function exportTranscript(app) {
   }
   let result;
   try {
-    result = await api.exportTranscript({ title: task.title, markdown: transcriptMarkdown(task) });
+    // The whole title (not the sidebar's 40 characters and "…"): main names the file from it,
+    // cut between words at 60 characters (src/sessions.mjs transcriptFileName).
+    result = await api.exportTranscript({ title: fullTaskTitle(task), markdown: transcriptMarkdown(task) });
   } catch (error) {
     result = { ok: false, error: { message: error?.message } };
   }
