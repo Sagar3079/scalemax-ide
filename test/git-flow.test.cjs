@@ -62,6 +62,11 @@ test('branch names come from task titles and must pass the branch rules', () => 
   assert.equal(slugify('  Ünïcode — café crème  '), 'unicode-cafe-creme');
   assert.equal(slugify('!!!'), 'task');
   assert.equal(slugify('a very long title that keeps going and going well past forty characters'), 'a-very-long-title-that-keeps-going-and');
+  // A cut that already ends a word keeps that word; a file name may take 60 characters.
+  assert.equal(slugify('hi can you help me understand my project today please'), 'hi-can-you-help-me-understand-my-project');
+  assert.equal(slugify('Hi! Can you help me understand my project? I am new to all of this and lost', 60), 'hi-can-you-help-me-understand-my-project-i-am-new-to-all-of');
+  assert.equal(slugify('Hi! Can you help me understand my project? I am new to all of this and lost', 60).length <= 60, true);
+  assert.equal(slugify('x'.repeat(80), 60), 'x'.repeat(60), 'one long word is cut where it must be');
   for (const name of ['main', 'scalemax/fix-login', 'release-1.2', 'feature/a_b']) assert.equal(validBranch(name), true, name);
   for (const name of ['-x', '.hidden', 'a..b', 'a//b', 'a/.b', 'a.lock', 'a/', 'with space', 'a@{b', 'x.', '', 'é']) assert.equal(validBranch(name), false, name);
 });
@@ -269,6 +274,108 @@ test('push sets the upstream once, pull only fast-forwards, nothing is forced', 
   assert.equal(git(root, env, 'rev-list', '--count', 'HEAD'), '4');
 });
 
+test('pull says what it brought in; a quiet fetch makes ahead / behind real without pulling', async (t) => {
+  const { flow, root, base, env } = setup(t);
+  // No remote: nothing to fetch, quietly.
+  assert.deepEqual(await flow.fetch(root), { fetched: false, branch: base, upstream: null, ahead: 0, behind: 0 });
+  const remote = folder(t, 'sm-gf-remote-');
+  git(remote, env, 'init', '-q', '--bare');
+  git(root, env, 'remote', 'add', 'origin', remote);
+  await flow.push(root);
+  // A teammate pushes a commit.
+  const other = path.join(folder(t, 'sm-gf-clone-'), 'clone');
+  git(path.dirname(other), env, 'clone', '-q', remote, other);
+  write(other, 'from-other.txt', 'hello\n');
+  git(other, env, 'add', '-A');
+  git(other, env, 'commit', '-q', '-m', 'from the other clone');
+  git(other, env, 'push', '-q', 'origin', `HEAD:${base}`);
+  // Without a fetch, status cannot know.
+  assert.equal((await flow.status(root)).behind, 0);
+  const fetched = await flow.fetch(root);
+  assert.equal(fetched.fetched, true);
+  assert.equal(fetched.behind, 1);
+  assert.equal(fetched.upstream, `origin/${base}`);
+  assert.equal(typeof fetched.at, 'number');
+  assert.equal((await flow.status(root)).behind, 1, 'the header reads ↓1 now');
+  assert.equal(fs.existsSync(path.join(root, 'from-other.txt')), false, 'a fetch changes no files');
+  // Two fetches at once share one Git run.
+  const [one, two] = [flow.fetch(root), flow.fetch(root)];
+  assert.deepEqual(await one, await two);
+  // The pull says it brought one commit; the next says there was nothing.
+  const pulled = await flow.pull(root);
+  assert.equal(pulled.pulled, 1);
+  assert.equal(pulled.upToDate, false);
+  assert.equal(pulled.behind, 0);
+  const again = await flow.pull(root);
+  assert.equal(again.pulled, 0);
+  assert.equal(again.upToDate, true);
+});
+
+test('a fetch that cannot reach its remote fails fast with a short reason and never prompts', async (t) => {
+  const { flow, root, base, env } = setup(t);
+  // A remote that is gone, and an https remote nobody answers on (a prompt would hang here).
+  git(root, env, 'remote', 'add', 'origin', path.join(root, 'no-such-remote.git'));
+  await assert.rejects(flow.fetch(root), (error) => {
+    assert.match(error.code, /^FETCH_|^GIT_ERROR$/);
+    assert.ok(error.message.length < 400, error.message);
+    return true;
+  });
+  git(root, env, 'remote', 'set-url', 'origin', 'https://127.0.0.1:9/nobody.git');
+  git(root, env, 'config', `branch.${base}.remote`, 'origin');
+  git(root, env, 'config', `branch.${base}.merge`, `refs/heads/${base}`);
+  const started = Date.now();
+  await assert.rejects(flow.fetch(root), { code: 'FETCH_OFFLINE' });
+  assert.ok(Date.now() - started < 15_000, 'no waiting for a password');
+});
+
+test('changes "Switch branch" stashed are listed and can be brought back; a conflict changes nothing', async (t) => {
+  const { flow, root, base, env } = setup(t);
+  git(root, env, 'branch', 'feature');
+  // A stash of the user's own is not ScaleMax's business.
+  write(root, 'README.md', '# Mine\n');
+  git(root, env, 'stash', 'push', '-q', '-m', 'my own stash');
+  write(root, 'src/app.js', 'export const answer = 42;\n');
+  await flow.switchBranch(root, { branch: 'feature', stash: true });
+  const status = await flow.status(root);
+  assert.equal(status.stashes.length, 1);
+  assert.equal(status.stashes[0].from, base);
+  assert.equal(status.stashes[0].to, 'feature');
+  assert.match(status.stashes[0].id, /^[0-9a-f]{40}$/);
+  // Refused onto uncommitted changes; an unknown stash is refused.
+  write(root, 'README.md', '# Busy\n');
+  await assert.rejects(flow.restoreStash(root, { id: status.stashes[0].id }), { code: 'DIRTY' });
+  git(root, env, 'checkout', '-q', '--', 'README.md');
+  await assert.rejects(flow.restoreStash(root, { id: 'f'.repeat(40) }), { code: 'NO_STASH' });
+  await assert.rejects(flow.restoreStash(root, { id: 'stash@{0}' }), { code: 'INVALID_STASH' });
+  // Brought back onto feature, and dropped; the user's own stash stays.
+  const restored = await flow.restoreStash(root, { id: status.stashes[0].id });
+  assert.deepEqual(restored, { restored: true, dropped: true, from: base, to: 'feature', branch: 'feature' });
+  assert.equal(fs.readFileSync(path.join(root, 'src/app.js'), 'utf8'), 'export const answer = 42;\n');
+  assert.deepEqual((await flow.status(root)).stashes, []);
+  assert.match(git(root, env, 'stash', 'list'), /my own stash/);
+
+  // Stashed again; feature then changes the same line: restoring conflicts and is undone at once.
+  await flow.switchBranch(root, { branch: base, stash: true });
+  git(root, env, 'checkout', '-q', 'feature');
+  write(root, 'src/app.js', 'export const answer = 7;\n');
+  git(root, env, 'commit', '-q', '-am', 'feature answer');
+  const [stash] = (await flow.status(root)).stashes;
+  assert.equal(stash.from, 'feature');
+  git(root, env, 'checkout', '-q', base);
+  write(root, 'src/app.js', 'export const answer = 9;\n');
+  git(root, env, 'commit', '-q', '-am', 'main answer');
+  await assert.rejects(flow.restoreStash(root, { id: stash.id }), (error) => {
+    assert.equal(error.code, 'STASH_CONFLICTS');
+    assert.match(error.message, /src\/app\.js/);
+    assert.match(error.message, /Nothing was changed and the stash is kept: switch back to feature/);
+    return true;
+  });
+  const after = await flow.status(root);
+  assert.deepEqual(after.files, [], 'nothing half-applied');
+  assert.equal(after.conflicts, 0);
+  assert.equal(after.stashes.length, 1, 'the stash is kept');
+});
+
 test('switching branch: refused with uncommitted changes unless they are stashed', async (t) => {
   const { flow, root, base, env } = setup(t);
   git(root, env, 'branch', 'feature');
@@ -335,6 +442,7 @@ test('a task worktree: made outside the project, accepted by the workspace, merg
   const info = await flow.worktreeInfo(made.path, { base });
   assert.equal(info.unmerged, 1);
   assert.equal(info.dirty, false);
+  assert.equal(info.changedNames, '');
 
   // The checkout it came from must be clean, on the base branch, and really its origin.
   write(root, 'README.md', '# Busy\n');
@@ -352,6 +460,7 @@ test('a task worktree: made outside the project, accepted by the workspace, merg
 
   // Removing: refused while there is something to lose, then forced; the branch stays.
   write(made.path, 'wip.txt', 'not committed\n');
+  assert.equal((await flow.worktreeInfo(made.path, { base })).changedNames, 'wip.txt', 'the Remove prompt names what would be lost');
   await assert.rejects(flow.removeWorktree(made.path, { base }), { code: 'WORKTREE_DIRTY' });
   const removed = await flow.removeWorktree(made.path, { base, force: true });
   assert.deepEqual(removed, { removed: true, branch: 'scalemax/fix-the-answer' });
@@ -370,13 +479,22 @@ test('a task worktree: made outside the project, accepted by the workspace, merg
 });
 
 test('a branch checked out in another worktree is marked and cannot be switched to', async (t) => {
-  const { flow, root, base } = setup(t, { gitVersion: [2, 15, 0] });
+  const { flow, root, base, env } = setup(t, { gitVersion: [2, 15, 0] });
   const made = await flow.createWorktree(root, { taskId: 'task-1-abc', title: 'Fix the answer' });
   const inWorktree = await flow.branches(made.path);
   assert.equal(inWorktree.current, 'scalemax/fix-the-answer');
   assert.equal(inWorktree.branches.find((branch) => branch.name === base).elsewhere, root);
   assert.equal(inWorktree.branches.find((branch) => branch.name === 'scalemax/fix-the-answer').elsewhere, null, 'its own branch is not elsewhere');
   await assert.rejects(flow.switchBranch(made.path, { branch: base }), { code: 'BRANCH_IN_USE', message: new RegExp(`"${path.basename(root)}"`) });
+  // From the main checkout, a task worktree is named as such, never by its generated folder name.
+  git(root, env, 'checkout', '-q', '-b', 'side');
+  await assert.rejects(flow.switchBranch(root, { branch: 'scalemax/fix-the-answer' }), (error) => {
+    assert.equal(error.code, 'BRANCH_IN_USE');
+    assert.match(error.message, /a task's separate worktree/);
+    assert.equal(error.message.includes(path.basename(made.path)), false, error.message);
+    return true;
+  });
+  git(root, env, 'checkout', '-q', base);
   const inMain = await flow.branches(root);
   assert.equal(inMain.branches.find((branch) => branch.name === 'scalemax/fix-the-answer').elsewhere, made.path);
   assert.equal(inMain.branches.find((branch) => branch.name === base).elsewhere, null);

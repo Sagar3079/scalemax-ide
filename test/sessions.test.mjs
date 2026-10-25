@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import {
   rewindPlan, rewoundTask, undoOrder, rewindReport, forkedTask, sharedChangeIds, unsharedChangeIds, sessionResults,
-  transcriptMarkdown, slugify, normalizeWorktree,
+  transcriptMarkdown, slugify, normalizeWorktree, fullTaskTitle, transcriptFileName, friendlyFolderName, deleteTaskQuestion,
 } from '../src/sessions.mjs';
 
 const require = createRequire(import.meta.url);
@@ -171,9 +171,89 @@ test('a transcript as Markdown: who wrote what and when, what replies did, chang
 });
 
 test('branch names: the window and main make the same slug from a title', () => {
-  for (const title of ['Fix the login form!', '  Ünïcode — café  ', '!!!', 'a very long title that keeps going and going well past forty characters', 'API v2: add /users endpoint', '日本語']) {
+  for (const title of ['Fix the login form!', '  Ünïcode — café  ', '!!!', 'a very long title that keeps going and going well past forty characters', 'API v2: add /users endpoint', '日本語', 'hi can you help me understand my project today please']) {
     assert.equal(slugify(title), gitFlow.slugify(title), title);
+    assert.equal(slugify(title, 60), gitFlow.slugify(title, 60), title);
   }
+});
+
+test('an exported transcript takes the task\'s whole title: heading and file name, cut between words', () => {
+  // Named after its first message, cut at 40 characters (src/app.js appendMessage).
+  const named = (text, extra = {}) => ({ title: text.length > 40 ? `${text.slice(0, 40)}…` : text, messages: [{ role: 'user', text, time: 1 }], ...extra });
+  const maya = named('Hi! Can you help me understand my project?');
+  assert.equal(maya.title, 'Hi! Can you help me understand my projec…');
+  assert.equal(fullTaskTitle(maya), 'Hi! Can you help me understand my project?');
+  assert.equal(transcriptFileName(maya), 'hi-can-you-help-me-understand-my-project.md');
+  assert.match(transcriptMarkdown(maya), /^# Hi! Can you help me understand my project\?\n/);
+  // The file name: at most 60 characters, never a word cut in two; main makes the same one.
+  const long = named('Please refactor the authentication middleware so that expired sessions are refreshed quietly');
+  const file = transcriptFileName(long);
+  assert.equal(file, 'please-refactor-the-authentication-middleware-so-that.md');
+  assert.ok(file.length - 3 <= 60);
+  assert.equal(`${gitFlow.slugify(fullTaskTitle(long), 60)}.md`, file, 'main (lib/git-flow.cjs) names the file the same way');
+  assert.equal(fullTaskTitle(long), 'Please refactor the authentication middleware so that expired sessions are refreshed quietly');
+  // The first line of a longer message; at most 200 characters, cut between words, marked.
+  assert.equal(fullTaskTitle(named('Fix the flaky login test in CI please\n\nHere is the log:\n…')), 'Fix the flaky login test in CI please');
+  assert.equal(fullTaskTitle(named('Hi\nCan you look at the router and the tests for me?')), 'Hi Can you look at the router and the tests for me?');
+  const huge = fullTaskTitle(named(`Explain ${'the very long thing '.repeat(20)}`));
+  assert.ok(huge.length <= 201 && huge.endsWith('…') && !huge.endsWith(' …'), huge);
+  // A title the user chose, or one the first message no longer starts with, stays as it is.
+  assert.equal(fullTaskTitle({ title: 'Parser work', messages: [{ role: 'user', text: 'What does the parser do?' }] }), 'Parser work');
+  assert.equal(fullTaskTitle({ title: 'Something else entirely, renamed by hand…', messages: [{ role: 'user', text: 'Hi' }] }), 'Something else entirely, renamed by hand…');
+  // A fork keeps "(fork)".
+  assert.equal(fullTaskTitle({ ...maya, title: `${maya.title} (fork)` }), 'Hi! Can you help me understand my project? (fork)');
+  assert.equal(fullTaskTitle({ title: '', messages: [] }), 'Task');
+});
+
+test('a task worktree is named by its project and branch, never by its generated folder', () => {
+  const worktree = { path: '/data/worktrees/api-task-1792746527836-6goj6v', branch: 'feat/health', base: 'main', mainRoot: '/Users/you/api', mainName: 'api', createdAt: 1 };
+  const own = { id: 't1', title: 'Add health', folder: { name: 'api (add-health)', path: worktree.path }, worktree, messages: [] };
+  const plain = { id: 't2', title: 'Plain', folder: { name: 'web', path: '/Users/you/web' }, messages: [] };
+  // A task that started in the worktree's folder without remembering the worktree itself.
+  const visitor = { id: 't3', title: 'Visitor', folder: { name: 'api-task-1792746527836-6goj6v', path: worktree.path }, messages: [] };
+  const tasks = [own, plain, visitor];
+  assert.equal(friendlyFolderName(own), 'api · branch feat/health');
+  assert.equal(friendlyFolderName(worktree), 'api · branch feat/health');
+  assert.equal(friendlyFolderName(worktree.path, tasks), 'api · branch feat/health');
+  assert.equal(friendlyFolderName(visitor, tasks), 'api · branch feat/health');
+  assert.equal(friendlyFolderName(plain, tasks), 'web');
+  assert.equal(friendlyFolderName('/Users/you/web', tasks), 'web');
+  assert.equal(friendlyFolderName(worktree.path), 'api-task-1792746527836-6goj6v', 'without the tasks, a path is only a path');
+  assert.equal(friendlyFolderName({ id: 'x', title: 'No folder', messages: [] }), '');
+  assert.equal(friendlyFolderName(null), '');
+  // A task back in the main checkout after its worktree went: the checkout's own name.
+  assert.equal(friendlyFolderName({ ...own, folder: { name: 'api', path: '/Users/you/api' }, worktree: { ...worktree, removed: true } }), 'api');
+});
+
+test('the Delete task prompt names the task and says what happens to its files', () => {
+  const worktree = { path: '/data/worktrees/api-task-1', branch: 'feat/health', base: 'main', mainRoot: '/Users/you/api', mainName: 'api', createdAt: 1 };
+  const plain = { id: 't1', title: 'Fix the parser', folder: { name: 'project', path: '/Users/you/project' }, messages: [] };
+  assert.deepEqual(deleteTaskQuestion(plain, { tasks: [plain] }), {
+    title: 'Delete “Fix the parser”?',
+    context: '',
+    message: 'Its conversation is removed. Files in project are not touched.',
+    note: '',
+    confirmLabel: 'Delete task',
+    danger: true,
+  });
+  const running = deleteTaskQuestion(plain, { tasks: [plain], running: true });
+  assert.equal(running.note, 'Its reply that is still running is stopped.');
+  const own = { id: 't2', title: 'Add health', folder: { name: 'api (x)', path: worktree.path }, worktree, messages: [] };
+  const question = deleteTaskQuestion(own, { tasks: [plain, own] });
+  assert.equal(question.message, 'Its conversation is removed. Files in api · branch feat/health are not touched.');
+  assert.match(question.note, /separate worktree stays on disk with its branch/);
+  assert.equal(question.message.includes('api-task-1'), false);
+  // Another task works there too: the worktree is not left behind.
+  assert.equal(deleteTaskQuestion(own, { tasks: [own, { ...own, id: 't3' }] }).note, '');
+  assert.equal(deleteTaskQuestion({ id: 't4', title: 'Empty', messages: [] }).message, 'Its conversation is removed. No files are touched.');
+  assert.equal(deleteTaskQuestion({ ...own, worktree: { ...worktree, removed: true } }, { tasks: [] }).message,
+    'Its conversation is removed. No files are touched: its worktree was removed already, and the branch feat/health stays.');
+  assert.equal(deleteTaskQuestion({ id: 't5', title: 'Add a GET /health endpoint that returns …', messages: [] }).title, 'Delete “Add a GET /health endpoint that returns…”?');
+  // Named by its whole title, not the sidebar's cut one.
+  const text = 'Hi! Can you help me understand my project? I mean the router';
+  assert.equal(deleteTaskQuestion({ id: 't6', title: `${text.slice(0, 40)}…`, messages: [{ role: 'user', text }] }).title, `Delete “${text}”?`);
+  const long = deleteTaskQuestion({ id: 't7', title: 'x…', messages: [{ role: 'user', text: `x${' word'.repeat(40)}` }] }).title;
+  assert.ok(long.length <= 'Delete “”?'.length + 81 && long.endsWith('…”?'), long);
 });
 
 test('a task\'s worktree is kept only when it is usable', () => {

@@ -1864,7 +1864,8 @@ async function exportTranscript(input) {
   if (typeof markdown !== 'string' || !markdown.trim() || markdown.length > MAX_TRANSCRIPT_CHARS) {
     throw bridgeError('INVALID_TRANSCRIPT', 'There is no transcript to save.');
   }
-  const name = `${slugify(typeof input.title === 'string' ? input.title : '')}.md`;
+  // The task's full title (src/sessions.mjs fullTaskTitle), cut between words at 60 characters.
+  const name = `${slugify(typeof input.title === 'string' ? input.title : '', 60)}.md`;
   const options = { title: 'Export transcript', defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: 'Markdown', extensions: ['md'] }] };
   const { canceled, filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
   if (canceled || !filePath) return { saved: false };
@@ -1891,6 +1892,13 @@ const gitFlowChannels = {
     const folder = await gitFolder(input);
     requireNoReplyIn(folder);
     return gitFlow.pull(folder);
+  },
+  // Only remote-tracking refs change (no files), so a reply in the folder does not hold it.
+  'git:fetch': async (_event, input) => gitFlow.fetch(await gitFolder(input)),
+  'git:stash-restore': async (_event, input) => {
+    const folder = await gitFolder(input);
+    requireNoReplyIn(folder);
+    return gitFlow.restoreStash(folder, { id: input.id });
   },
   'git:switch': async (_event, input) => {
     const folder = await gitFolder(input);

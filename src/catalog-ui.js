@@ -1,6 +1,8 @@
 import { COMMUNITY_SKILLS, CONNECTORS } from './data.js';
 import { OAUTH_SUPPORT } from './oauth-catalog.js';
 import { MCP_SIGN_IN, MCP_LISTING_NAMES } from './mcp-directory.js';
+import { askConfirm } from './confirm-dialog.js';
+import { deleteTaskQuestion } from './sessions.mjs';
 
 // Entries are read through the app so user-created experts and skills are included.
 const CATALOGS = [
@@ -161,10 +163,13 @@ function bindTaskActions(app) {
     downloadJson(`scalemax-task-${task.id}.json`, task);
     app.showToast('Task exported');
   });
-  document.getElementById('delete-task-btn')?.addEventListener('click', () => {
+  document.getElementById('delete-task-btn')?.addEventListener('click', async () => {
     const task = app.tasks.find((item) => item.id === app.currentTaskId);
     if (!task) { app.showToast('No task selected'); return; }
-    if (!window.confirm('Delete this task?')) return;
+    // Names the task and says what happens to its folder (src/sessions.mjs deleteTaskQuestion).
+    const sure = await askConfirm(deleteTaskQuestion(task, { tasks: app.tasks, running: Boolean(app.replies?.has(task.id)) }));
+    // Gone meanwhile (deleted elsewhere): nothing left to do.
+    if (!sure || !app.tasks.includes(task)) return;
     // A reply still working in the task stops with it, and its recorded changes are forgotten.
     app.discardReply?.(task.id);
     app.forgetTaskChanges?.(task);

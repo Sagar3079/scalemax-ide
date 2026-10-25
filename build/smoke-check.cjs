@@ -417,7 +417,7 @@ async function run(win) {
         jobMethods: ['info','list','output','input','stop','onChanged'].filter((m) => typeof api.jobs?.[m] === 'function'),
         commandSettings: ['#sandbox-toggle', '#sandbox-network-toggle', '#jobs-bar[hidden]', '#jobs-dialog'].every((selector) => Boolean(document.querySelector(selector))),
         specMethods: ['list','read','setTask'].filter((m) => typeof api.specs?.[m] === 'function'),
-        gitMethods: ['status','branches','suggestMessage','commit','push','pull','switchBranch','createPr'].filter((m) => typeof api.git?.[m] === 'function'),
+        gitMethods: ['status','branches','suggestMessage','commit','push','pull','fetch','restoreStash','switchBranch','createPr'].filter((m) => typeof api.git?.[m] === 'function'),
         worktreeMethods: ['create','info','merge','remove','reveal'].filter((m) => typeof api.worktrees?.[m] === 'function'),
         sessionMethods: ['exportTranscript'].filter((m) => typeof api.sessions?.[m] === 'function'),
         gitFlowControls: ['#commit-dialog', '#branch-dialog', '#rewind-dialog', '#sessions-dialog', '#worktree-bar', '#worktree-chip', '#workspace-branch', '#git-commit', '#git-pull', '#git-switch', '#sessions-btn', '#export-transcript-btn']
@@ -1595,7 +1595,7 @@ async function run(win) {
       && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
-    gitFlowApi: probe.gitMethods.length === 8 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,
+    gitFlowApi: probe.gitMethods.length === 10 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,
     slashApi: probe.slashMethods.length === 2 && probe.mentionMethods.length === 1 && probe.slashControls === true,
     hooksApi: probe.hookMethods.length === 3,
     // An MCP server's own read-only label is a claim until the user trusts the server.

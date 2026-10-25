@@ -530,7 +530,7 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
    * task's worktree); paths must be among the changes Git lists.
    */
   git: {
-    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {isRepo: boolean, branch?: string|null, detached?: boolean, upstream?: string|null, ahead?: number, behind?: number, files?: Array<{path: string, from?: string, index: string, worktree: string, kind: string, secret: boolean}>, conflicts?: number, operation?: string|null, identity?: {name: string, email: string}, remotes?: string[], worktree?: {linked: boolean, main: string|null}}}>} */
+    /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {isRepo: boolean, branch?: string|null, detached?: boolean, upstream?: string|null, ahead?: number, behind?: number, files?: Array<{path: string, from?: string, index: string, worktree: string, kind: string, secret: boolean}>, conflicts?: number, operation?: string|null, identity?: {name: string, email: string}, remotes?: string[], worktree?: {linked: boolean, main: string|null}, stashes?: Array<{id: string, from: string|null, to: string, at: number}>}}>} */
     status: (input) => ipcRenderer.invoke('git:status', input),
     /** @param {{folder: string}} input @returns {Promise<{ok: boolean, data?: {current: string|null, detached: boolean, dirty: boolean, branches: Array<{name: string, upstream: string|null, usable: boolean}>}}>} */
     branches: (input) => ipcRenderer.invoke('git:branches', input),
@@ -545,8 +545,12 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     commit: (input) => ipcRenderer.invoke('git:commit', input),
     /** @param {{folder: string}} input pushes the current branch (sets its upstream the first time; never forced) */
     push: (input) => ipcRenderer.invoke('git:push', input),
-    /** @param {{folder: string}} input fast-forward only */
+    /** @param {{folder: string}} input fast-forward only @returns {Promise<{ok: boolean, data?: {upstream: string, pulled: number|null, upToDate: boolean, ahead: number, behind: number}}>} */
     pull: (input) => ipcRenderer.invoke('git:pull', input),
+    /** @param {{folder: string}} input a quiet `git fetch` (no prompts, 20 s at most) so ahead/behind are current @returns {Promise<{ok: boolean, data?: {fetched: boolean, at?: number, upstream: string|null, ahead: number, behind: number}}>} */
+    fetch: (input) => ipcRenderer.invoke('git:fetch', input),
+    /** @param {{folder: string, id: string}} input brings back changes Switch branch stashed (status().stashes) and drops that stash */
+    restoreStash: (input) => ipcRenderer.invoke('git:stash-restore', input),
     /** @param {{folder: string, branch: string, stash?: boolean}} input refused with uncommitted changes unless stash */
     switchBranch: (input) => ipcRenderer.invoke('git:switch', input),
     /** @param {{folder: string, title: string, body?: string, base?: string|null, draft?: boolean}} input @returns {Promise<{ok: boolean, data?: {url: string, branch: string, pushed: boolean}}>} */

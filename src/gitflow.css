@@ -244,7 +244,8 @@
   flex-direction: column;
 }
 #branch-dialog,
-#rewind-dialog {
+#rewind-dialog,
+#confirm-dialog {
   max-height: 84vh;
   margin: 12vh auto auto;
   padding: 0;
@@ -257,7 +258,8 @@
 #commit-dialog::backdrop,
 #sessions-dialog::backdrop,
 #branch-dialog::backdrop,
-#rewind-dialog::backdrop {
+#rewind-dialog::backdrop,
+#confirm-dialog::backdrop {
   background: var(--riso-backdrop, color-mix(in srgb, #F3F4F1 55%, transparent));
   backdrop-filter: blur(2px) saturate(0.8);
 }
@@ -397,13 +399,21 @@
 }
 .commit-check {
   display: flex;
-  align-items: center;
+  /* The box sits on the first line when the words wrap. */
+  align-items: flex-start;
   gap: 8px;
   font-size: 13px;
+  line-height: 20px;
   color: var(--riso-ink-2, #4A4D55);
 }
 .commit-check input {
+  flex-shrink: 0;
+  margin: 4px 0 0;
   accent-color: var(--riso-blue, #0078BF);
+}
+/* The words of a check label are one flowing run (code included), never columns of their own. */
+.commit-check-text {
+  min-width: 0;
 }
 .commit-check code {
   font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
@@ -578,4 +588,42 @@
   font-size: 11px;
   line-height: 16px;
   text-align: center;
+}
+
+/* ---- The Git panel's quiet fetch and stash ---- */
+.git-fetch-state {
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-3, #6B6F78);
+  font-variant-numeric: tabular-nums;
+}
+.git-fetch-state.is-error {
+  color: var(--riso-red-text, #B42638);
+}
+.git-fetch-state:empty {
+  display: none;
+}
+
+/* ---- The confirmation sheet (src/confirm-dialog.js) ---- */
+#confirm-dialog .dialog-header h2 {
+  overflow-wrap: anywhere;
+}
+#confirm-dialog .dialog-context {
+  overflow-wrap: anywhere;
+}
+.confirm-message {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.confirm-details {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.confirm-note {
+  margin: 0 0 8px;
 }

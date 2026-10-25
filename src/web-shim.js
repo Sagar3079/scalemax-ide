@@ -285,6 +285,8 @@
       commit: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
       push: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
       pull: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      fetch: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
+      restoreStash: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
       switchBranch: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); },
       createPr: async function () { return failure('UNAVAILABLE', 'Git requires the desktop app.'); }
     },
