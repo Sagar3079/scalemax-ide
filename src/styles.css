@@ -2027,6 +2027,21 @@ input[type="range"] {
   min-height: 0;
 }
 
+/* An empty task: the message box keeps its own height (the jobs bar or a picture row makes it
+   taller), the starting points stay at the bottom when there is room, and a short window scrolls
+   instead of letting the box run under "Start with a direction". */
+.sm-home-page:not(.has-transcript) {
+  overflow-y: auto;
+}
+
+.sm-home-page:not(.has-transcript) .sm-home-composer {
+  flex: 0 0 auto;
+}
+
+.sm-home-page:not(.has-transcript) .starter-section {
+  margin-top: auto;
+}
+
 .sm-home-page.has-transcript {
   padding-top: 12px;
 }
