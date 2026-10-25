@@ -1020,6 +1020,20 @@ textarea,
   margin-inline-start: -24px;
 }
 
+/* Without the mini mascot (the companion off, or a row drawn before its state), the spinner and
+   the dot sit centred in the same 16px slot, so the title starts at 32px in every row. */
+.task-item > .task-status.is-unread:first-child {
+  margin-inline: -20px 4px;
+}
+
+.task-item > .task-status.is-running:first-child {
+  margin-inline: -22px 2px;
+}
+
+body:not(.companion-off) .task-item > .task-status.has-mascot:first-child {
+  margin-inline: -24px 0;
+}
+
 .task-item:hover {
   background: var(--riso-ink-tint);
   color: var(--riso-ink);
@@ -1045,6 +1059,21 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A fork's mark before its title ("fork Update the README…"); "(fork)" at the end was cut off. */
+.task-fork-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--riso-rule-strong);
+  border-radius: 3px;
+  color: var(--riso-rail-ink-3);
+  /* A printed tag like the state tags: the display face on the type scale (mono is for code). */
+  font-family: var(--sm-font-display);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+  vertical-align: 1px;
 }
 
 .task-time {
@@ -1075,7 +1104,10 @@ textarea,
 }
 
 .task-item.has-state .task-title {
-  flex: 1 1 0;
+  /* A real basis, so the state line (100%) never fits beside the title on the first line: with a
+     zero basis it did whenever the mark was narrower than the mascot (the companion off), and the
+     title was squeezed to nothing. */
+  flex: 1 1 50%;
 }
 
 .task-state-line {
@@ -1294,6 +1326,11 @@ textarea,
   opacity: 0.55;
 }
 
+/* Working (Test connection): it keeps the focus, so it is not disabled; it says so instead. */
+.button[aria-busy="true"] {
+  cursor: progress;
+}
+
 .button-row {
   display: flex;
   align-items: center;
@@ -1451,7 +1488,7 @@ input[type="range"] {
   background: transparent;
   color: var(--riso-ink-2);
   font-family: var(--sm-font-display);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 12px;
   letter-spacing: 0.04em;
@@ -1577,13 +1614,6 @@ input[type="range"] {
   color: var(--riso-ink-2);
 }
 
-/* Kept for the few dialog lines JS still writes into; not used above headings. */
-.eyebrow {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--riso-ink-2);
-}
-
 /* A plain note (the Experts page, the connector dialog): words under a 1px rule, no box and no
    fill. Notices that report a failure or need the user keep a sheet of their own below. */
 .notice {
@@ -1656,13 +1686,13 @@ input[type="range"] {
   display: none;
 }
 
-/* View switches cross-fade in 160ms. */
+/* View switches settle in on the second motion step (DESIGN.md Motion). */
 .view.active {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  animation: sm-view-in 160ms var(--sm-ease-out);
+  animation: sm-view-in var(--sm-dur-2) var(--sm-ease-out);
 }
 
 /* A view settles in from almost there, never from nothing: a frame that stalls (a busy main
@@ -1795,6 +1825,63 @@ input[type="range"] {
   font-weight: 500;
   line-height: 20px;
   color: var(--riso-ink);
+}
+
+/* Preferences > Keyboard shortcuts: what on the left, the keys on the right, rows on 1px rules. */
+.shortcuts-list {
+  margin: 0;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 8px 0;
+}
+
+.shortcut-row + .shortcut-row {
+  border-top: 1px solid var(--riso-rule);
+}
+
+.shortcut-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--riso-ink);
+}
+
+.shortcut-note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-3);
+}
+
+.shortcut-keys {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--riso-ink-3);
+}
+
+.shortcut-keys kbd {
+  /* The interface face, so ⌘⇧O does not read as ⌘⇧0 in the mono. */
+  font-family: var(--sm-font-ui);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--riso-ink-2);
+}
+
+/* A view's title takes the focus when the view is opened from the keyboard (⌘1–⌘6); it is not a
+   control, so it shows no ring. */
+.focus-target:focus {
+  outline: none;
 }
 
 .about-card {
@@ -1938,6 +2025,21 @@ input[type="range"] {
   min-width: 0;
   flex: 1;
   min-height: 0;
+}
+
+/* An empty task: the message box keeps its own height (the jobs bar or a picture row makes it
+   taller), the starting points stay at the bottom when there is room, and a short window scrolls
+   instead of letting the box run under "Start with a direction". */
+.sm-home-page:not(.has-transcript) {
+  overflow-y: auto;
+}
+
+.sm-home-page:not(.has-transcript) .sm-home-composer {
+  flex: 0 0 auto;
+}
+
+.sm-home-page:not(.has-transcript) .starter-section {
+  margin-top: auto;
 }
 
 .sm-home-page.has-transcript {
@@ -2166,6 +2268,109 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* The model button, the meter and Send keep to the chips' line on a basis narrower than their
+   full width: on a crowded line the model's name gives way (the status bar names it too) before
+   they move to a line of their own, right-aligned. */
+#chat-toolbar > .send-actions {
+  flex: 1 1 152px;
+  justify-content: flex-end;
+}
+
+#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) > .send-actions {
+  flex-basis: 224px;
+}
+
+/* Send and Stop share one slot (app.js renderReplyState shows one at a time) at the same width,
+   so the toolbar never moves or wraps when a reply starts or ends. */
+.send-actions .send-slot {
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+/* /cost (app.js renderCostPanel): this task's usage, above the message box until closed. A
+   printed ledger: label over figure in the mono face, 1px rules, no fill. */
+.cost-panel {
+  display: grid;
+  gap: 4px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--riso-rule);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-2);
+}
+
+.cost-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.cost-panel-title {
+  color: var(--riso-ink);
+  font-weight: 600;
+}
+
+.cost-panel-aside {
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
+.cost-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--riso-ink-2);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.cost-panel-close:hover {
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
+}
+
+.cost-panel-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+}
+
+.cost-panel-item {
+  display: grid;
+  min-width: 0;
+}
+
+.cost-panel-item dt {
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
+.cost-panel-item dd {
+  max-width: 280px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--riso-ink);
+  font-family: var(--sm-font-mono);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-panel-foot {
+  margin: 0;
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
 /* ---- Composer controls: attach, permissions, model menu (src/composer-ui.js) ---- */
 .composer-icon-button {
   display: inline-flex;
@@ -2301,17 +2506,11 @@ input[type="range"] {
   background: var(--riso-red);
 }
 
-/* With the meter showing, the folder chip gives way first (its name is also in the chat crumb
-   and the sidebar) so the toolbar keeps one line: lines are filled counting the chip at its
-   narrowest, then it grows back towards its full name in the room left. */
-#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip {
-  flex: 1 1 0;
-  min-width: 88px;
-  max-width: max-content;
-}
-
+/* With the meter showing, a long folder name gives way (it is also in the chat crumb and the
+   sidebar), but never below about a dozen letters: "project" stays whole, and the model button
+   shrinks first (.send-actions above). */
 #chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip-label {
-  max-width: 146px;
+  max-width: 96px;
 }
 
 /* Popovers sit in the top layer; composer-ui.js places them above their button. */
@@ -4123,6 +4322,19 @@ input[type="range"] {
   border-top: 1px solid var(--riso-rule);
   border-radius: 0;
   background: transparent;
+  /* Revealed with its head at the top: room for the heading above it. */
+  scroll-margin-top: 72px;
+}
+
+/* A server just added (src/mcp-ui.js revealServer): marked as the selection for a moment, in
+   blue ink, so it is found below the preset tiles. The negative margin keeps the row in place. */
+.mcp-server.is-new {
+  margin: 0 -8px;
+  padding: 12px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--riso-blue) 7%, transparent);
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 0;
 }
 
 .mcp-server-head {
@@ -4898,23 +5110,46 @@ dialog::backdrop {
   outline-offset: -2px;
 }
 
+/* The result ↑ ↓ points at (the field keeps the focus ring): a blue tint and a bar at its edge,
+   so only one thing on screen looks focused. */
+.search-result.is-active {
+  background: var(--riso-blue-tint);
+  box-shadow: inset 2px 0 0 var(--riso-blue);
+}
+
+.search-result {
+  cursor: pointer;
+}
+
+/* A toast prints at the top of the main area, under its toolbar (src/app.js placeToast sets
+   --toast-x/--toast-top), never over the composer's chips or a form's Save buttons; it lets clicks
+   through. Light: an ink sheet with paper text. Dark: a raised deep sheet on a rule, not a white
+   block. */
 #toast {
   position: fixed;
-  left: 50%;
-  bottom: 40px;
+  left: var(--toast-x, 50%);
+  top: var(--toast-top, 52px);
   z-index: 1000;
-  transform: translate(-50%, 12px);
-  max-width: min(480px, 80vw);
+  transform: translate(-50%, -6px);
+  max-width: min(480px, calc(100vw - 32px));
   padding: 8px 16px;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: var(--riso-ink);
   color: var(--riso-paper);
   font-size: 12px;
+  line-height: 16px;
   box-shadow: var(--sm-shadow-lift);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--sm-dur-2) var(--sm-ease-out),
     transform var(--sm-dur-2) var(--sm-ease-out);
+}
+
+[data-theme="dark"] #toast {
+  border-color: var(--riso-rule-strong);
+  background: color-mix(in srgb, var(--riso-ink) 8%, var(--riso-paper-raised));
+  color: var(--riso-ink);
 }
 
 #toast.show {

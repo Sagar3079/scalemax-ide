@@ -14,20 +14,10 @@
  * --ws-panel-height, set on .ws by workspace-ui.js.
  */
 
-#view-workspace.active {
-  overflow: hidden;
-}
-
-.ws {
-  --ws-explorer-width: 260px;
-  --ws-panel-height: 220px;
-  --ws-code-font: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  --ws-code-size: 12px;
-  --ws-code-line: 20px;
-  --ws-code-pad-y: 12px;
-  --ws-code-pad-x: 16px;
-  --ws-ui-font: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
-
+/* Code inks shared by the editor and the review dialog's diff (src/changes.css): syntax and
+   the inline marks of a reply's changes. */
+.ws,
+#changes-dialog {
   /* Syntax: drawn from the inks at code-legible strengths (all >= 4.5:1 on paper-raised). */
   --tok-keyword: var(--riso-blue, #0078BF);
   --tok-string: var(--riso-green-text, #0A7A46);
@@ -41,6 +31,29 @@
   --tok-regexp: var(--riso-pink-text, #B8126F);
   --tok-meta: var(--riso-ink-3, #6B6F78);
   --tok-invalid: var(--riso-red-text, #B42638);
+
+  /* Inline review of a reply's changes. */
+  --ws-diff-add-line: var(--riso-diff-add-bg, color-mix(in srgb, #00A95C 14%, transparent));
+  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #0A7A46) 22%, transparent);
+  --ws-diff-add-bar: var(--riso-green, #00A95C);
+  --ws-diff-del-line: var(--riso-diff-del-bg, color-mix(in srgb, #F15060 14%, transparent));
+  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #F15060) 28%, transparent);
+  --ws-diff-del-bar: var(--riso-red, #F15060);
+}
+
+#view-workspace.active {
+  overflow: hidden;
+}
+
+.ws {
+  --ws-explorer-width: 260px;
+  --ws-panel-height: 220px;
+  --ws-code-font: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  --ws-code-size: 12px;
+  --ws-code-line: 20px;
+  --ws-code-pad-y: 12px;
+  --ws-code-pad-x: 16px;
+  --ws-ui-font: var(--sm-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
 
   /* The code surface. */
   --ws-editor-bg: var(--riso-paper-raised, #FAFAF8);
@@ -62,15 +75,10 @@
   --ws-editor-completion: color-mix(in srgb, var(--riso-blue, #0078BF) 14%, var(--riso-paper-raised, #FAFAF8));
   --ws-editor-completion-fg: var(--riso-ink, #1A1B1F);
 
-  /* Inline review of a reply's changes. */
-  --ws-diff-add-line: var(--riso-diff-add-bg, color-mix(in srgb, #00A95C 14%, transparent));
-  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #0A7A46) 22%, transparent);
-  --ws-diff-add-bar: var(--riso-green, #00A95C);
-  --ws-diff-del-line: var(--riso-diff-del-bg, color-mix(in srgb, #F15060 14%, transparent));
-  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #F15060) 28%, transparent);
-  --ws-diff-del-bar: var(--riso-red, #F15060);
-
   display: grid;
+  /* One column that never grows past the view: a long folder or branch name ellipsizes instead
+     of widening every row (the status bar's one-line min-content once made it 675px in 660). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   flex: 1;
   min-height: 0;
@@ -83,7 +91,8 @@
 /* Same inks on deep stock: the tokens resolve to their dark values; the
    fallbacks here are the dark ones. Highlighter strengths drop so light text
    stays readable over yellow. */
-[data-theme="dark"] .ws {
+[data-theme="dark"] .ws,
+[data-theme="dark"] #changes-dialog {
   --tok-keyword: var(--riso-blue, #4BA6E0);
   --tok-string: var(--riso-green-text, #4FD08A);
   --tok-comment: var(--riso-ink-3, #8D919A);
@@ -96,6 +105,13 @@
   --tok-regexp: var(--riso-pink-text, #FF8FD0);
   --tok-meta: var(--riso-ink-3, #8D919A);
   --tok-invalid: var(--riso-red-text, #FF8C96);
+  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #4FD08A) 24%, transparent);
+  --ws-diff-add-bar: var(--riso-green, #2FC57A);
+  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #FF6B78) 30%, transparent);
+  --ws-diff-del-bar: var(--riso-red, #FF6B78);
+}
+
+[data-theme="dark"] .ws {
   --ws-editor-bg: var(--riso-paper-raised, #1B1E24);
   --ws-editor-fg: var(--riso-ink, #E9EAE6);
   --ws-editor-caret: var(--riso-blue, #4BA6E0);
@@ -110,10 +126,6 @@
   --ws-editor-match: color-mix(in srgb, var(--riso-yellow, #FFE800) 28%, transparent);
   --ws-editor-completion: color-mix(in srgb, var(--riso-blue, #4BA6E0) 22%, var(--riso-paper-raised, #1B1E24));
   --ws-editor-completion-fg: var(--riso-ink, #E9EAE6);
-  --ws-diff-add-text: color-mix(in srgb, var(--riso-green-text, #4FD08A) 24%, transparent);
-  --ws-diff-add-bar: var(--riso-green, #2FC57A);
-  --ws-diff-del-text: color-mix(in srgb, var(--riso-red, #FF6B78) 30%, transparent);
-  --ws-diff-del-bar: var(--riso-red, #FF6B78);
 }
 
 /* ---- Toolbar -------------------------------------------------------- */
@@ -158,13 +170,18 @@
 }
 
 .ws-crumb-name {
-  flex-shrink: 0;
+  /* Ellipsizes only once the parent path (which shrinks first) is gone. */
+  flex: 0 1 auto;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 600;
 }
 
 /* Right-to-left overflow puts the ellipsis at the start of the parent path;
    the <bdi> inside keeps the path itself left-to-right. */
 .ws-crumb-parent {
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -183,6 +200,12 @@
   white-space: nowrap;
   font-size: 12px;
   color: var(--riso-ink-3, #6B6F78);
+}
+
+/* The branch chip (src/gitflow-ui.js) gives up width too, down to a few letters of its name. */
+.ws-toolbar .ws-toolbar-branch {
+  flex-shrink: 1;
+  min-width: 72px;
 }
 
 .ws-toolbar-actions {
@@ -838,9 +861,205 @@
   box-shadow: var(--sm-shadow-lift, 0 8px 24px color-mix(in srgb, #1A1B1F 14%, transparent), 0 1px 0 color-mix(in srgb, #1A1B1F 14%, transparent));
 }
 
-.ws-code .cm-editor .cm-panels {
+/* Find / replace and Go to line: CodeMirror's panel above the text, printed like the rest of the
+   Workspace (paper ground under a 1px rule, standard 28px fields and buttons, sentence-case
+   labels from src/editor.js). The .ws .ws-code prefix outranks CodeMirror's own theme rules. */
+.ws .ws-code .cm-editor .cm-panels {
   background: var(--riso-paper, #F3F4F1);
   color: var(--riso-ink, #1A1B1F);
+}
+
+.ws .ws-code .cm-editor .cm-panels-top {
+  border-bottom: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+
+.ws .ws-code .cm-editor .cm-panels-bottom {
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+
+.ws .ws-code .cm-editor .cm-panel {
+  font-family: var(--ws-ui-font);
+  font-size: 12px;
+  color: var(--riso-ink-2, #4A4D55);
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-gotoLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-gotoLine label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Two rows: Find with its moves and options, then Replace with its actions. The options wrap
+   under Find when the editor is narrow; the Replace row always starts a new line. */
+.ws .ws-code .cm-editor .cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 40px 8px 16px;
+  /* The fields size against the panel (cqw), so a narrow editor keeps three rows. */
+  container-type: inline-size;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search > * {
+  order: 1;
+  margin: 0;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search br {
+  display: none;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search:has([name=replace])::after {
+  content: '';
+  order: 2;
+  flex-basis: 100%;
+  height: 0;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search > [name=replace],
+.ws .ws-code .cm-editor .cm-panel.cm-search > [name=replaceAll] {
+  order: 3;
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-textfield {
+  box-sizing: border-box;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--ws-code-font);
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+/* Find and Replace share one width, so their buttons line up: up to 280px, and narrow enough
+   in a narrow editor that Next / Previous / Select all stay on Find's row. */
+.ws .ws-code .cm-editor .cm-panel.cm-search .cm-textfield {
+  flex: 0 0 auto;
+  width: clamp(120px, calc(100cqw - 240px), 280px);
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-gotoLine .cm-textfield {
+  width: 96px;
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-textfield::placeholder {
+  color: var(--riso-ink-3, #6B6F78);
+  font-family: var(--ws-ui-font);
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-textfield:hover {
+  border-color: var(--riso-rule-strong, color-mix(in srgb, #1A1B1F 26%, transparent));
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-textfield:focus {
+  border-color: var(--riso-rule-strong, color-mix(in srgb, #1A1B1F 26%, transparent));
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-button {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  height: 28px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+  border-radius: 6px;
+  background: var(--riso-paper-raised, #FAFAF8);
+  background-image: none;
+  color: var(--riso-ink, #1A1B1F);
+  font-family: var(--ws-ui-font);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 26px;
+  white-space: nowrap;
+  cursor: default;
+  transition: background-color var(--sm-dur-1, 120ms) var(--sm-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-button:hover {
+  border-color: var(--riso-rule-strong, color-mix(in srgb, #1A1B1F 26%, transparent));
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 5%, var(--riso-paper-raised, #FAFAF8));
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-button:active {
+  background-image: none;
+  background: color-mix(in srgb, var(--riso-ink, #1A1B1F) 9%, var(--riso-paper-raised, #FAFAF8));
+}
+
+.ws .ws-code .cm-editor .cm-panel .cm-button:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+
+/* The options: real checkboxes in blue ink, each with its label. */
+.ws .ws-code .cm-editor .cm-panel.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--riso-ink-2, #4A4D55);
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search label:first-of-type {
+  margin-left: 4px;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search input[type=checkbox] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--riso-blue, #0078BF);
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search input[type=checkbox]:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search [name=close] {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--riso-ink-2, #4A4D55);
+  font-family: var(--ws-ui-font);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search [name=close]:hover {
+  background: var(--riso-ink-tint, color-mix(in srgb, #1A1B1F 5%, transparent));
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws .ws-code .cm-editor .cm-panel.cm-search [name=close]:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
 }
 
 .ws-input {
@@ -1074,6 +1293,80 @@
   color: var(--riso-ink-3, #6B6F78);
 }
 
+/* One block per run (src/terminal.js): the echoed command, its output, how it ended. Runs are
+   separated by a 1px rule; the newest is at the end, where the panel follows. */
+.ws-term-session,
+.ws-term-run,
+.ws-term-cmd,
+.ws-term-out,
+.ws-term-err,
+.ws-term-status,
+.ws-term-result,
+.ws-term-note {
+  display: block;
+}
+
+.ws-term-run + .ws-term-run {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+
+.ws-term-cmd {
+  font-weight: 600;
+  color: var(--riso-ink, #1A1B1F);
+}
+
+.ws-term-prompt {
+  color: var(--riso-blue-text, #005E96);
+  user-select: none;
+}
+
+.ws-term-err {
+  color: var(--riso-red-text, #B42638);
+}
+
+.ws-term-status {
+  color: var(--riso-ink-3, #6B6F78);
+}
+
+.ws-term-result {
+  margin-top: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--riso-ink-3, #6B6F78);
+}
+
+.ws-term-result::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--riso-ink-3, #6B6F78);
+  vertical-align: 1px;
+}
+
+.ws-term-result.is-ok::before {
+  background: var(--riso-green, #00A95C);
+}
+
+.ws-term-result.is-failed {
+  color: var(--riso-red-text, #B42638);
+}
+
+.ws-term-result.is-failed::before {
+  background: var(--riso-red, #F15060);
+}
+
+.ws-term-note {
+  margin-bottom: 8px;
+  font-family: var(--ws-ui-font);
+  font-size: 12px;
+  color: var(--riso-ink-3, #6B6F78);
+}
+
 .ws-terminal-form {
   display: flex;
   align-items: center;
@@ -1217,6 +1510,8 @@
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
+  overflow: hidden;
   height: 24px;
   padding: 0 12px;
   border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
@@ -1241,6 +1536,15 @@
   font-family: var(--ws-code-font);
   font-variant-numeric: tabular-nums;
   color: var(--riso-ink-3, #6B6F78);
+}
+
+/* A long branch name (a task worktree's) ellipsizes; position and language never do. */
+#editor-branch {
+  flex-shrink: 1;
+  min-width: 48px;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #editor-branch::before {

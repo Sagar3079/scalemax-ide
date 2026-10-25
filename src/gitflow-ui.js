@@ -16,8 +16,9 @@
  * settings and hooks; the model never reaches any of it. DOM is built with createElement and
  * textContent only (no HTML).
  */
-import { slugify, normalizeWorktree } from './sessions.mjs';
+import { slugify, normalizeWorktree, friendlyFolderName, fullTaskTitle, worktreeName } from './sessions.mjs';
 import { reloadTabs } from './workspace-ui.js';
+import { askConfirm } from './confirm-dialog.js';
 
 const $ = (selector) => document.querySelector(selector);
 const UNSAVED = 'Save or close your unsaved files first.';
@@ -57,6 +58,35 @@ async function call(method, input) {
 }
 const errorText = (result, fallback) => result?.error?.message || fallback;
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
+/** "just now", "3 min ago", "2 h ago": how long ago `at` was. */
+export function agoText(at, now = Date.now()) {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? `${hours} h ago` : 'over a day ago';
+}
+
+/** What a pull did, in words: "Pulled 2 commits from origin/main" or "Already up to date with origin/main". */
+export function pullMessage(data) {
+  const from = data?.upstream || 'the remote';
+  if (Number.isInteger(data?.pulled) && data.pulled > 0) return `Pulled ${plural(data.pulled, 'commit')} from ${from}`;
+  if (data?.pulled === 0 || data?.upToDate) return `Already up to date with ${from}`;
+  return `Pulled from ${from}`;
+}
+
+/** `base`, or base-2, base-3 … : the first name that is not among `taken` (a Set of branch names). */
+export function uniqueBranchName(base, taken) {
+  const names = taken instanceof Set ? taken : new Set(Array.isArray(taken) ? taken : []);
+  if (!names.has(base)) return base;
+  for (let number = 2; number < 1000; number += 1) {
+    const candidate = `${base}-${number}`;
+    if (!names.has(candidate)) return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
+}
 
 // ---- After Git changed a folder ------------------------------------------------------------
 
@@ -132,17 +162,93 @@ function renderHeader(app) {
         ? `${name}: ${plural(data.ahead, 'commit')} to push, ${plural(data.behind, 'commit')} to pull (${data.upstream})`
         : `${name}: no upstream yet`;
       if (data.worktree?.linked) node.title += ' · a separate worktree';
+      if (data.upstream && fetchView.root === header.root && fetchView.at) node.title += ` · fetched ${agoText(fetchView.at)}`;
     }
   }
   const pull = $('#git-pull');
   if (pull) {
     pull.disabled = !data?.upstream || Boolean(data?.detached);
-    pull.title = !data ? 'Open a Git repository first' : data.upstream ? `Bring in what ${data.upstream} has (fast-forward only)` : 'This branch has no upstream yet: push it first';
+    pull.title = !data ? 'Open a Git repository first'
+      : !data.upstream ? 'This branch has no upstream yet: push it first'
+        : data.behind ? `Bring in ${plural(data.behind, 'commit')} from ${data.upstream} (fast-forward only)`
+          : `Bring in what ${data.upstream} has (fast-forward only). Refresh Git fetches to see what is new.`;
   }
   for (const id of ['#git-commit', '#git-switch']) {
     const button = $(id);
     if (button) button.disabled = !data;
   }
+  // Changes "Switch branch" stashed: they can be brought back here.
+  const restore = $('#git-stash-restore');
+  if (restore) {
+    const stash = Array.isArray(data?.stashes) ? data.stashes[0] : null;
+    restore.hidden = !stash;
+    if (stash) {
+      const more = data.stashes.length > 1 ? ` (${data.stashes.length - 1} older ${data.stashes.length === 2 ? 'stash' : 'stashes'} too)` : '';
+      restore.title = `Brings back the changes stashed${stash.from ? ` on ${stash.from}` : ''} before switching to ${stash.to}${stash.at ? `, ${agoText(stash.at)}` : ''}, onto ${data.branch || 'this checkout'}${more}`;
+    }
+  }
+  renderFetchState(app);
+}
+
+// ---- Quiet fetch (Refresh Git) -----------------------------------------------------------------
+
+// The open folder's last fetch: when, or why it failed (error: Git's words, code: lib/git-flow.cjs),
+// or that one is running now.
+const fetchView = { root: '', at: 0, error: '', code: '', running: false, none: false };
+
+// A failed fetch in a few words; Git's own message is the tooltip.
+const FETCH_ERRORS = {
+  FETCH_OFFLINE: 'the remote did not answer',
+  FETCH_AUTH: 'the remote wants you to sign in',
+  GIT_TIMEOUT: 'no answer within 20 seconds',
+};
+
+/** The Git panel's line about fetching ("Fetched 3 min ago"), or '' when there is nothing to say. */
+export function fetchStateText(view, now = Date.now()) {
+  if (!view) return '';
+  if (view.running) return 'Fetching…';
+  if (view.error) return FETCH_ERRORS[view.code] ? `Could not fetch: ${FETCH_ERRORS[view.code]}` : 'Could not fetch';
+  if (view.none) return 'No remote to fetch from';
+  if (view.at) return `Fetched ${agoText(view.at, now)}`;
+  return '';
+}
+
+function renderFetchState(app) {
+  const node = $('#git-fetch-state');
+  if (!node) return;
+  const view = fetchView.root && fetchView.root === app.workspace.root ? fetchView : null;
+  node.textContent = fetchStateText(view);
+  node.classList.toggle('is-error', Boolean(view?.error && !view.running));
+  node.title = view?.error ? view.error : view?.at ? `Last fetched at ${new Date(view.at).toLocaleTimeString()}` : '';
+}
+
+/**
+ * Refresh Git: a quiet `git fetch` (main: no prompts, 20 s at most, the user's stored
+ * credentials) in the background, then the header's ↑ / ↓ again. Nothing waits for it.
+ */
+async function fetchQuietly(app) {
+  const api = gitApi();
+  const root = app.workspace.root;
+  if (!api?.fetch || !root) return;
+  if (fetchView.running && fetchView.root === root) return;
+  if (fetchView.root !== root) Object.assign(fetchView, { at: 0, none: false });
+  Object.assign(fetchView, { root, running: true, error: '', code: '' });
+  renderFetchState(app);
+  const result = await call(api.fetch, { folder: root });
+  if (fetchView.root !== root) return;
+  fetchView.running = false;
+  if (result.ok) {
+    fetchView.none = !result.data?.fetched;
+    if (result.data?.fetched) fetchView.at = result.data.at || Date.now();
+  } else if (['NOT_REPOSITORY', 'INVALID_FOLDER', 'FOLDER_NOT_OPENED'].includes(result.error?.code)) {
+    // Not a repository (or no longer open): nothing to say.
+    Object.assign(fetchView, { root: '', at: 0, none: false });
+  } else {
+    fetchView.error = errorText(result, 'Git did not answer.');
+    fetchView.code = result.error?.code || '';
+  }
+  renderFetchState(app);
+  if (result.ok && app.workspace.root === root) await refreshGitHeader(app);
 }
 
 // ---- Commit dialog ---------------------------------------------------------------------------
@@ -151,7 +257,7 @@ function renderHeader(app) {
 // (requestId), whether the user typed a message, the base for a pull request, the opener.
 const commit = {
   app: null, folder: '', taskId: null, state: null, requestId: '', touched: false, busy: false,
-  base: null, opener: null, token: 0, mode: 'commit', committed: null,
+  base: null, opener: null, token: 0, mode: 'commit', committed: null, branchNames: new Set(), branchTaken: false,
 };
 
 function fileLetter(file) {
@@ -224,10 +330,17 @@ function updateCommitControls() {
   const fresh = Boolean($('#commit-where-new')?.checked);
   const branch = $('#commit-branch');
   if (branch) branch.disabled = !fresh || commit.busy;
+  // A new branch must not be one that exists already (Git would refuse it after the click).
+  const taken = Boolean(formShown && fresh && branch && commit.branchNames.has(branch.value.trim()));
+  if (branch) branch.setAttribute('aria-invalid', String(taken));
+  if (taken !== commit.branchTaken) {
+    commit.branchTaken = taken;
+    setCommitStatus(taken ? `A branch called ${branch.value.trim()} already exists. Choose another name.` : '', { error: taken });
+  }
   const submit = $('#commit-submit');
   if (submit) {
     submit.hidden = !formShown;
-    submit.disabled = commit.busy || !paths.length || !message || Boolean(state?.conflicts) || (fresh && !branch?.value.trim());
+    submit.disabled = commit.busy || !paths.length || !message || Boolean(state?.conflicts) || (fresh && !branch?.value.trim()) || taken;
     submit.textContent = fresh ? 'Create branch and commit' : 'Commit';
   }
   const all = $('#commit-toggle-all');
@@ -341,10 +454,13 @@ function renderSubtitle() {
   const state = commit.state;
   const node = $('#commit-subtitle');
   if (!node || !state) return;
-  const name = commit.app?.folderLabel?.(state.root) || state.root.split('/').filter(Boolean).pop() || state.root;
-  const where = state.branch ? `On ${state.branch}` : 'Not on a branch';
+  // A task worktree goes by its project and branch ("api (feat/health)", as in the sidebar),
+  // never by its generated folder name; any other folder by its name and branch.
+  const own = commit.app ? worktreeAt(commit.app, state.root) : null;
+  const where = own ? worktreeName({ ...own, branch: state.branch || own.branch })
+    : `${friendlyFolderName(state.root, commit.app?.tasks)} · ${state.branch ? `On ${state.branch}` : 'Not on a branch'}`;
   const who = state.identity?.email ? `committing as ${state.identity.name || state.identity.email} <${state.identity.email}>` : 'Git has no user.email set: run git config --global user.email … first';
-  node.textContent = `${name} · ${where} · ${who}`;
+  node.textContent = `${where} · ${who}`;
 }
 
 // The second step: push, open a pull request, the link.
@@ -415,7 +531,11 @@ export async function openCommitDialog(app, { folder = '', taskId = null, paths 
     app.showToast('Open a folder first');
     return false;
   }
-  const result = await call(api.status, { folder: target });
+  // The branches too, so a suggested new branch name is never one that exists.
+  const [result, listed] = await Promise.all([
+    call(api.status, { folder: target }),
+    api.branches ? call(api.branches, { folder: target }) : Promise.resolve(null),
+  ]);
   if (!result.ok) {
     app.showToast(errorText(result, 'Git could not read this folder.'));
     return false;
@@ -429,7 +549,10 @@ export async function openCommitDialog(app, { folder = '', taskId = null, paths 
   Object.assign(commit, {
     app, folder: target, taskId, state: result.data, touched: false, busy: false, base, mode, committed: null,
     opener: opener || (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+    branchNames: new Set(listed?.ok && Array.isArray(listed.data?.branches) ? listed.data.branches.map((item) => item.name) : []),
+    branchTaken: false,
   });
+  if (result.data.branch) commit.branchNames.add(result.data.branch);
   const state = result.data;
   for (const id of ['#commit-pr-title', '#commit-pr-body', '#commit-pr-base']) {
     const input = $(id);
@@ -457,9 +580,9 @@ export async function openCommitDialog(app, { folder = '', taskId = null, paths 
     current.checked = !state.detached;
     fresh.checked = state.detached;
     const task = taskOf(app, taskId);
-    // A task worktree is already on scalemax/<its title>: the suggestion must be a new name.
-    const suggested = `scalemax/${slugify(task?.title || 'changes')}`;
-    $('#commit-branch').value = suggested === state.branch ? `${suggested}-2` : suggested;
+    // Never a branch that exists (a task worktree is already on scalemax/<its title>; an earlier
+    // commit may have made that name already): scalemax/<title>, -2, -3 …
+    $('#commit-branch').value = uniqueBranchName(`scalemax/${slugify(task ? fullTaskTitle(task) : 'changes')}`, commit.branchNames);
     $('#commit-skip-hooks').checked = false;
     if (state.conflicts) setCommitStatus(`${plural(state.conflicts, 'file is', 'files are')} still in conflict. Resolve them first.`, { error: true });
     else if (state.operation === 'merge') setCommitStatus('A merge is being finished: commit all of its files at once.');
@@ -595,8 +718,38 @@ async function pullBranch(app) {
   app.showToast('Pulling…');
   const result = await call(api.pull, { folder });
   if (button) button.disabled = false;
-  if (!result.ok) app.showToast(errorText(result, 'The pull did not go through.'));
-  else app.showToast(result.data.upstream ? `Up to date with ${result.data.upstream}` : 'Pulled');
+  if (!result.ok) {
+    app.showToast(errorText(result, 'The pull did not go through.'));
+  } else {
+    // A pull fetches first: the remote's state is as fresh as a fetch's.
+    if (app.workspace.root === folder) Object.assign(fetchView, { root: folder, at: result.data.fetchedAt || Date.now(), error: '', code: '', running: false, none: false });
+    app.showToast(pullMessage(result.data));
+  }
+  await afterGitChange(app, folder, { files: Boolean(result.ok && result.data?.pulled !== 0) });
+}
+
+/** "Restore stashed changes": the newest stash Switch branch made comes back onto this checkout. */
+async function restoreStashed(app) {
+  const api = gitApi();
+  const folder = app.workspace.root;
+  const data = repoHere(app);
+  const stash = Array.isArray(data?.stashes) ? data.stashes[0] : null;
+  if (!api?.restoreStash || !folder || !stash) return;
+  if (app.hasUnsavedEdits()) {
+    app.showToast(UNSAVED);
+    return;
+  }
+  const button = $('#git-stash-restore');
+  if (button) button.disabled = true;
+  const result = await call(api.restoreStash, { folder, id: stash.id });
+  if (button) button.disabled = false;
+  if (!result.ok) {
+    app.showToast(errorText(result, 'The stashed changes could not be restored.'));
+  } else {
+    const from = result.data.from || stash.from;
+    const onto = result.data.branch && result.data.branch !== from ? ` onto ${result.data.branch}` : '';
+    app.showToast(`Restored the changes stashed${from ? ` on ${from}` : ''}${onto}${result.data.dropped === false ? ' (the stash is still listed)' : ''}`);
+  }
   await afterGitChange(app, folder, { files: result.ok });
 }
 
@@ -628,8 +781,10 @@ async function openBranchDialog(app, opener = null) {
     radio.value = branch.name;
     radio.checked = branch.name === data.current;
     // Git keeps a branch in one checkout at a time: one checked out in another worktree (the main
-    // checkout, from a task worktree) cannot be switched to here.
-    const where = branch.elsewhere ? (app.folderLabel?.(branch.elsewhere) || branch.elsewhere.split('/').pop()) : '';
+    // checkout, from a task worktree) cannot be switched to here. A task worktree is named by its
+    // task, never by its generated folder name.
+    const owner = branch.elsewhere ? app.tasks.find((item) => normalizeWorktree(item.worktree)?.path === branch.elsewhere) : null;
+    const where = !branch.elsewhere ? '' : owner ? 'a task worktree' : friendlyFolderName(branch.elsewhere, app.tasks);
     radio.disabled = !branch.usable || Boolean(where);
     radio.addEventListener('change', () => renderBranchControls());
     row.append(radio, element('span', 'branch-name', branch.name));
@@ -637,7 +792,8 @@ async function openBranchDialog(app, opener = null) {
     else if (where) row.append(element('span', 'branch-note', `in ${where}`));
     else if (branch.upstream) row.append(element('span', 'branch-note', branch.upstream));
     if (!branch.usable) row.title = 'Switch to this branch in a terminal: its name is unusual.';
-    else if (where) row.title = `Checked out in ${branch.elsewhere}. Switch there, or remove that worktree first.`;
+    else if (owner) row.title = `Checked out in the separate worktree of the task “${owner.title}”. Switch there, or remove that worktree first.`;
+    else if (where) row.title = `Checked out in ${where}. Switch that checkout to another branch first.`;
     row.classList.toggle('is-taken', Boolean(where));
     return row;
   }));
@@ -681,7 +837,7 @@ async function switchBranch() {
     return;
   }
   $('#branch-dialog').close();
-  app.showToast(result.data.stashed ? `On ${branch} now; your changes are in the stash (git stash pop)` : `On ${branch} now`);
+  app.showToast(result.data.stashed ? `On ${branch} now. Your changes are stashed: “Restore stashed changes” in the Git panel brings them back.` : `On ${branch} now`);
   await afterGitChange(app, folder, { files: true });
 }
 
@@ -720,7 +876,8 @@ function renderWorktreeChip(app) {
   if (label) label.textContent = on ? 'Separate worktree: on' : 'Separate worktree';
   chip.title = on
     ? `The first message makes a branch scalemax/… from ${data.branch || 'HEAD'} and a folder of its own for this task (outside the project). Click to work here instead.`
-    : 'Work in a separate worktree: a branch and a folder of its own for this task, so the project stays as it is';
+    : 'Separate worktree: this task works on its own copy of the project, in a folder and Git branch of its own, so your files stay as they are until you merge it back';
+  chip.setAttribute('aria-description', 'Work on a separate copy of the project, in its own folder and Git branch, so your files stay as they are until you merge it back');
 }
 
 /** True when the task's first message should make its worktree first (prepareWorktree). */
@@ -821,13 +978,28 @@ function worktreeAction(label, action, title) {
   return button;
 }
 
-/** Opens or closes the worktree bar's "More" menu; a keyboard open focuses its first item. */
-function setWorktreeMenu(app, open, { focusFirst = false, refocus = true } = {}) {
+/** Opens or closes the worktree bar's "More" menu; a keyboard open focuses its first (or last) item. */
+function setWorktreeMenu(app, open, { focusFirst = false, focusLast = false, refocus = true } = {}) {
   menuOpen = open;
   renderWorktreeBar(app);
   const bar = $('#worktree-bar');
-  if (open && focusFirst) bar?.querySelector('.worktree-menu-item')?.focus();
+  const items = bar ? [...bar.querySelectorAll('.worktree-menu-item')] : [];
+  if (open && focusLast) items[items.length - 1]?.focus();
+  else if (open && focusFirst) items[0]?.focus();
   else if (!open && refocus) bar?.querySelector('[data-worktree-menu]')?.focus();
+}
+
+/**
+ * Where the arrow keys move in a menu of `count` items from `index` (-1: the menu button):
+ * ArrowDown / ArrowUp wrap around, Home / End go to the ends. Null for any other key.
+ */
+export function menuMove(key, index, count) {
+  if (!count) return null;
+  if (key === 'ArrowDown') return index < 0 || index >= count - 1 ? 0 : index + 1;
+  if (key === 'ArrowUp') return index <= 0 ? count - 1 : index - 1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
 }
 
 /** The task header's worktree bar: the branch, its state and what to do with it. */
@@ -871,10 +1043,12 @@ function renderWorktreeBar(app) {
     for (const item of [
       worktreeAction('Show in Finder', 'reveal', worktree.path),
       ...(worktree.base ? [worktreeAction(`Merge into ${worktree.base}`, 'merge', `Merge ${worktree.branch} into ${worktree.base} in "${worktree.mainName}"`)] : []),
-      worktreeAction('Remove worktree', 'remove', 'Delete this worktree folder (the branch is kept)'),
+      worktreeAction('Remove worktree', 'remove', `Delete this worktree's folder (the branch ${worktree.branch} is kept)`),
     ]) {
       item.classList.add('worktree-menu-item');
       item.setAttribute('role', 'menuitem');
+      // The arrow keys move between the items; Tab leaves the menu (it closes).
+      item.tabIndex = -1;
       menu.append(item);
     }
     actions.append(
@@ -893,27 +1067,72 @@ function renderWorktreeBar(app) {
   if (!worktree.removed && (!entry || Date.now() - entry.at > INFO_MAX_AGE_MS)) void readWorktreeInfo(app, task, worktree);
 }
 
+// The worktree bar's "More" button as drawn now (the bar is redrawn while a prompt is open).
+const moreButton = () => $('#worktree-bar [data-worktree-menu]');
+
+/** What the Merge prompt says ({ title, context, message, note, confirmLabel }), from the worktree and its state. */
+export function mergeQuestion(worktree, info = null) {
+  // The branch is named on the line under the title (it can be long).
+  const commits = Number.isInteger(info?.unmerged) ? info.unmerged : null;
+  const what = commits ? plural(commits, 'commit') : 'this worktree\'s branch';
+  return {
+    title: `Merge ${what} into ${worktree.base}?`,
+    context: friendlyFolderName(worktree),
+    message: `Git merges it in the project folder "${worktree.mainName}", which must be on ${worktree.base} with no uncommitted changes. If the merge conflicts, it is undone at once and nothing changes.`,
+    note: commits === 0 ? `${worktree.base} already has everything from ${worktree.branch}.` : 'The worktree and its branch stay as they are.',
+    confirmLabel: `Merge into ${worktree.base}`,
+  };
+}
+
 async function mergeWorktree(app, task, current) {
   const api = worktreeApi();
   if (!api?.merge || !current.base) return;
-  const { worktree } = await freshWorktree(app, task, current);
-  const sure = window.confirm(`Merge ${worktree.branch} into ${worktree.base} in "${worktree.mainName}"?\n\nGit merges in that checkout, which must have no uncommitted changes and be on ${worktree.base}. A merge that conflicts is undone at once.`);
-  if (!sure) return;
+  const { worktree, info } = await freshWorktree(app, task, current);
+  if (!(await askConfirm({ ...mergeQuestion(worktree, info), returnFocus: moreButton }))) return;
   app.showToast(`Merging into ${worktree.base}…`);
   const result = await call(api.merge, { folder: worktree.path, base: worktree.base, into: worktree.mainRoot });
   infos.delete(task.id);
   if (!result.ok) {
-    if (result.error?.code === 'WORKTREE_DIRTY' && window.confirm(`${result.error.message}\n\nOpen Commit… now?`)) {
-      await openCommitDialog(app, { folder: worktree.path, taskId: task.id });
-    } else {
-      app.showToast(errorText(result, 'The merge did not go through.'));
-    }
+    const commitFirst = result.error?.code === 'WORKTREE_DIRTY' && await askConfirm({
+      title: 'Commit the worktree\'s changes first?',
+      context: friendlyFolderName(worktree),
+      message: errorText(result, 'The worktree has changes that are not committed.'),
+      confirmLabel: 'Open Commit…',
+      returnFocus: moreButton,
+    });
+    if (commitFirst) await openCommitDialog(app, { folder: worktree.path, taskId: task.id });
+    else if (result.error?.code !== 'WORKTREE_DIRTY') app.showToast(errorText(result, 'The merge did not go through.'));
     renderWorktreeBar(app);
     return;
   }
   app.showToast(result.data.upToDate ? `${worktree.base} already has everything from ${worktree.branch}`
     : `Merged ${plural(result.data.commits, 'commit')} into ${worktree.base} (${result.data.head})`);
   await afterGitChange(app, worktree.mainRoot, { files: true });
+}
+
+/**
+ * What the Remove prompt says ({ title, context, message, details, note, confirmLabel, danger }):
+ * the worktree by its project and branch, what goes (the folder, uncommitted changes) and what is
+ * kept (the branch and its commits), from its state (lib/git-flow.cjs worktreeInfo) when known.
+ */
+export function removeQuestion(worktree, info = null, { others = 0 } = {}) {
+  const changed = Number.isInteger(info?.changed) ? info.changed : 0;
+  const unmerged = Number.isInteger(info?.unmerged) ? info.unmerged : 0;
+  const lost = changed ? ` ${plural(changed, 'uncommitted change')} ${changed === 1 ? 'is' : 'are'} lost with it${info?.changedNames ? `: ${info.changedNames}` : ''}.` : '';
+  const kept = unmerged && worktree.base
+    ? `The branch ${worktree.branch} is kept, with its ${plural(unmerged, 'commit')} not merged into ${worktree.base}.`
+    : `The branch ${worktree.branch} and its commits are kept.`;
+  const notes = [];
+  if (info?.notes) notes.push('ScaleMax\'s project notes there go with it.');
+  if (others) notes.push(`${plural(others, 'other task')} also ${others === 1 ? 'works' : 'work'} there.`);
+  return {
+    title: 'Remove this task\'s worktree?',
+    context: friendlyFolderName(worktree),
+    message: `Its folder is deleted.${lost} ${kept}`,
+    note: notes.join(' '),
+    confirmLabel: changed ? 'Remove and lose changes' : 'Remove worktree',
+    danger: true,
+  };
 }
 
 async function removeWorktree(app, task, current) {
@@ -929,12 +1148,24 @@ async function removeWorktree(app, task, current) {
   }
   const { worktree, info } = await freshWorktree(app, task, current);
   const others = app.tasks.filter((item) => item !== task && item.folder?.path === worktree.path).length;
-  const notes = info?.notes ? ' ScaleMax\'s project notes there go with it (the project\'s own are not touched).' : '';
-  const sure = window.confirm(`Remove this task's worktree?\n\nThe folder ${worktree.path} is deleted; the branch ${worktree.branch} and its commits are kept.${notes}${others ? `\n\n${plural(others, 'other task')} also ${others === 1 ? 'works' : 'work'} there.` : ''}`);
-  if (!sure) return;
-  let result = await call(api.remove, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}) });
+  const question = removeQuestion(worktree, info, { others });
+  if (!(await askConfirm({ ...question, returnFocus: moreButton }))) return;
+  // What the prompt said would be lost (uncommitted changes) or kept (unmerged commits) was
+  // agreed to: the removal goes ahead without asking again.
+  const agreed = Boolean(info && (info.changed > 0 || info.unmerged > 0));
+  let result = await call(api.remove, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}), ...(agreed ? { force: true } : {}) });
   if (!result.ok && ['WORKTREE_DIRTY', 'UNMERGED'].includes(result.error?.code)) {
-    if (!window.confirm(`${result.error.message}\n\nRemove the worktree anyway?`)) return;
+    const dirty = result.error.code === 'WORKTREE_DIRTY';
+    const anyway = await askConfirm({
+      title: dirty ? 'Remove the worktree and lose its changes?' : 'Remove the worktree anyway?',
+      context: friendlyFolderName(worktree),
+      message: errorText(result, ''),
+      note: `The branch ${worktree.branch} is kept.`,
+      confirmLabel: dirty ? 'Remove and lose changes' : 'Remove worktree',
+      danger: true,
+      returnFocus: moreButton,
+    });
+    if (!anyway) return;
     result = await call(api.remove, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}), force: true });
   }
   if (!result.ok) {
@@ -1037,6 +1268,11 @@ export function bindGitFlowUi(app) {
     void openCommitDialog(app, { folder: app.workspace.root, taskId, opener: event.currentTarget });
   });
   $('#git-pull')?.addEventListener('click', () => void pullBranch(app));
+  $('#git-stash-restore')?.addEventListener('click', () => void restoreStashed(app));
+  // Refresh Git (src/app.js reads the panel again) also fetches, quietly, in the background.
+  $('#git-refresh')?.addEventListener('click', () => void fetchQuietly(app));
+  // "Fetched 3 min ago" keeps counting.
+  setInterval(() => { if (fetchView.at && !fetchView.running) renderFetchState(app); }, 30_000);
   $('#git-switch')?.addEventListener('click', (event) => void openBranchDialog(app, event.currentTarget));
   const branches = $('#branch-dialog');
   if (branches) {
@@ -1065,16 +1301,42 @@ export function bindGitFlowUi(app) {
     }
     const button = event.target.closest('[data-worktree-action]');
     if (!button) return;
-    if (button.closest('.worktree-menu')) setWorktreeMenu(app, false, { refocus: false });
-    void runWorktreeAction(app, button.dataset.worktreeAction, button);
+    // From the menu: it closes with focus on "More", where a prompt it opens gives focus back.
+    const fromMenu = Boolean(button.closest('.worktree-menu'));
+    if (fromMenu) setWorktreeMenu(app, false);
+    void runWorktreeAction(app, button.dataset.worktreeAction, fromMenu ? $('#worktree-bar [data-worktree-menu]') : button);
   });
-  // The menu closes on Escape (focus back on "More") and on any click outside it.
+  // The menu: ArrowDown / ArrowUp (wrapping), Home and End move between its items; on "More"
+  // ArrowDown / ArrowUp open it. Escape closes it with focus back on "More"; so does Tab, which
+  // then moves on from there. A click outside closes it too.
   $('#worktree-bar')?.addEventListener('keydown', (event) => {
+    const bar = event.currentTarget;
+    const onMore = Boolean(event.target.closest?.('[data-worktree-menu]'));
+    const inMenu = Boolean(event.target.closest?.('.worktree-menu'));
     if (event.key === 'Escape' && menuOpen) {
       event.preventDefault();
       event.stopPropagation();
       setWorktreeMenu(app, false);
+      return;
     }
+    if (!menuOpen) {
+      if (onMore && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        setWorktreeMenu(app, true, { focusFirst: event.key === 'ArrowDown', focusLast: event.key === 'ArrowUp' });
+      }
+      return;
+    }
+    if (!onMore && !inMenu) return;
+    if (event.key === 'Tab') {
+      if (inMenu) setWorktreeMenu(app, false);
+      else setWorktreeMenu(app, false, { refocus: false });
+      return;
+    }
+    const items = [...bar.querySelectorAll('.worktree-menu-item')];
+    const next = menuMove(event.key, items.indexOf(document.activeElement), items.length);
+    if (next === null) return;
+    event.preventDefault();
+    items[next].focus();
   });
   document.addEventListener('pointerdown', (event) => {
     if (menuOpen && !event.target.closest?.('.worktree-actions')) setWorktreeMenu(app, false, { refocus: false });

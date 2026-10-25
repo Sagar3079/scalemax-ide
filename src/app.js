@@ -5,9 +5,9 @@ import {
   toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
   toolCallGroups, normalizeSteps, taskHistoryMessages, normalizeMetrics, normalizeCompaction, effectivePermission,
   normalizeTodos, normalizeMessageImages, openTodos,
-  automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
+  automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetrics, taskMetricsLabel, metricsLabel, formatUsd, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
-  retryableReply,
+  retryableReply, plainPreview, taskTitleParts,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps, renderTodoList,
@@ -21,13 +21,14 @@ import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
-import { bindSessionsUi, renderMessageActions } from './sessions-ui.js';
-import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
+import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
+import { shortcutCommand, isCommand, shortcutList } from './shortcuts.mjs';
+import { normalizeWorktree, unsharedChangeIds, worktreeName } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
 import {
-  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLabel, automationHistoryLine,
+  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLine, automationHistoryLine,
   automationFolderChoices,
 } from './scheduler.js';
 import { renderAvatar } from './avatars.js';
@@ -106,6 +107,9 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// What the composer's Compact button does, in plain words (its tooltip and description).
+const COMPACT_HINT = "Summarize older messages so long chats fit the model's memory";
+
 // All dynamic content is inserted as text, never interpreted as HTML.
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -138,6 +142,20 @@ function icon(name, className) {
   path.setAttribute('d', ICONS[name]);
   svg.append(path);
   return svg;
+}
+
+// Keys typed into these are text (src/shortcuts.mjs leaves "/" to them).
+const NOT_TEXT_INPUTS = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
+function isTypingIn(node) {
+  if (!node || typeof node.tagName !== 'string') return false;
+  const tag = node.tagName.toLowerCase();
+  if (tag === 'textarea' || tag === 'select') return true;
+  if (tag === 'input') return !NOT_TEXT_INPUTS.has(String(node.type || 'text').toLowerCase());
+  return node.isContentEditable === true || ['textbox', 'searchbox', 'combobox'].includes(node.getAttribute?.('role'));
+}
+// The code editor (CodeMirror, or the textarea used when it cannot load) keeps ⌘F for find.
+function isInEditor(node) {
+  return Boolean(node?.closest?.('#editor-view, #editor-input, .cm-editor'));
 }
 
 // The same control after the task list is rebuilt: a row by its task, a group button by its folder.
@@ -254,6 +272,8 @@ const app = {
   collapsedFolders: new Set(),
   // Replies in progress, by task id (src/reply-ui.js): each task can work while others do.
   replies: new Map(),
+  // The task whose /cost summary shows above the message box ('' while none does).
+  costPanelTaskId: '',
   // A no-tools compaction is pending before the next regular completion for this task.
   compactingTasks: new Set(),
   // Tasks whose reply finished while another task was on screen (a dot in the sidebar).
@@ -447,6 +467,8 @@ const app = {
         // Written under Plan permission: nothing was changed, and the card offering to run it
         // stays under the reply across restarts.
         if (message.role === 'assistant' && message.plan === true) normalized.plan = true;
+        // …unless it was run already: the card then says so instead of offering it again.
+        if (message.role === 'assistant' && message.plan === true && message.planRun === true) normalized.planRun = true;
         // The model's to-do list and the pictures the user attached stay with their messages.
         const todos = message.role === 'assistant' ? normalizeTodos(message.todos) : [];
         if (todos.length) normalized.todos = todos;
@@ -814,12 +836,106 @@ const app = {
     const cost = taskMetricsLabel(task);
     const compacted = normalizeCompaction(task?.compaction);
     const metrics = cost ? element('span', 'chat-crumb-metrics', cost) : null;
-    if (metrics) metrics.title = compacted ? `${cost} · Earlier context is summarized` : cost;
+    if (metrics) {
+      // The title has the amounts in full, and says why part of the total is unknown.
+      const totals = taskMetrics(task);
+      metrics.title = [
+        `This task: ${taskMetricsLabel(task, { exact: true })}`,
+        totals.knownInput || totals.knownOutput ? `${totals.inputTokens.toLocaleString('en-US')} in · ${totals.outputTokens.toLocaleString('en-US')} out` : '',
+        totals.unknownUsage ? `Usage of ${totals.unknownUsage === 1 ? 'one reply' : `${totals.unknownUsage} replies`} is not fully known: a provider reports it when an answer ends, and a stopped or cut-off answer never did` : '',
+        compacted ? 'Earlier context is summarized' : '',
+      ].filter(Boolean).join(' · ');
+    }
     const context = compacted ? element('span', 'chat-crumb-context', 'Context compacted') : null;
     crumb.replaceChildren(element('span', folder ? 'chat-crumb-folder' : '', folder?.name || 'Workspace'), ' ', separator, ' Chat',
       ...(metrics ? [metrics] : []), ...(context ? [context] : []));
     if (folder) crumb.title = folder.path;
     else crumb.removeAttribute('title');
+    // The /cost summary follows the same totals.
+    this.renderCostPanel();
+  },
+
+  /** "/cost": shows the summary of the task on screen above the message box (renderCostPanel). */
+  showCostPanel() {
+    this.costPanelTaskId = this.currentTaskId || '';
+    this.renderCostPanel();
+  },
+
+  closeCostPanel() {
+    const panel = $('#cost-panel');
+    const inside = Boolean(panel?.contains?.(document.activeElement));
+    this.costPanelTaskId = '';
+    this.renderCostPanel();
+    if (inside) $('#chat-input')?.focus?.();
+  },
+
+  /**
+   * The /cost summary: this task's tokens in and out, what they cost, the model and how full its
+   * context window is, kept up to date while it shows (renderChatCrumb draws it with the header
+   * total) and closed with its button, Escape in an empty message box, or by opening another task.
+   * It is not a message: nothing of it is sent to the model or saved with the task.
+   */
+  renderCostPanel() {
+    const panel = $('#cost-panel');
+    if (!panel) return;
+    const task = this.currentTask();
+    if (!this.costPanelTaskId || !task || task.id !== this.costPanelTaskId) {
+      this.costPanelTaskId = '';
+      panel.hidden = true;
+      panel.replaceChildren();
+      return;
+    }
+    const totals = taskMetrics(task);
+    const head = element('div', 'cost-panel-head');
+    head.append(element('span', 'cost-panel-title', 'Cost of this task'), element('span', 'cost-panel-aside', 'Not sent to the model'));
+    const close = element('button', 'cost-panel-close');
+    close.setAttribute('aria-label', 'Close the cost summary');
+    close.title = 'Close (Esc)';
+    close.append(element('span', '', '×'));
+    close.addEventListener('click', () => this.closeCostPanel());
+    head.append(close);
+    if (!totals.replies) {
+      panel.replaceChildren(head, element('p', 'cost-panel-foot', 'No usage recorded for this task yet.'));
+      panel.hidden = false;
+      return;
+    }
+    const count = (value) => value.toLocaleString('en-US');
+    const rows = [];
+    if (totals.knownInput || totals.knownOutput || !totals.knownTotal) {
+      rows.push(['Tokens in', totals.knownInput ? count(totals.inputTokens) : 'unknown']);
+      rows.push(['Tokens out', totals.knownOutput ? count(totals.outputTokens) : 'unknown']);
+    } else {
+      rows.push(['Tokens', count(totals.totalTokens)]);
+    }
+    const amount = totals.priced ? formatUsd(totals.costNanoUsd) : null;
+    const gaps = [totals.unavailablePrice ? 'unpriced' : '', totals.unknownUsage ? 'unknown' : ''].filter(Boolean);
+    rows.push(['Cost', amount ? `${amount.text}${gaps.map((gap) => ` + ${gap}`).join('')}`
+      : totals.unavailablePrice ? 'Price unavailable' : 'unknown', amount ? `${amount.exact}${gaps.map((gap) => ` + ${gap}`).join('')}` : '']);
+    const newest = [...task.messages].reverse().find((message) => message?.role === 'assistant' && normalizeMetrics(message.metrics)?.model);
+    const model = normalizeMetrics(newest?.metrics)?.model || this.provider?.model || '';
+    rows.push(['Model', model || 'none']);
+    const share = taskContextShare(task, (id) => this.contextWindowOf(id), this.provider?.model || '');
+    const size = this.contextWindowOf(model);
+    rows.push(['Context', share
+      ? `${share.label.replace(/ of context$/, '')}${size ? ` of ${size >= 1_000_000 ? `${Math.round(size / 100_000) / 10}m` : `${Math.round(size / 1000)}k`}` : ''}`
+      : 'unknown']);
+    const list = element('dl', 'cost-panel-list');
+    for (const [label, value, title] of rows) {
+      const row = element('div', 'cost-panel-item');
+      const term = element('dt', '', label);
+      const detail = element('dd', '', value);
+      if (title) detail.title = title;
+      row.append(term, detail);
+      list.append(row);
+    }
+    const replies = totals.replies - totals.compactions;
+    const over = [replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'}` : '',
+      totals.compactions ? `${totals.compactions} ${totals.compactions === 1 ? 'compaction' : 'compactions'}` : ''].filter(Boolean).join(' and ');
+    const notes = [over ? `Over ${over}.` : '',
+      totals.unknownUsage ? `Usage of ${totals.unknownUsage === 1 ? 'one reply' : `${totals.unknownUsage} replies`} is not fully known: a provider reports it when an answer ends, and a stopped or cut-off answer never did.` : '',
+      totals.unavailablePrice ? 'The provider published no price for some of it.' : ''].filter(Boolean);
+    panel.replaceChildren(head, list, ...(notes.length ? [element('p', 'cost-panel-foot', notes.join(' '))] : []));
+    panel.hidden = false;
   },
 
   renderSidebarFolder() {
@@ -1124,8 +1240,12 @@ const app = {
   async testProvider() {
     const bridge = this.getProviderBridge();
     if (!bridge?.discover) { this.showToast('Provider connections require the desktop app'); return; }
+    // The button stays enabled while it tests (aria-busy, and a second press waits), so the
+    // keyboard focus stays on it; disabling it dropped the focus to the page.
     const button = $('#provider-test');
-    if (button) button.disabled = true;
+    if (this.testingProvider) return;
+    this.testingProvider = true;
+    button?.setAttribute('aria-busy', 'true');
     this.markFormEdited();
     this.setTestDot('pending');
     if ($('#provider-status')) $('#provider-status').textContent = 'Testing connection and loading models…';
@@ -1176,7 +1296,8 @@ const app = {
       this.setTestDot('ok');
       this.showToast('Provider connection succeeded');
     } finally {
-      if (button) button.disabled = false;
+      this.testingProvider = false;
+      button?.removeAttribute('aria-busy');
     }
   },
 
@@ -1316,6 +1437,7 @@ const app = {
         this.settleCurrentTask();
         this.showToast(`"${folder.name}" is already open`);
       }
+      this.refocusAfterFolder();
       return { ok: true, data: { root: folder.path } };
     }
     if (this.refuseFolderChange()) return null;
@@ -1338,7 +1460,22 @@ const app = {
       this.settleCurrentTask();
       this.showToast(`Opened ${folder.name}`);
     }
+    this.refocusAfterFolder();
     return result;
+  },
+
+  // After a folder opens, the control that opened it is often gone (the chat's folder picker, the
+  // Workspace's empty state) and the focus with it. From the chat (its folder picker or folder
+  // chip) the message box takes it, since typing comes next; elsewhere it moves only when it was
+  // lost (to the Workspace's file filter there).
+  refocusAfterFolder() {
+    if (document.querySelector('dialog[open]')) return;
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected || !active.getClientRects?.().length;
+    const fromChat = Boolean(active?.closest?.('#folder-picker, #folder-chip, #folder-menu'));
+    if (!lost && !fromChat) return;
+    if ($('#view-chat')?.classList.contains('active')) this.focusComposer();
+    else if ($('#view-workspace')?.classList.contains('active')) $('#workspace-filter')?.focus();
   },
 
   // The locked menu's "New task in another folder…": a new task, then the folder dialog.
@@ -1350,7 +1487,7 @@ const app = {
 
   // Why a folder did not open, for a toast. main passes file-system errors through with their code.
   folderErrorText(result, path) {
-    const name = folderName(path);
+    const name = this.folderLabel(path);
     const code = result?.error?.code;
     if (FOLDER_GONE.includes(code)) return `The folder "${name}" is no longer available.`;
     if (code === 'EPERM' || code === 'EACCES') {
@@ -1367,20 +1504,38 @@ const app = {
   // not the generated folder name it has on disk; any other folder by its own name.
   folderLabel(path) {
     if (!path) return '';
-    const task = this.tasks.find((item) => item.folder?.name && normalizeWorktree(item.worktree)?.path === path);
-    return task ? task.folder.name : folderName(path);
+    return this.worktreeLabel(path) || folderName(path);
   },
 
-  // The open folder as a task folder ({ name, path }), or null.
+  // A task worktree's name, "<main checkout> (<branch>)", or '' when `path` is not one: the name
+  // its own task got when the worktree was made (src/gitflow-ui.js), else one from its record.
+  worktreeLabel(path) {
+    if (!path) return '';
+    let record = null;
+    for (const task of this.tasks) {
+      const worktree = normalizeWorktree(task.worktree);
+      if (worktree?.path !== path) continue;
+      if (task.folder?.path === path && task.folder.name && task.folder.name !== folderName(path)) return task.folder.name;
+      record ||= worktree;
+    }
+    return record ? worktreeName(record) : '';
+  },
+
+  // The open folder as a task folder ({ name, path }), or null. A task worktree is named after
+  // its project and branch, not the generated folder name it has on disk.
   rootFolder() {
     const root = this.workspace.root;
-    return root ? { name: folderName(root), path: root } : null;
+    return root ? { name: this.folderLabel(root), path: root } : null;
   },
 
   // The folder the chip, the chat header and the sidebar footer show: the task's own folder (fixed
-  // or draft), otherwise the open one that its next message takes.
+  // or draft), otherwise the open one that its next message takes. A task made in a worktree
+  // before its name was known shows the worktree's name.
   taskFolderShown(task = this.currentTask()) {
-    return task?.folder || this.rootFolder();
+    const folder = task?.folder;
+    if (!folder) return this.rootFolder();
+    const label = this.worktreeLabel(folder.path);
+    return label && label !== folder.name ? { ...folder, name: label } : folder;
   },
 
   // True when the current task is fixed to a folder other than `path`.
@@ -1730,6 +1885,8 @@ const app = {
       if (retry && !retry.disabled) void this.retryReply(retry.dataset.taskId);
     });
     this.bindComposerHint();
+    // Escape stops the running reply (composerEscape); the "/" and "@" menus see it first.
+    $('#chat-card')?.addEventListener('keydown', (event) => this.composerEscape(event));
     $('#chat-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
@@ -1740,6 +1897,9 @@ const app = {
     $('#compact-btn')?.addEventListener('click', () => void this.compactCurrentTask());
     $('#send-btn')?.addEventListener('click', (event) => {
       event.preventDefault();
+      // The keyboard goes back to the message box (Send is disabled, then Stop takes its place):
+      // the next message can be typed, and Escape stops the reply.
+      $('#chat-input')?.focus();
       this.handleSend();
     });
     // The pills and the composer's mode chip share one place that switches the mode.
@@ -1817,21 +1977,15 @@ const app = {
     $('#automation-form')?.addEventListener('submit', (event) => this.createAutomation(event));
     $('#automation-list')?.addEventListener('click', (event) => this.changeAutomation(event));
     this.bindAutomationForm();
+    this.bindShortcuts();
     $('#search-btn')?.addEventListener('click', () => this.toggleSearch(true));
     $('#search-close')?.addEventListener('click', () => this.toggleSearch(false));
-    $('#search-input')?.addEventListener('input', () => this.renderSearch());
-    $('#search-results')?.addEventListener('click', (event) => {
-      const task = event.target.closest('.search-result[data-task-id]');
-      if (task) {
-        this.selectTask(task.dataset.taskId);
-        this.toggleSearch(false);
-        return;
-      }
-      const resource = event.target.closest('.search-result[data-resource-kind]');
-      if (!resource) return;
-      this.toggleSearch(false);
-      openResourceDetail(this, resource.dataset.resourceKind, resource.dataset.resourceId);
+    $('#search-input')?.addEventListener('input', () => {
+      this.searchActive = 0;
+      this.renderSearch();
     });
+    $('#search-input')?.addEventListener('keydown', (event) => this.searchKeys(event));
+    $('#search-results')?.addEventListener('click', (event) => this.openSearchResult(event.target.closest('.search-result')));
     $('#context-chips')?.addEventListener('click', (event) => {
       const chip = event.target.closest('.context-chip[data-context-kind]');
       if (!chip) return;
@@ -1859,6 +2013,113 @@ const app = {
       else item.removeAttribute('aria-current');
     });
     $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
+  },
+
+  // ---- Keyboard shortcuts --------------------------------------------------
+  // The keys are src/shortcuts.mjs's; the native menu (lib/app-branding.cjs) sends the same
+  // commands as a 'scalemax:command' event. The page takes its keys first and stops them, so a
+  // menu item acts only when it is clicked.
+
+  isMac() {
+    const platform = window.scalemaxAPI?.getPlatform?.();
+    if (platform && platform !== 'browser') return platform === 'darwin';
+    return /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '');
+  },
+
+  bindShortcuts() {
+    document.addEventListener('keydown', (event) => {
+      // A menu, the slash list, CodeMirror or a dialog already used the key.
+      if (event.defaultPrevented) return;
+      const active = document.activeElement;
+      const command = shortcutCommand(event, { mac: this.isMac(), typing: isTypingIn(active), inEditor: isInEditor(active) });
+      if (!command) return;
+      // A plain "/" is a character: inside a dialog it is left to the dialog.
+      const plain = !event.metaKey && !event.ctrlKey;
+      if (plain && document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      this.runCommand(command);
+    });
+    document.addEventListener('scalemax:command', (event) => {
+      if (isCommand(event.detail)) this.runCommand(event.detail);
+    });
+    const mac = this.isMac();
+    const mod = mac ? 'Meta' : 'Control';
+    const sign = (key) => (mac ? `⌘${key}` : `Ctrl+${key}`);
+    for (const [selector, key, label] of [
+      ['#new-task-btn', 'N', 'New task'], ['#search-btn', 'K', 'Search workspace'], ['#chat-input', 'L', ''],
+    ]) {
+      const node = $(selector);
+      node?.setAttribute('aria-keyshortcuts', `${mod}+${key}`);
+      if (node && label) node.title = `${label} (${sign(key)})`;
+    }
+    $$('#sidebar-nav .sidebar-item[data-view]').forEach((item, index) => {
+      item.setAttribute('aria-keyshortcuts', `${mod}+${index + 1}`);
+      item.title = `${item.textContent.trim()} (${sign(index + 1)})`;
+    });
+    this.renderShortcutList();
+  },
+
+  // Preferences > Keyboard shortcuts.
+  renderShortcutList() {
+    const list = $('#shortcuts-list');
+    if (!list) return;
+    list.replaceChildren(...shortcutList({ mac: this.isMac() }).map((entry) => {
+      const row = element('div', 'shortcut-row');
+      const keys = element('dd', 'shortcut-keys');
+      entry.keys.forEach((key, index) => {
+        if (index) keys.append(element('span', 'shortcut-or', 'or'));
+        keys.append(element('kbd', '', key));
+      });
+      const term = element('dt', 'shortcut-label', entry.label);
+      if (entry.note) term.append(element('span', 'shortcut-note', entry.note));
+      row.append(term, keys);
+      return row;
+    }));
+  },
+
+  runCommand(command) {
+    // While a dialog is up the shortcuts wait; the one that opened it goes back to its field.
+    const open = document.querySelector('dialog[open]');
+    if (open) {
+      const field = (command === 'search' && open.id === 'search-dialog' && $('#search-input'))
+        || (command === 'recent-sessions' && open.id === 'sessions-dialog' && $('#sessions-search'));
+      if (field) {
+        field.focus();
+        field.select?.();
+      }
+      return;
+    }
+    if (command === 'new-task') this.newTask();
+    else if (command === 'preferences') this.showView('more');
+    else if (command === 'search') this.toggleSearch(true);
+    else if (command === 'recent-sessions') openSessions(this);
+    else if (command === 'focus-composer') this.focusComposer();
+    else if (command.startsWith('view:')) this.showView(command.slice('view:'.length));
+  },
+
+  // The message box, from anywhere (⌘L, "/"): the chat comes up first.
+  focusComposer() {
+    if (!$('#view-chat')?.classList.contains('active')) this.switchView('chat');
+    const input = $('#chat-input');
+    if (input && !input.disabled) input.focus();
+  },
+
+  // A view from the keyboard: the focus goes with it (the message box in the chat, the page's
+  // title elsewhere), so it is not left on a control the view switch just hid.
+  showView(view) {
+    if (!Object.hasOwn(VIEW_NAMES, view)) return;
+    if (view === 'chat') {
+      this.focusComposer();
+      return;
+    }
+    this.switchView(view);
+    const section = $(`#view-${view}`);
+    const title = section?.getAttribute('aria-labelledby');
+    const target = (title && document.getElementById(title)) || $('#main-content');
+    if (!target) return;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.classList.add('focus-target');
+    target.focus();
   },
 
   makeTask(title) {
@@ -1960,7 +2221,7 @@ const app = {
         if (!result?.ok) {
           outcome = missing ? 'missing' : 'failed';
           if (current) {
-            this.showToast(missing && isTaskLocked(task) ? `This task's folder "${folder.name}" is no longer available.`
+            this.showToast(missing && isTaskLocked(task) ? `This task's folder "${this.taskFolderShown(task).name}" is no longer available.`
               : this.folderErrorText(result, folder.path));
           }
         }
@@ -1977,7 +2238,11 @@ const app = {
     const list = $('#tasks-list');
     const count = $('#task-count');
     const { groups, legacy } = taskGroups(this.tasks, this.currentTaskId);
-    if (count) count.textContent = String(groups.reduce((total, group) => total + group.tasks.length, legacy.length));
+    // How many projects (folders) there are, the groups below; not how many tasks.
+    if (count) {
+      count.textContent = String(groups.length);
+      count.setAttribute('aria-label', `${groups.length} ${groups.length === 1 ? 'project' : 'projects'}`);
+    }
     if (list) {
       // Rebuilding must not drop keyboard focus from the row or button the user is on.
       const focus = list.contains(document.activeElement) ? taskListFocus(document.activeElement) : '';
@@ -1990,6 +2255,9 @@ const app = {
   },
 
   renderTaskGroup(group, index, { legacy = false } = {}) {
+    // A task worktree goes by its project and branch ("api (fix-login)"), whatever name its tasks
+    // were given when they were made in it.
+    if (!legacy) group = { ...group, name: this.worktreeLabel(group.path) || group.name };
     const node = element('div', `task-group${legacy ? ' task-group-legacy' : ''}`);
     node.dataset.folderPath = group.path;
     const collapsed = this.collapsedFolders.has(group.path);
@@ -2029,7 +2297,11 @@ const app = {
     const title = task.messages.length ? task.title : 'New task';
     row.classList.toggle('is-draft', !task.messages.length);
     row.title = title;
-    const titleNode = element('span', 'task-title', title);
+    // A fork says so before its title: at the end, "(fork)" was the first thing the row cut off.
+    const parts = taskTitleParts(title);
+    const titleNode = element('span', 'task-title');
+    if (parts.fork) titleNode.append(element('span', 'task-fork-tag', 'fork'), ' ');
+    titleNode.append(parts.title);
     // A task that is working shows a spinner; one that finished while away, a dot. With the
     // companion on, a mini mascot prints in their place: working, waiting for you (an approval),
     // done (registered) or failed. Idle tasks show their time.
@@ -2210,12 +2482,15 @@ const app = {
       if (index === companionAt) bubble.append(this.renderCompanionMoment(task, message));
       // A reply that was stopped or failed can still carry billed usage, so the footer shows for
       // any assistant message with text or metrics.
-      const usage = message.role === 'assistant' ? metricsLabel(message.metrics) : '';
+      // A reply stopped while the model was answering says that part's usage is unknown.
+      const usage = message.role === 'assistant' ? metricsLabel(message.metrics, { interrupted: message.interrupted }) : '';
       if (message.role === 'assistant' && (message.text || usage)) {
         const footer = element('div', 'msg-footer');
         if (usage) {
           const metric = element('span', 'msg-metrics', usage);
-          metric.title = message.metrics?.rounds?.length > 1 ? `${usage} across ${message.metrics.rounds.length} model calls` : usage;
+          // The title has the amounts in full ("<$0.01" is $0.003237 there).
+          const exact = metricsLabel(message.metrics, { interrupted: message.interrupted, exact: true });
+          metric.title = message.metrics?.rounds?.length > 1 ? `${exact} across ${message.metrics.rounds.length} model calls` : exact;
           // How much of the model's context window the reply filled, when the model publishes one.
           const share = contextShareLabel(message.metrics, this.contextWindowOf(message.metrics?.model));
           if (share) {
@@ -2385,15 +2660,49 @@ const app = {
     if (!quiet && taskId === this.currentTaskId) this.renderChat();
     return reply;
   },
-  // Stop, Send and the sidebar spinners follow the replies that are running.
+  // Stop, Send and the sidebar spinners follow the replies that are running. Stop takes Send's
+  // place while the task on screen has a reply running (same slot, same width: the toolbar does
+  // not move), and the keyboard focus moves with it.
   renderReplyState() {
     const cancel = $('#cancel-btn');
+    const send = $('#send-btn');
+    const reply = this.currentReply();
+    const focused = document.activeElement;
     if (cancel) {
-      cancel.hidden = !this.currentReply();
-      cancel.disabled = Boolean(this.currentReply()?.stopping);
+      cancel.hidden = !reply;
+      cancel.disabled = Boolean(reply?.stopping);
     }
+    if (send) send.hidden = Boolean(reply);
+    if (reply && focused && focused === send) cancel?.focus?.();
+    else if (!reply && focused && focused === cancel) $('#chat-input')?.focus?.();
     this.updateSendEnabled();
     this.renderTasks();
+  },
+
+  /**
+   * Escape in the message box (or on the composer's own buttons) stops the task's running reply,
+   * like Stop. Menus that are open take the key first: the "/" and "@" menus close on it (they
+   * stop it before it gets here) and an open composer popover closes itself. Without a reply, an
+   * empty message box closes the /cost summary. Returns true when it acted.
+   */
+  composerEscape(event) {
+    if (event?.key !== 'Escape' || event.isComposing || event.defaultPrevented) return false;
+    try {
+      if (document.querySelector?.('.composer-menu:popover-open')) return false;
+    } catch { /* an engine without :popover-open has no open popover */ }
+    const reply = this.currentReply();
+    if (reply) {
+      event.preventDefault?.();
+      if (!reply.stopping) void this.cancelResponse();
+      return true;
+    }
+    const input = $('#chat-input');
+    if (this.costPanelTaskId && !input?.value?.trim()) {
+      event.preventDefault?.();
+      this.closeCostPanel();
+      return true;
+    }
+    return false;
   },
   bindReplyProgress() {
     this.getProviderBridge()?.onProgress?.((event) => {
@@ -2929,6 +3238,8 @@ const app = {
     if (!reply || reply.stopping) return;
     reply.stopping = true;
     const cancel = $('#cancel-btn');
+    // A disabled button drops the keyboard focus: it goes back to the message box instead.
+    if (cancel && document.activeElement === cancel) $('#chat-input')?.focus?.();
     if (cancel) cancel.disabled = true;
     // Not sent yet (handleSend is still gathering the request): it will not be sent at all.
     if (reply.kind === 'chat' && !reply.sent) return;
@@ -3044,8 +3355,10 @@ const app = {
     const compact = $('#compact-btn');
     if (compact) {
       compact.disabled = busy || !ready || !this.provider?.configured || !compactionBoundary(this.currentTask());
+      // What Compact does, in plain words; while it cannot, why not.
       compact.title = compact.disabled && !compactionBoundary(this.currentTask())
-        ? 'There is not enough older conversation to compact yet.' : 'Summarize older conversation context (or type /compact)';
+        ? `Nothing to compact yet. ${COMPACT_HINT}.` : `${COMPACT_HINT} (or type /compact)`;
+      compact.setAttribute('aria-description', COMPACT_HINT);
     }
     // The mode cannot change while a reply runs, so the pills and the menu follow the busy state.
     renderMode(this);
@@ -3213,7 +3526,7 @@ const app = {
     const heading = $('#skills-title');
     if (heading) {
       const custom = this.customSkills.length;
-      heading.textContent = `${skills.length} templates${custom ? ` · ${custom} custom` : ''}`;
+      heading.textContent = `${skills.length} skills${custom ? ` · ${custom} custom` : ''}`;
     }
     this.renderCatalog('#skills-list', skills, this.skillStates, 'skill', 'installed', 'Install', 'Installed');
   },
@@ -3252,7 +3565,7 @@ const app = {
         actions.dataset.connectorAction = entry.id;
         foot.append(actions);
       }
-      card.append(head, element('p', `${kind}-desc`, entry.description || 'Custom prompt template'), foot);
+      card.append(head, element('p', `${kind}-desc`, entry.description || 'Custom skill'), foot);
       return card;
     }));
   },
@@ -3356,10 +3669,15 @@ const app = {
       const prompt = element('div', 'automation-prompt', automation.prompt);
       prompt.title = automation.prompt;
       info.append(element('strong', 'automation-name', automation.name), prompt);
-      const next = automation.active && Number.isFinite(automation.nextRun)
-        ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
-      const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
-      const status = element('div', 'status-text', `${automationStatusLabel(automation.lastStatus)}${last} · Next: ${next}`);
+      // A run in progress shows what it does now ("Running…", "Waiting for approval") as a state tag.
+      const live = window.scalemaxScheduler?.liveState?.(automation.id) || null;
+      const line = automationStatusLine(automation, live);
+      const status = element('div', 'status-text', line.text);
+      if (line.tag) {
+        const tag = element('span', 'sm-state-tag', line.tag.text);
+        tag.dataset.state = line.tag.state;
+        status.prepend(tag, ' ');
+      }
       info.append(status);
       // Where it runs and under which permission: fixed when it was made or edited, never the
       // folder or permission that happen to be current when it fires.
@@ -3401,8 +3719,9 @@ const app = {
       const runNow = element('button', 'automation-run-now');
       runNow.append(icon('play', 'automation-icon'), 'Run now');
       runNow.dataset.action = 'run-now';
-      runNow.title = `Run ${automation.name} immediately`;
+      runNow.title = live ? `${automation.name} is running now` : `Run ${automation.name} immediately`;
       runNow.setAttribute('aria-label', runNow.title);
+      runNow.disabled = Boolean(live);
       const toggle = element('button', 'automation-toggle');
       toggle.append(icon(automation.active ? 'pause' : 'play', 'automation-icon'));
       toggle.dataset.action = 'toggle';
@@ -3862,7 +4181,10 @@ const app = {
     const dialog = $('#search-dialog');
     if (!dialog) return;
     if (open) {
-      if (!dialog.open) dialog.showModal();
+      if (!dialog.open) {
+        dialog.showModal();
+        this.searchActive = 0;
+      }
       this.renderSearch();
       $('#search-input')?.focus();
     } else if (dialog.open) {
@@ -3870,24 +4192,79 @@ const app = {
     }
   },
 
+  // The results are a list box the field drives (aria-activedescendant): ↑ ↓ move, Enter opens,
+  // and the field keeps the focus so typing goes on.
   renderSearch() {
     const list = $('#search-results');
     if (!list) return;
-    const query = ($('#search-input')?.value || '').trim();
+    const input = $('#search-input');
+    const query = (input?.value || '').trim();
     const results = searchItems(query, this.tasks, { experts: this.customExperts, skills: this.customSkills });
-    list.replaceChildren(...results.map((result) => {
-      const row = element('button', 'search-result');
+    this.searchActive = Math.min(Math.max(0, this.searchActive || 0), Math.max(0, results.length - 1));
+    list.replaceChildren(...results.map((result, index) => {
+      const row = element('div', 'search-result');
+      row.id = `search-option-${index}`;
+      row.setAttribute('role', 'option');
+      const active = index === this.searchActive;
+      row.setAttribute('aria-selected', String(active));
+      row.classList.toggle('is-active', active);
       if (result.kind === 'task') row.dataset.taskId = result.id;
       else {
         row.dataset.resourceKind = result.kind;
         row.dataset.resourceId = result.id;
       }
       const text = element('span', 'search-result-text');
-      text.append(element('span', 'task-title', result.title));
-      if (result.description) text.append(element('span', 'search-result-desc', result.description));
+      const title = element('span', 'task-title');
+      // A fork is marked before its title, as in the sidebar.
+      const parts = result.kind === 'task' ? taskTitleParts(result.title) : { title: result.title, fork: false };
+      if (parts.fork) title.append(element('span', 'task-fork-tag', 'fork'), ' ');
+      title.append(parts.title);
+      text.append(title);
+      // A task's words are its messages: Markdown is shown as the text it reads as.
+      const description = result.kind === 'task' ? plainPreview(result.description).replace(/\s+/g, ' ').trim() : result.description;
+      if (description) text.append(element('span', 'search-result-desc', description));
       row.append(text, element('span', 'badge', result.kind));
       return row;
     }));
+    if (input) {
+      input.setAttribute('aria-expanded', String(results.length > 0));
+      if (results.length) input.setAttribute('aria-activedescendant', `search-option-${this.searchActive}`);
+      else input.removeAttribute('aria-activedescendant');
+    }
+    const count = $('#search-count');
+    const said = !query ? '' : results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No results';
+    if (count && count.textContent !== said) count.textContent = said;
+    if (results.length) $(`#search-option-${this.searchActive}`)?.scrollIntoView?.({ block: 'nearest' });
+  },
+
+  // Opens the task or resource of a search result and closes the search.
+  openSearchResult(row) {
+    if (!row) return;
+    if (row.dataset.taskId) {
+      this.selectTask(row.dataset.taskId);
+      this.toggleSearch(false);
+      return;
+    }
+    if (!row.dataset.resourceKind) return;
+    this.toggleSearch(false);
+    openResourceDetail(this, row.dataset.resourceKind, row.dataset.resourceId);
+  },
+
+  searchKeys(event) {
+    const count = $('#search-results')?.querySelectorAll('.search-result').length || 0;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!count) return;
+      this.searchActive = ((this.searchActive || 0) + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+      this.renderSearch();
+    } else if ((event.key === 'Home' || event.key === 'End') && count && event.ctrlKey) {
+      event.preventDefault();
+      this.searchActive = event.key === 'Home' ? 0 : count - 1;
+      this.renderSearch();
+    } else if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      this.openSearchResult($(`#search-option-${this.searchActive || 0}`));
+    }
   },
 
   showToast(message) {
@@ -3900,11 +4277,35 @@ const app = {
     const host = document.querySelector('dialog[open]');
     if (host && toast.parentElement !== host) host.append(toast);
     if (!host && toast.parentElement !== document.body) document.body.append(toast);
+    this.placeToast(toast, host);
     toast.classList.add('show');
     this.toastTimer = window.setTimeout(() => {
       toast.classList.remove('show');
       if (toast.parentElement !== document.body) document.body.append(toast);
     }, 2200);
+  },
+
+  // Where a toast prints: centred on the main area just under its toolbar (and a worktree's bar),
+  // clear of the composer, its chips and the forms' Save buttons; over a dialog, just above it.
+  placeToast(toast, host) {
+    const set = (name, value) => toast.style.setProperty(name, `${Math.round(value)}px`);
+    if (host) {
+      const box = host.getBoundingClientRect();
+      const height = toast.offsetHeight || 32;
+      set('--toast-x', box.left + box.width / 2);
+      set('--toast-top', box.top - height - 8 >= 8 ? box.top - height - 8 : 8);
+      return;
+    }
+    const main = $('#main-content');
+    if (!main?.getBoundingClientRect) return;
+    const area = main.getBoundingClientRect();
+    let anchor = area.top;
+    const view = main.querySelector('.view.active');
+    for (const bar of view ? view.querySelectorAll('.view-toolbar, #worktree-bar') : []) {
+      if (!bar.hidden && bar.getClientRects().length) anchor = Math.max(anchor, bar.getBoundingClientRect().bottom);
+    }
+    set('--toast-x', area.left + area.width / 2);
+    set('--toast-top', anchor + 12);
   },
 
   // Surfaces unexpected renderer failures in the alert banner at the top of the

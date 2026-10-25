@@ -216,7 +216,7 @@ function stamp(time) {
  * cost, and why it ended early. Replies are Markdown already; the user's text is kept as written.
  */
 export function transcriptMarkdown(task, { now = Date.now() } = {}) {
-  const title = typeof task?.title === 'string' && task.title.trim() ? task.title.trim() : 'Task';
+  const title = fullTaskTitle(task);
   const folder = normalizeTaskFolder(task?.folder);
   const worktree = normalizeWorktree(task?.worktree);
   const messages = Array.isArray(task?.messages) ? task.messages.filter((message) => isRecord(message) && typeof message.text === 'string') : [];
@@ -234,21 +234,104 @@ export function transcriptMarkdown(task, { now = Date.now() } = {}) {
     const pictures = message.role === 'user' ? normalizeMessageImages(message.images).length : 0;
     if (pictures) lines.push(`*${pictures === 1 ? 'A picture was' : `${pictures} pictures were`} attached.*`, '');
     if (message.role === 'assistant') {
-      const notes = [changesSummary(message.changes), typeof message.notice === 'string' ? message.notice : '', metricsLabel(message.metrics)].filter(Boolean);
+      const notes = [changesSummary(message.changes), typeof message.notice === 'string' ? message.notice : '', metricsLabel(message.metrics, { interrupted: message.interrupted })].filter(Boolean);
       for (const note of notes) lines.push(`*${note}*`, '');
     }
   }
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
 }
 
-/** A branch name for a task title (lib/git-flow.cjs slugify makes the same one in main). */
-export function slugify(text) {
-  const plain = String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+/**
+ * A branch name for a task title, at most `max` characters (40; 60 for a transcript's file name),
+ * cut between words. lib/git-flow.cjs slugify makes the same one in main.
+ */
+export function slugify(text, max = 40) {
+  const limit = Number.isInteger(max) && max >= 8 ? max : 40;
+  const plain = String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if (plain.length <= 40) return plain || 'task';
-  const cut = plain.slice(0, 40);
+  if (plain.length <= limit) return plain || 'task';
+  const cut = plain.slice(0, limit);
+  if (plain[limit] === '-') return cut;
   const dash = cut.lastIndexOf('-');
-  return (dash >= 20 ? cut.slice(0, dash) : cut).replace(/-+$/, '') || 'task';
+  return (dash >= Math.floor(limit / 2) ? cut.slice(0, dash) : cut).replace(/-+$/, '') || 'task';
+}
+
+const MAX_FULL_TITLE = 200;
+const flat = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+/** `text` cut between words at `max` characters, with "…" only when something was cut. */
+function cutAtWord(text, max) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(' ');
+  return `${(space >= max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, '')}…`;
+}
+
+/**
+ * A task's whole title. A task is named after its first message, cut at 40 characters with "…"
+ * (src/app.js appendMessage); this gives that message's first line back instead (the whole
+ * message when its first line is too short to name anything), at most 200 characters. A title the user
+ * set, or one that no longer matches the first message, is kept as it is; a fork keeps " (fork)".
+ * Exported transcripts take their heading and file name from it.
+ */
+export function fullTaskTitle(task) {
+  const title = flat(task?.title);
+  if (!title) return 'Task';
+  const fork = / \(fork\)$/.exec(title);
+  const named = fork ? title.slice(0, fork.index) : title;
+  if (!named.endsWith('…')) return title;
+  const stem = named.slice(0, -1).trimEnd();
+  const first = (Array.isArray(task.messages) ? task.messages : [])
+    .find((message) => isRecord(message) && message.role === 'user' && typeof message.text === 'string');
+  if (!stem || !first || !flat(first.text).startsWith(stem)) return title;
+  // The first line, unless it is too short to name anything ("Hi", then the request).
+  const line = flat(String(first.text).trim().split(/\r?\n/)[0]);
+  const whole = cutAtWord(line.length >= Math.min(stem.length, 20) ? line : flat(first.text), MAX_FULL_TITLE);
+  return fork ? `${whole} (fork)` : whole;
+}
+
+/** "hi-can-you-help-me-understand-my-project.md": a transcript's file name (main makes the same). */
+export function transcriptFileName(task) {
+  return `${slugify(fullTaskTitle(task), 60)}.md`;
+}
+
+const lastSegment = (path) => String(path || '').split(/[\\/]/).filter(Boolean).pop() || String(path || '');
+// The same name the sidebar and the crumb give it (src/app.js worktreeLabel): "api (feat/health)",
+// the branch without ScaleMax's own scalemax/ prefix.
+export const worktreeName = (worktree) => `${worktree.mainName} (${worktree.branch.replace(/^scalemax\//, '')})`;
+/** The task worktree (removed or not) at `path` that one of `tasks` remembers, or null. */
+function worktreeAtPath(tasks, path) {
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const own = normalizeWorktree(task?.worktree);
+    if (own && own.path === path) return own;
+  }
+  return null;
+}
+
+/**
+ * The name a folder goes by in prompts and notices. A task worktree lives in a folder with a
+ * generated name ("api-task-1792746527836-6goj6v"), so it is named by its project and branch
+ * instead: "api (feat/health)". Any other folder goes by its own name.
+ * `target`: a task, a worktree (normalizeWorktree) or a folder path; `tasks` (src/app.js
+ * app.tasks) tells which task worktree a path or a task's folder is, when the task does not
+ * remember it itself.
+ */
+export function friendlyFolderName(target, tasks = []) {
+  if (typeof target === 'string') {
+    if (!target) return '';
+    const own = worktreeAtPath(tasks, target);
+    return own ? worktreeName(own) : lastSegment(target);
+  }
+  if (!isRecord(target)) return '';
+  if (typeof target.mainRoot === 'string') {
+    const own = normalizeWorktree(target);
+    return own ? worktreeName(own) : '';
+  }
+  const folder = normalizeTaskFolder(target.folder);
+  const own = normalizeWorktree(target.worktree);
+  if (own && (!folder || folder.path === own.path)) return worktreeName(own);
+  if (!folder) return '';
+  const there = worktreeAtPath(tasks, folder.path);
+  return there ? worktreeName(there) : folder.name || lastSegment(folder.path);
 }
 
 const ABSOLUTE = /^(?:\/|[A-Za-z]:[\\/])/;
@@ -273,4 +356,35 @@ export function normalizeWorktree(value) {
   };
   if (value.removed === true) worktree.removed = true;
   return worktree;
+}
+
+/**
+ * What the Delete task prompt says (src/confirm-dialog.js askConfirm): the task by name, what goes
+ * (its conversation, a reply still running) and what stays (the files in its folder, a worktree
+ * with its branch). `tasks`: every task (another may work in the same worktree); `running`: a
+ * reply works in it now.
+ */
+export function deleteTaskQuestion(task, { tasks = [], running = false } = {}) {
+  // The whole title, never one cut mid-word ("…my projec…"): at most 80 characters, between words.
+  const name = flat(task?.title) ? cutAtWord(fullTaskTitle(task), 80).replace(/\s+…$/, '…') : 'this task';
+  const where = friendlyFolderName(task, tasks);
+  const own = normalizeWorktree(task?.worktree);
+  const folder = normalizeTaskFolder(task?.folder);
+  const inWorktree = Boolean(own && !own.removed && (!folder || folder.path === own.path));
+  const shared = inWorktree && (Array.isArray(tasks) ? tasks : []).some((item) => item !== task && normalizeWorktree(item?.worktree)?.path === own.path);
+  const notes = [];
+  if (running) notes.push('Its reply that is still running is stopped.');
+  if (inWorktree && !shared) notes.push('Its separate worktree stays on disk with its branch. To remove it, use More → Remove worktree before deleting the task.');
+  const gone = Boolean(own?.removed && (!folder || folder.path === own.path));
+  let message = 'Its conversation is removed. No files are touched.';
+  if (gone) message = `Its conversation is removed. No files are touched: its worktree was removed already, and the branch ${own.branch} stays.`;
+  else if (where) message = `Its conversation is removed. Files in ${where} are not touched.`;
+  return {
+    title: `Delete “${name}”?`,
+    context: '',
+    message,
+    note: notes.join(' '),
+    confirmLabel: 'Delete task',
+    danger: true,
+  };
 }

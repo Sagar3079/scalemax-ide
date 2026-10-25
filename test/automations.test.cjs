@@ -35,7 +35,7 @@ function automation(overrides = {}) {
 }
 
 // The scheduler with a fake chat path: `reply` answers each request (a function gets it).
-function setup(t, { automations = [automation()], tasks, context = CONTEXT, reply, configured = true, windowOpen = true, settings, openFolder, cancel } = {}) {
+function setup(t, { automations = [automation()], tasks, context = CONTEXT, reply, configured = true, windowOpen = true, settings, openFolder, cancel, clock } = {}) {
   const store = tempStore(t, {
     automations,
     ...(tasks ? { tasks } : {}),
@@ -57,6 +57,7 @@ function setup(t, { automations = [automation()], tasks, context = CONTEXT, repl
     openFolder: openFolder || (() => null),
     notify: (change) => notices.push(structuredClone(change)),
     ...(cancel ? { cancel } : {}),
+    ...(clock || {}),
   });
   t.after(() => scheduler.stop());
   const saved = () => store.readAll();
@@ -268,7 +269,110 @@ test('an interval schedule keeps its rhythm: stepped from the slot that came due
   assert.equal(sent.length, 2);
 });
 
-test('a run that comes due while another works starts at once; the same automation waits for itself', async (t) => {
+// A fake clock: the timer main sets is recorded (its delay), never fired on its own.
+function fakeClock(start = Date.now()) {
+  const clock = { time: start, timers: [] };
+  clock.now = () => clock.time;
+  clock.setTimer = (fn, delay) => {
+    const timer = { fn, delay, cleared: false };
+    clock.timers.push(timer);
+    return timer;
+  };
+  clock.clearTimer = (timer) => { if (timer) timer.cleared = true; };
+  clock.armed = () => clock.timers.filter((timer) => !timer.cleared);
+  // Moves the clock to when the armed timer wakes, and wakes it.
+  clock.fire = async () => {
+    const [timer] = clock.armed();
+    clock.time += timer.delay;
+    timer.cleared = true;
+    timer.fn();
+    await tick();
+  };
+  return clock;
+}
+
+test('the timer wakes for the exact next run, not on a 30 s poll', async (t) => {
+  const clock = fakeClock();
+  const slot = clock.time + 12_345;
+  const { scheduler, sent, record, store } = setup(t, {
+    automations: [automation({ schedule: 'interval', intervalMinutes: 1, nextRun: slot })],
+    clock: { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  });
+  scheduler.start();
+  await tick();
+  assert.equal(clock.armed().length, 1);
+  assert.equal(clock.armed()[0].delay, 12_345, 'it wakes when the row says');
+  await clock.fire();
+  await scheduler.whenIdle();
+  assert.equal(sent.length, 1, 'fired at its slot');
+  assert.equal(record().nextRun, slot + 60_000);
+  assert.equal(clock.armed().length, 1);
+  assert.equal(clock.armed()[0].delay, 30_000, 'a minute away: it still looks at least every 30 s');
+  // The window makes a schedule due sooner: the timer is set again for it.
+  store.update((draft) => { draft.automations.push(automation({ id: 'a2', name: 'Soon', nextRun: clock.time + 2_000 })); });
+  scheduler.fromWindow('automations', store.readAll().automations);
+  assert.equal(clock.armed().length, 1, 'one timer at a time');
+  assert.equal(clock.armed()[0].delay, 2_000);
+  scheduler.stop();
+  assert.equal(clock.armed().length, 0);
+});
+
+test('a due run that cannot fire yet is looked at again later, not in a loop', async (t) => {
+  const clock = fakeClock();
+  const { scheduler, sent } = setup(t, {
+    context: null,
+    automations: [automation({ nextRun: clock.time - 1000 })],
+    clock: { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  });
+  scheduler.start();
+  await tick();
+  assert.equal(sent.length, 0, 'no instructions from the window yet');
+  assert.deepEqual(clock.armed().map((timer) => timer.delay), [30_000]);
+});
+
+test('run now neither moves the next slot nor makes it fire twice; a slot held up by an approval is skipped', async (t) => {
+  let release;
+  let gate = new Promise((resolve) => { release = resolve; });
+  const clock = fakeClock();
+  const slot = clock.time + 10_000;
+  const { scheduler, sent, record, notices } = setup(t, {
+    automations: [automation({ schedule: 'interval', intervalMinutes: 1, nextRun: slot })],
+    reply: async () => { await gate; return { text: 'done' }; },
+    clock: { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  });
+  scheduler.start();
+  await tick();
+  const manual = scheduler.runNow('a1');
+  await tick();
+  // It waits for the user's answer to an approval in the window.
+  const runId = sent[0].requestId;
+  assert.equal(scheduler.asking(runId, true), true);
+  assert.deepEqual(notices.at(-1).waiting, ['a1']);
+  assert.deepEqual(notices.at(-1).running, ['a1']);
+  assert.equal(record().nextRun, slot, 'Run now leaves the schedule alone');
+  // Its slot comes due while it still waits.
+  await clock.fire();
+  assert.equal(sent.length, 1, 'no second run while the first one works');
+  assert.equal(record().nextRun, slot + 60_000, 'the held-up slot is rolled forward');
+  scheduler.asking(runId, false);
+  assert.deepEqual(notices.at(-1).waiting, []);
+  release();
+  await manual;
+  await scheduler.whenIdle();
+  await scheduler.check();
+  await scheduler.whenIdle();
+  assert.equal(sent.length, 1, 'and none as soon as it ends');
+  assert.equal(scheduler.asking('chat-request', true), false, 'other replies are not counted');
+  // The next slot runs as usual.
+  gate = Promise.resolve();
+  clock.time = slot + 60_000;
+  await scheduler.check();
+  await scheduler.whenIdle();
+  assert.equal(sent.length, 2);
+  assert.equal(record().nextRun, slot + 120_000);
+});
+
+test('a run that comes due while another works starts at once; a slot of the one still working is skipped', async (t) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const { scheduler, sent, record, store } = setup(t, {
@@ -290,11 +394,13 @@ test('a run that comes due while another works starts at once; the same automati
   await scheduler.check();
   assert.equal(record('a2').lastStatus, 'success', 'a2 ran while a1 was still working');
   assert.deepEqual(sent.map((input) => input.requestId.split('-')[1]), ['a1', 'a2']);
+  assert.ok(record('a1').nextRun > Date.now(), 'the slot that came due while a1 worked is rolled forward');
   release();
   await scheduler.whenIdle();
   await scheduler.check();
   await scheduler.whenIdle();
-  assert.equal(sent.filter((input) => input.requestId.startsWith('automation-a1-')).length, 2, 'a1 runs again only once its first run ended');
+  assert.equal(sent.filter((input) => input.requestId.startsWith('automation-a1-')).length, 1,
+    'the run that held the slot up is not followed by a second one when it ends');
 });
 
 test('the start-up catch-up skips an automation a check already ran since', async (t) => {

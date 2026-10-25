@@ -262,6 +262,7 @@ function requestToolApproval(request, { signal } = {}) {
     const finish = (decision, notify, how = 'user') => {
       if (!pendingApprovals.has(approvalId)) return;
       pendingApprovals.delete(approvalId);
+      automations.asking(request.requestId, false);
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', onAbort);
       if (notify && !target.isDestroyed()) target.send('tool:approval-closed', { approvalId });
@@ -272,6 +273,8 @@ function requestToolApproval(request, { signal } = {}) {
     };
     const onAbort = () => finish('deny', true, 'stopped');
     pendingApprovals.set(approvalId, { finish, webContentsId: target.id });
+    // An automation run's row says "Waiting for approval" until this call is answered.
+    automations.asking(request.requestId, true);
     timer = setTimeout(() => finish('deny', true, 'timeout'), APPROVAL_TIMEOUT_MS);
     if (signal?.aborted) { onAbort(); return; }
     signal?.addEventListener?.('abort', onAbort, { once: true });
@@ -1227,7 +1230,9 @@ const mcpChannels = {
   'mcp:oauth-start': (_event, input) => mcp.startOAuth(input, {
     openExternal: (url) => shell.openExternal(url)
   }),
-  'mcp:oauth-cancel': () => mcp.cancelOAuth()
+  'mcp:oauth-cancel': () => mcp.cancelOAuth(),
+  // The sign-in in progress and the consent page it opened (to copy when no browser came up).
+  'mcp:oauth-status': () => mcp.oauthStatus()
 };
 
 for (const [channel, run] of Object.entries(mcpChannels)) {
@@ -1859,7 +1864,8 @@ async function exportTranscript(input) {
   if (typeof markdown !== 'string' || !markdown.trim() || markdown.length > MAX_TRANSCRIPT_CHARS) {
     throw bridgeError('INVALID_TRANSCRIPT', 'There is no transcript to save.');
   }
-  const name = `${slugify(typeof input.title === 'string' ? input.title : '')}.md`;
+  // The task's full title (src/sessions.mjs fullTaskTitle), cut between words at 60 characters.
+  const name = `${slugify(typeof input.title === 'string' ? input.title : '', 60)}.md`;
   const options = { title: 'Export transcript', defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: 'Markdown', extensions: ['md'] }] };
   const { canceled, filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
   if (canceled || !filePath) return { saved: false };
@@ -1886,6 +1892,13 @@ const gitFlowChannels = {
     const folder = await gitFolder(input);
     requireNoReplyIn(folder);
     return gitFlow.pull(folder);
+  },
+  // Only remote-tracking refs change (no files), so a reply in the folder does not hold it.
+  'git:fetch': async (_event, input) => gitFlow.fetch(await gitFolder(input)),
+  'git:stash-restore': async (_event, input) => {
+    const folder = await gitFolder(input);
+    requireNoReplyIn(folder);
+    return gitFlow.restoreStash(folder, { id: input.id });
   },
   'git:switch': async (_event, input) => {
     const folder = await gitFolder(input);

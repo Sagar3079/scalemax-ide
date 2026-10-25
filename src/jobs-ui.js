@@ -108,7 +108,9 @@ function renderList(force = false) {
     return;
   }
   listSignature = signature;
+  // The focus stays on the same command's row when the list is drawn again.
   const hadFocus = host.contains(document.activeElement);
+  const focusedId = hadFocus ? document.activeElement.dataset?.id || '' : '';
   if (!state.jobs.length) {
     host.replaceChildren(element('p', 'jobs-empty', 'No background commands yet.'));
     return;
@@ -129,7 +131,7 @@ function renderList(force = false) {
     item.addEventListener('click', () => select(job.id));
     return item;
   }));
-  if (hadFocus) host.querySelector('.jobs-item.is-selected')?.focus();
+  if (hadFocus) ([...host.querySelectorAll('.jobs-item')].find((node) => node.dataset.id === focusedId) || host.querySelector('.jobs-item.is-selected'))?.focus();
 }
 function refreshTimes() {
   for (const node of document.querySelectorAll('#jobs-list .jobs-item')) {
@@ -142,6 +144,11 @@ function refreshTimes() {
   if (stateNode) stateNode.textContent = job ? jobStatus(job) : '';
 }
 function renderView() {
+  // Chromium drops the focus to the page as soon as the focused control is disabled or hidden, so
+  // whether the focus was in the dialog is read before anything changes.
+  const dialog = $('#jobs-dialog');
+  const before = document.activeElement;
+  const hadFocus = Boolean(dialog?.open && before && before !== dialog && dialog.contains(before));
   const job = selectedJob();
   const command = $('#jobs-command');
   if (command) command.textContent = job ? job.command : '';
@@ -162,12 +169,26 @@ function renderView() {
   if (input) input.disabled = !running;
   if (send) send.disabled = !running;
   if (form) form.hidden = !running;
-  // A control that just turned off keeps no focus.
-  const dialog = $('#jobs-dialog');
+  // A control that just turned off keeps no focus: the command's row takes it (else Close).
   const active = document.activeElement;
-  if (dialog?.open && active && dialog.contains(active) && active.disabled) {
-    (dialog.querySelector('.jobs-item.is-selected') || $('#jobs-close'))?.focus();
-  }
+  const lost = !active || active === document.body || active.disabled || !dialog?.contains(active) || !active.getClientRects().length;
+  if (hadFocus && lost) (dialog.querySelector('.jobs-item.is-selected') || $('#jobs-close'))?.focus();
+}
+
+/** The command whose row takes the focus when `id` is stopped: the next one still running, else none. */
+export function nextRunningJob(jobs, id) {
+  const list = Array.isArray(jobs) ? jobs.filter((job) => job && typeof job.id === 'string') : [];
+  const at = list.findIndex((job) => job.id === id);
+  const order = at < 0 ? list : [...list.slice(at + 1), ...list.slice(0, at)];
+  return order.find((job) => job.id !== id && job.status === 'running') || null;
+}
+
+// Stop turns off under the focus: it goes to the next command still running, so that one can be
+// stopped too, else to the dialog's close button.
+function focusAfterStop(id) {
+  const next = nextRunningJob(state.jobs, id);
+  const row = next ? [...document.querySelectorAll('#jobs-list .jobs-item')].find((node) => node.dataset.id === next.id) : null;
+  (row || $('#jobs-close'))?.focus();
 }
 
 function resetOutput(id) {
@@ -276,6 +297,7 @@ async function stopJob(id) {
   const api = bridge();
   if (!api?.stop || !id || stopping.has(id)) return;
   stopping.add(id);
+  if (document.activeElement === $('#jobs-stop')) focusAfterStop(id);
   renderView();
   let result;
   try {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   startScheduler, mergeAutomations, mergeRun, automationContext, automationStatusLabel, automationHistoryLine,
-  automationPermissionHint, automationFolderChoices,
+  automationPermissionHint, automationFolderChoices, automationStatusLine,
 } from '../src/scheduler.js';
 import { normalizeAutomations } from '../src/domain.mjs';
 
@@ -287,4 +287,46 @@ test('the Automation view names statuses, history lines, permissions and folder 
   assert.deepEqual(choices, [
     { name: 'api', path: '/p/api' }, { name: 'web', path: '/p/web' }, { name: 'docs', path: '/p/docs' }, { name: 'reports', path: '/p/reports' },
   ]);
+});
+
+test('a slot main is about to fire is shown as main has it, never moved on by the window', () => {
+  // Due a second ago: main fires it now. The window used to move it to the next slot, so the run
+  // that came a moment later looked early (and Run now, which sends the list, looked like it
+  // shifted the schedule).
+  const due = Date.now() - 1000;
+  const [shown] = mergeAutomations([automation({ schedule: 'interval', intervalMinutes: 1, nextRun: due })],
+    [automation({ schedule: 'interval', intervalMinutes: 1, nextRun: due })]);
+  assert.equal(shown.nextRun, due);
+  assert.equal(shown.pendingCatchUp, false);
+  // Paused by main: no next run at all.
+  const [paused] = mergeAutomations([automation()], [automation({ active: false, nextRun: due })]);
+  assert.equal(paused.nextRun, null);
+});
+
+test('a row shows a run in progress as a state tag: running, or waiting for approval', async (t) => {
+  const time = () => 'T';
+  const row = automation({ lastStatus: 'success', lastRun: 1, nextRun: 2 });
+  assert.deepEqual(automationStatusLine(row, null, time), { tag: null, text: 'success · Last: T · Next: T' });
+  assert.deepEqual(automationStatusLine(row, 'running', time), { tag: { state: 'working', text: 'Running…' }, text: 'Last: T · Next: T' });
+  assert.deepEqual(automationStatusLine(row, 'waiting', time), { tag: { state: 'waiting', text: 'Waiting for approval' }, text: 'Last: T · Next: T' });
+  assert.equal(automationStatusLine(automation({ active: false }), null, time).text, 'idle · Next: paused');
+  // What main says about the run in progress.
+  const bridge = fakeBridge();
+  withBridge(t, bridge);
+  const node = { textContent: '' };
+  globalThis.document = { querySelector: (selector) => (selector === '#scheduler-status' ? node : null) };
+  t.after(() => { delete globalThis.document; });
+  const app = fakeApp();
+  const scheduler = startScheduler(app);
+  t.after(() => scheduler.stop());
+  await scheduler.ready;
+  assert.equal(scheduler.liveState('a1'), null);
+  bridge.emit({ running: ['a1'], waiting: [] });
+  assert.equal(scheduler.liveState('a1'), 'running');
+  assert.match(node.textContent, /^Running: Digest…/);
+  bridge.emit({ running: ['a1'], waiting: ['a1'] });
+  assert.equal(scheduler.liveState('a1'), 'waiting');
+  assert.match(node.textContent, /^Waiting for your approval: Digest · Next run/);
+  bridge.emit({ running: [], waiting: [] });
+  assert.equal(scheduler.liveState('a1'), null);
 });

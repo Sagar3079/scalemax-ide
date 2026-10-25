@@ -921,6 +921,16 @@ async function signInSetup(t, { storage = ENCRYPTING_STORAGE, store = memoryStor
   };
 }
 
+test('the sign-in in progress names the consent page it opened, for a browser that did not come up', async (t) => {
+  const setup = await signInSetup(t);
+  const { mcp } = setup;
+  assert.deepEqual(mcp.oauthStatus(), { pending: false, id: null, directoryId: null, url: null });
+  const seen = [];
+  await mcp.startOAuth({ connectorId: 'notion' }, { openExternal: (url) => { seen.push(mcp.oauthStatus()); setup.openExternal(url); } });
+  assert.deepEqual(seen, [{ pending: true, id: 'notion', directoryId: 'notion', url: 'https://mcp.notion.com/authorize?client_id=registered-client-1' }]);
+  assert.deepEqual(mcp.oauthStatus(), { pending: false, id: null, directoryId: null, url: null }, 'gone once it finished');
+});
+
 test('one-click sign-in registers, stores tokens encrypted, and connects the directory server', async (t) => {
   const setup = await signInSetup(t);
   const { mcp, store, handler } = setup;
@@ -1187,7 +1197,8 @@ test('prompts are listed with their arguments and filled in as text for the mess
     name: 'review',
     description: 'A review request.',
     messages: [{ role: 'user', text: 'Review app.js for security.' }, { role: 'assistant', text: 'Sure, send it.' }],
-    text: 'Review app.js for security.\n\nSure, send it.',
+    // Only the user's part is the draft: the assistant's line is not the user's words.
+    text: 'Review app.js for security.',
   });
   await assert.rejects(() => mcp.getPrompt({ id, name: 'review' }), (error) => error instanceof McpError && /Missing required argument: file/.test(error.message));
   await assert.rejects(() => mcp.getPrompt({ id, name: '' }), /prompt name must be/);
@@ -1195,6 +1206,22 @@ test('prompts are listed with their arguments and filled in as text for the mess
   await assert.rejects(() => mcp.getPrompt({ id, name: 'review', arguments: { 'bad name': 'x' } }), /argument names must be/);
   // A prompt that failed never marks the server as broken.
   assert.notEqual(mcp.list()[0].lastStatus, 'error');
+});
+
+test('a filled-in prompt keeps assistant and other roles apart from the user\'s draft', () => {
+  const { normalizePromptResult } = require('../lib/mcp.cjs');
+  const filled = normalizePromptResult({
+    messages: [
+      { role: 'system', content: { type: 'text', text: 'You review code.' } },
+      { role: 'user', content: { type: 'text', text: 'Review a.js.' } },
+      { role: 'assistant', content: { type: 'text', text: 'Sure, send it.' } },
+      { role: 'user', content: [{ type: 'text', text: 'Here it is.' }] },
+      { role: 'tool', content: { type: 'text', text: 'not a user' } },
+    ],
+  });
+  assert.deepEqual(filled.messages.map((message) => message.role), ['system', 'user', 'assistant', 'user', 'system']);
+  assert.equal(filled.text, 'Review a.js.\n\nHere it is.');
+  assert.equal(normalizePromptResult({ messages: [{ role: 'assistant', content: { type: 'text', text: 'Only me.' } }] }).text, '');
 });
 
 test('the model gets two read-only resource tools, limited to what each server lists', async (t) => {

@@ -184,7 +184,10 @@ export async function runSlashCommand(app, text) {
     }
     case 'cost':
       handled();
-      app.showToast?.(costSummary(app.currentTask?.()));
+      // A small summary above the message box that stays until it is closed (src/app.js
+      // renderCostPanel); never sent to the model or saved as a turn.
+      if (typeof app.showCostPanel === 'function') app.showCostPanel();
+      else app.showToast?.(costSummary(app.currentTask?.()));
       return { handled: true };
     case 'help':
       // The menu lists every command with what it does.

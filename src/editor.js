@@ -9,7 +9,8 @@
  * position travels next to it as a snapshot).
  *
  * Everything but createEditor() works on states alone (the few DOM helpers run only inside a
- * view), so it is unit-tested in Node (test/editor.test.mjs). Colours and the font are CSS variables (src/workspace.css on
+ * view), so it is unit-tested in Node (test/editor.test.mjs). highlightLines() colours code
+ * outside the editor (the review dialog's diff) with the same parsers and tags. Colours and the font are CSS variables (src/workspace.css on
  * top of src/sm-tokens.css), so a theme switch repaints without rebuilding anything. CodeMirror
  * adds its own CSS rules through a constructed stylesheet (see build/vendor-codemirror.cjs for
  * why that is the one way the page's CSP allows), and DOM is built with createElement only.
@@ -78,24 +79,115 @@ function fencedLanguage(info) {
 // Look: CSS variables only (src/workspace.css defines them for both themes)
 // ---------------------------------------------------------------------------
 
-const HIGHLIGHT = HighlightStyle.define([
-  { tag: [tags.keyword, tags.controlKeyword, tags.moduleKeyword, tags.operatorKeyword, tags.definitionKeyword, tags.modifier, tags.self], color: 'var(--tok-keyword)' },
-  { tag: [tags.string, tags.special(tags.string), tags.character, tags.docString], color: 'var(--tok-string)' },
-  { tag: [tags.regexp, tags.escape, tags.url], color: 'var(--tok-regexp)' },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: 'var(--tok-comment)', fontStyle: 'italic' },
-  { tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null, tags.atom, tags.unit, tags.color], color: 'var(--tok-number)' },
-  { tag: [tags.tagName, tags.angleBracket, tags.link], color: 'var(--tok-tag)' },
-  { tag: [tags.attributeName, tags.propertyName, tags.labelName], color: 'var(--tok-attr)' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.macroName], color: 'var(--tok-function)', fontWeight: '600' },
-  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName)], color: 'var(--tok-type)' },
-  { tag: [tags.meta, tags.annotation, tags.processingInstruction, tags.documentMeta], color: 'var(--tok-meta)' },
-  { tag: tags.heading, color: 'var(--tok-heading)', fontWeight: '600' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.strong, fontWeight: '600' },
-  { tag: tags.strikethrough, textDecoration: 'line-through' },
-  { tag: tags.link, textDecoration: 'underline' },
-  { tag: tags.invalid, color: 'var(--tok-invalid)' },
-]);
+// One table for both highlighters: the editor's (colours from the --tok-* variables) and the
+// review dialog's (class names, see highlightLines). A tag listed twice takes its last entry.
+const TOKENS = [
+  { token: 'keyword', tag: [tags.keyword, tags.controlKeyword, tags.moduleKeyword, tags.operatorKeyword, tags.definitionKeyword, tags.modifier, tags.self], style: { color: 'var(--tok-keyword)' } },
+  { token: 'string', tag: [tags.string, tags.special(tags.string), tags.character, tags.docString], style: { color: 'var(--tok-string)' } },
+  { token: 'regexp', tag: [tags.regexp, tags.escape, tags.url], style: { color: 'var(--tok-regexp)' } },
+  { token: 'comment', tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], style: { color: 'var(--tok-comment)', fontStyle: 'italic' } },
+  { token: 'number', tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null, tags.atom, tags.unit, tags.color], style: { color: 'var(--tok-number)' } },
+  { token: 'tag', tag: [tags.tagName, tags.angleBracket, tags.link], style: { color: 'var(--tok-tag)' } },
+  { token: 'attr', tag: [tags.attributeName, tags.propertyName, tags.labelName], style: { color: 'var(--tok-attr)' } },
+  { token: 'function', tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.macroName], style: { color: 'var(--tok-function)', fontWeight: '600' } },
+  { token: 'type', tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName)], style: { color: 'var(--tok-type)' } },
+  { token: 'meta', tag: [tags.meta, tags.annotation, tags.processingInstruction, tags.documentMeta], style: { color: 'var(--tok-meta)' } },
+  { token: 'heading', tag: tags.heading, style: { color: 'var(--tok-heading)', fontWeight: '600' } },
+  { token: 'emphasis', tag: tags.emphasis, style: { fontStyle: 'italic' } },
+  { token: 'strong', tag: tags.strong, style: { fontWeight: '600' } },
+  { token: 'strikethrough', tag: tags.strikethrough, style: { textDecoration: 'line-through' } },
+  { token: 'link', tag: tags.link, style: { textDecoration: 'underline' } },
+  { token: 'invalid', tag: tags.invalid, style: { color: 'var(--tok-invalid)' } },
+];
+const HIGHLIGHT = HighlightStyle.define(TOKENS.map(({ tag, style }) => ({ tag, ...style })));
+// The same tags as fixed class names ("tok-keyword"), styled by src/changes.css.
+const TOKEN_CLASSES = HighlightStyle.define(TOKENS.map(({ tag, token }) => ({ tag, class: `tok-${token}` })));
+
+// ---- Highlighting outside the editor (the review dialog, src/changes-ui.js) -------------------
+
+// @lezer/highlight's style rules sit on the node types under a prop the bundle does not export;
+// this finds it on each node type once ({ tags, mode, context, next }: a chain of rules).
+const rules = new WeakMap();
+function rulesOf(type) {
+  if (!rules.has(type)) {
+    const found = Object.values(type.props || {}).find((value) => value && typeof value === 'object'
+      && Array.isArray(value.tags) && typeof value.mode === 'number' && 'context' in value) || null;
+    rules.set(type, found);
+  }
+  return rules.get(type);
+}
+// The rule that applies to the node under `cursor` (the first whose context matches).
+function ruleAt(cursor) {
+  let rule = rulesOf(cursor.type);
+  while (rule && rule.context && !cursor.matchContext(rule.context)) rule = rule.next;
+  return rule;
+}
+
+/**
+ * The syntax colouring of `text` (a file called `path`, so its language) as class names per line:
+ * lines[i] holds [from, to, 'tok-keyword'] ranges within line i ('\n' separated). The same
+ * parser and tags as the editor, walked like @lezer/highlight's highlightTree. An empty list per
+ * line when the language is unknown or the text is longer than `limit` characters.
+ */
+export function highlightLines(text, path, { limit = 200_000 } = {}) {
+  const value = String(text ?? '');
+  const lines = value.split('\n').map(() => []);
+  const support = value.length <= limit ? languageSupport(languageFor(path)) : null;
+  const language = support?.language || support;
+  if (!language?.parser) return lines;
+  const spans = [];
+  let at = 0;
+  let current = '';
+  const flush = (to) => { if (to > at && current) spans.push([at, to, current]); };
+  const start = (pos, next) => {
+    if (next === current) return;
+    flush(pos);
+    if (pos > at) at = pos;
+    current = next;
+  };
+  const walk = (cursor, inherited) => {
+    const rule = ruleAt(cursor);
+    let own = inherited;
+    const found = rule ? TOKEN_CLASSES.style(rule.tags) : null;
+    if (found) {
+      own = own ? `${own} ${found}` : found;
+      // Mode 1 (inherit): the node's children carry its class too.
+      if (rule.mode === 1) inherited = inherited ? `${inherited} ${found}` : found;
+    }
+    start(cursor.from, own);
+    // Mode 0 (opaque): nothing inside is styled on its own.
+    if (rule?.mode === 0) return;
+    if (cursor.firstChild()) {
+      do {
+        walk(cursor, inherited);
+        start(cursor.to, own);
+      } while (cursor.nextSibling());
+      cursor.parent();
+    }
+  };
+  try {
+    walk(language.parser.parse(value).cursor(), '');
+    flush(value.length);
+  } catch {
+    return lines;
+  }
+  // Split the ranges at line breaks (they come in document order).
+  const starts = [0];
+  for (let index = value.indexOf('\n'); index >= 0; index = value.indexOf('\n', index + 1)) starts.push(index + 1);
+  const endOf = (line) => (line + 1 < starts.length ? starts[line + 1] - 1 : value.length);
+  let line = 0;
+  for (const [from, to, className] of spans) {
+    while (line + 1 < starts.length && starts[line + 1] <= from) line += 1;
+    let pos = from;
+    for (let row = line; row < starts.length; row += 1) {
+      const end = Math.min(to, endOf(row));
+      if (end > pos) lines[row].push([pos - starts[row], end - starts[row], className]);
+      if (to <= endOf(row) + 1 || row + 1 >= starts.length) break;
+      pos = starts[row + 1];
+    }
+  }
+  return lines;
+}
 
 // Rules after CodeMirror's base themes, so equal selectors win. Its light/dark defaults that are
 // not repeated here still follow the app theme (themeSlot below).
@@ -139,36 +231,7 @@ const THEME = EditorView.theme({
   '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--ws-editor-match-current)' },
   '.cm-selectionMatch': { backgroundColor: 'var(--ws-editor-selection-match)' },
   '.cm-specialChar': { color: 'var(--tok-invalid)' },
-  // Find / replace and go to line sit in a panel above the text.
-  '.cm-panels': { backgroundColor: 'var(--sm-app-chrome)', color: 'var(--sm-text-strong)' },
-  '.cm-panels-top': { borderBottom: '1px solid var(--sm-app-border)' },
-  '.cm-panels-bottom': { borderTop: '1px solid var(--sm-app-border)' },
-  '.cm-panel': { fontSize: '12px' },
-  '.cm-panel.cm-search': { padding: '6px 34px 6px 10px' },
-  '.cm-panel.cm-search label': { fontSize: '12px', color: 'var(--sm-text-medium)' },
-  '.cm-panel.cm-search [name=close]': { top: '6px', right: '8px', fontSize: '16px', color: 'var(--sm-text-medium)' },
-  '.cm-textfield': {
-    minHeight: '24px',
-    padding: '2px 8px',
-    border: '1px solid var(--sm-color-border-solid)',
-    borderRadius: '6px',
-    backgroundColor: 'var(--sm-app-surface)',
-    color: 'var(--sm-text-strong)',
-    fontSize: '12px',
-  },
-  '.cm-textfield:focus': { borderColor: 'var(--sm-color-border-focus)', outline: 'none' },
-  '.cm-button': {
-    minHeight: '24px',
-    padding: '2px 10px',
-    border: '1px solid var(--sm-color-border-secondary)',
-    borderRadius: '6px',
-    backgroundImage: 'none',
-    backgroundColor: 'var(--sm-app-surface)',
-    color: 'var(--sm-text-strong)',
-    fontSize: '12px',
-  },
-  '.cm-button:hover': { backgroundColor: 'var(--sm-app-surface-hover)' },
-  '.cm-button:active': { backgroundImage: 'none', backgroundColor: 'var(--sm-app-surface-hover)' },
+  // Find / replace and go to line: their panel and its controls are styled in src/workspace.css.
   '.cm-tooltip': {
     border: '1px solid var(--sm-color-border-secondary)',
     borderRadius: '6px',
@@ -236,14 +299,75 @@ function indentOrInsert(view) {
   return true;
 }
 
-// Cmd+Alt+F: the find panel with the replace field focused.
-function openReplace(view) {
-  openSearchPanel(view);
-  const field = view.dom.querySelector('.cm-search [name=replace]');
-  if (field) {
-    field.focus();
-    field.select();
+// ---- Find and replace (CodeMirror's search panel; src/workspace.css styles it) ---------------
+
+// The panel's words, in sentence case (CodeMirror's own are lowercase).
+const PHRASES = {
+  Find: 'Find',
+  Replace: 'Replace',
+  next: 'Next',
+  previous: 'Previous',
+  all: 'Select all',
+  'match case': 'Match case',
+  regexp: 'Regular expression',
+  'by word': 'Whole word',
+  replace: 'Replace',
+  'replace all': 'Replace all',
+  close: 'Close find and replace',
+  'Go to line': 'Go to line',
+  go: 'Go',
+};
+
+/**
+ * What Find starts from when nothing is selected: the word at the (single) cursor, as a
+ * selection, so it is also the current match. Null when there is no word there.
+ */
+export function wordSelection(state) {
+  const { ranges, main } = state.selection;
+  if (ranges.length !== 1 || !main.empty) return null;
+  const word = state.wordAt(main.head);
+  return word ? EditorSelection.single(word.from, word.to) : null;
+}
+
+function searchFields(view) {
+  const panel = view.dom.querySelector('.cm-search');
+  return {
+    panel,
+    find: panel?.querySelector('[name=search]') || null,
+    replace: panel?.querySelector('[name=replace]') || null,
+    replaceButton: panel?.querySelector('button[name=replace]') || null,
+  };
+}
+
+// Cmd+F / Cmd+Alt+F: the panel with the selection, or else the word at the cursor, in Find.
+// Cmd+Alt+F then puts the caret in Replace, unless Find is still empty.
+function openSearch(view, { replace = false } = {}) {
+  const active = view.root.activeElement;
+  if (!searchFields(view).panel?.contains(active)) {
+    const word = view.hasFocus ? wordSelection(view.state) : null;
+    if (word) view.dispatch({ selection: word, userEvent: 'select.search' });
+    openSearchPanel(view);
   }
+  const fields = searchFields(view);
+  const target = replace && fields.replace && fields.find?.value ? fields.replace : fields.find;
+  if (target) {
+    target.focus();
+    target.select();
+  }
+  return true;
+}
+
+// Enter in Replace: replace the current match and go on to the next one. CodeMirror's own
+// replace first only selects a match that is not selected yet (a second Enter replaced it); its
+// button runs that command, so a press that only selected is followed by one that replaces.
+function replaceAndNext(view) {
+  const { replace, replaceButton } = searchFields(view);
+  if (!replace || !replaceButton || view.root.activeElement !== replace) return false;
+  // What was typed last is part of the query before replacing (the panel reads it on keyup).
+  replace.dispatchEvent(new Event('change'));
+  const doc = view.state.doc;
+  replaceButton.click();
+  if (view.state.doc === doc) replaceButton.click();
   return true;
 }
 
@@ -283,6 +407,7 @@ const BASE = [
   highlightActiveLine(),
   highlightSelectionMatches(),
   search({ top: true }),
+  EditorState.phrases.of(PHRASES),
   scrollPastEnd(),
   // Tab indents here, so the way out is part of the editor's description (#editor-keys-hint, which
   // the Workspace also shows while the editor has focus).
@@ -294,7 +419,9 @@ const BASE = [
   keymap.of([
     ...closeBracketsKeymap,
     { key: 'Tab', run: indentOrInsert, shift: indentLess },
-    { key: 'Mod-Alt-f', run: openReplace, preventDefault: true },
+    { key: 'Mod-f', run: (view) => openSearch(view), scope: 'editor search-panel', preventDefault: true },
+    { key: 'Mod-Alt-f', run: (view) => openSearch(view, { replace: true }), scope: 'editor search-panel', preventDefault: true },
+    { key: 'Enter', run: replaceAndNext, scope: 'search-panel' },
     { mac: 'Ctrl-g', run: gotoLine, preventDefault: true },
     // In a review: the next / previous change, like VS Code's diff editor.
     { key: 'F7', run: (view) => goToNextChunk(view), shift: (view) => goToPreviousChunk(view) },

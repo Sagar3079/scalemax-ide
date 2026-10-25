@@ -199,9 +199,11 @@
                   <span id="jobs-bar-text" class="jobs-bar-text"></span>
                   <button id="jobs-bar-show" class="button secondary compact jobs-bar-show" type="button" aria-haspopup="dialog" aria-describedby="jobs-bar-text">Show</button>
                 </div>
+                <!-- /cost: this task's usage so far, until closed (src/app.js renderCostPanel). Not a message: never sent or saved. -->
+                <section id="cost-panel" class="cost-panel" aria-label="Cost of this task" hidden></section>
                 <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step… (@ names a file, and you can paste a picture)" aria-label="Message"></textarea>
                 <!-- Files of the open folder while typing "@name" (src/context-ui.js). -->
-                <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files in this folder" hidden></div>
+                <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files and background commands in this folder" hidden></div>
                 <!-- Commands while typing "/" at the start of a message (src/slash-ui.js). -->
                 <div id="slash-menu" class="mention-menu slash-menu" role="listbox" aria-label="Commands" hidden></div>
                 <!-- Pictures that go with the next message (src/context-ui.js). -->
@@ -213,7 +215,7 @@
                 <!-- Image / video generation options for the selected model (src/media-ui.js). -->
                 <div id="media-bar" class="media-bar" role="group" aria-label="Generation options" hidden></div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
-                  <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older conversation context (or type /compact)">Compact</button>
+                  <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older messages so long chats fit the model's memory (or type /compact)">Compact</button>
                   <!-- Feature specs of this folder (src/specs-ui.js). -->
                   <button id="specs-open" class="composer-chip specs-chip" type="button" aria-haspopup="dialog" aria-controls="specs-dialog" hidden>
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path d="M14 3v4h4" /><path d="M9 12h6M9 16h4" /></svg>
@@ -262,8 +264,12 @@
                       <span id="model-button-reasoning" class="model-button-reasoning" hidden></span>
                       <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
-                    <button id="send-btn" class="button primary" type="button" aria-label="Send message">
+                    <!-- Stop takes Send's place while a reply runs (app.js renderReplyState); Escape does the same. -->
+                    <button id="cancel-btn" class="button secondary send-slot" type="button" title="Stop (Esc)" aria-label="Stop the reply" aria-keyshortcuts="Escape" hidden>
+                      <span>Stop</span>
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+                    </button>
+                    <button id="send-btn" class="button primary send-slot" type="button" aria-label="Send message">
                       <span id="send-label">Send</span>
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                     </button>
@@ -420,6 +426,9 @@
                         <button id="git-commit" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="commit-dialog">Commit…</button>
                         <button id="git-pull" class="button secondary compact" type="button">Pull</button>
                         <button id="git-switch" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="branch-dialog">Switch branch…</button>
+                        <button id="git-stash-restore" class="button secondary compact" type="button" hidden>Restore stashed changes</button>
+                        <!-- The quiet fetch behind Refresh Git: "Fetched just now", or why it could not. -->
+                        <span id="git-fetch-state" class="git-fetch-state" role="status" aria-live="polite"></span>
                       </div>
                       <p id="git-status" class="status-text" role="status" aria-live="polite">Open a repository to review its changes.</p>
                       <div id="git-files" class="ws-git-files" aria-label="Changed files"></div>
@@ -557,19 +566,19 @@
 
         <section id="view-experts" class="view" aria-labelledby="catalog-title">
           <div class="page page-wide">
-            <header class="page-header"><div><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Explore roles, prompt templates, reference repositories, and setup guides.</p></div></header>
+            <header class="page-header"><div><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Experts, skills, reference repos and connectors for your chats.</p></div></header>
             <div class="catalog-filters">
               <div class="form-group"><label for="catalog-search">Search the catalog</label><input id="catalog-search" type="search" placeholder="Search by name or purpose" autocomplete="off" /></div>
               <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
               <span id="catalog-count" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
-            <p class="notice">Selecting an expert or installing a skill applies its prompt to your chat requests. Connecting a service (OAuth sign-in with your own app registration, or an access token) stores the credential encrypted on this device and verifies it with the provider where a validation endpoint exists; reference repos are reading material.</p>
+            <p class="notice">Use an expert or install a skill to change how the assistant works in chat. Connect a service to sign in to it from ScaleMax: the sign-in stays encrypted on this Mac, and services that list tools in chat can then be used by the assistant.</p>
             <section class="catalog-section" aria-labelledby="experts-title">
               <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt context</span><button id="add-expert-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New expert</button></div></div>
               <div id="experts-grid" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="skills-title">
-              <div class="catalog-heading"><div><h2 id="skills-title">30 templates</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt library</span><button id="add-skill-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New skill</button></div></div>
+              <div class="catalog-heading"><div><h2 id="skills-title">30 skills</h2></div><div class="catalog-heading-actions"><span class="small-label">Install one to use it in chat</span><button id="add-skill-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New skill</button></div></div>
               <div id="skills-list" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="community-title">
@@ -621,7 +630,7 @@
             <header class="page-header"><div><h1 id="more-title" class="page-title">Simple by design. Yours by default.</h1><p class="page-sub">Appearance, local data, and a little about ScaleMax.</p></div></header>
             <section class="settings-card" aria-labelledby="appearance-title">
               <h2 id="appearance-title">Appearance</h2>
-              <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></div>
+              <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light">Light</option><option value="dark">Dark</option><option value="system" selected>System</option></select></div>
               <!-- The companion character beside a running reply and in the task rows (src/mascot.js). -->
               <div class="preference-row">
                 <div class="form-group preference-text">
@@ -688,6 +697,11 @@
               <div id="hooks-panel" class="hooks-panel"></div>
               <div class="button-row"><button id="hooks-refresh" class="button secondary" type="button">Refresh</button></div>
             </section>
+            <!-- Filled from src/shortcuts.mjs (src/app.js renderShortcutList). -->
+            <section id="shortcuts-card" class="settings-card" aria-labelledby="shortcuts-title">
+              <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+              <dl id="shortcuts-list" class="shortcuts-list"></dl>
+            </section>
             <section class="settings-card" aria-labelledby="data-title">
               <h2 id="data-title">Your data stays yours</h2>
               <p class="body-copy">There is no cloud sign-in. Task history and settings are stored as plain local data on this device, not as encrypted records. Keep exports somewhere you trust.</p>
@@ -712,8 +726,9 @@
 
   <dialog id="search-dialog" aria-labelledby="search-title">
     <div class="dialog-header"><div><h2 id="search-title">Search workspace</h2></div><button id="search-close" class="button secondary" type="button">Close</button></div>
-    <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus /></div>
-    <div id="search-results" aria-label="Search results" aria-live="polite"></div>
+    <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus role="combobox" aria-controls="search-results" aria-expanded="false" aria-autocomplete="list" /></div>
+    <div id="search-results" role="listbox" aria-label="Search results"></div>
+    <p id="search-count" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   </dialog>
 
   <dialog id="connector-dialog" aria-labelledby="connector-dialog-title">
@@ -733,6 +748,10 @@
           <button id="connector-mcp-disconnect" class="button danger" type="button" hidden>Disconnect</button>
         </div>
         <p id="connector-mcp-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div id="connector-mcp-link" class="connector-consent" hidden>
+          <p class="status-text">Browser didn't open? Copy this sign-in link into it.</p>
+          <div class="connector-consent-row"><code id="connector-mcp-url" class="path-text connector-consent-url"></code><button id="connector-mcp-url-copy" class="button secondary compact" type="button">Copy link</button></div>
+        </div>
       </section>
       <details id="connector-advanced" class="connector-advanced" open>
       <summary id="connector-advanced-summary">Sign-in options</summary>
@@ -790,7 +809,7 @@
 
   <dialog id="custom-dialog" aria-labelledby="custom-dialog-title">
     <div class="dialog-header">
-      <div><span id="custom-dialog-kind" class="eyebrow hidden">Your own expert</span><h2 id="custom-dialog-title">New expert</h2></div>
+      <div><h2 id="custom-dialog-title">New expert</h2></div>
       <button id="custom-close" class="button secondary" type="button">Close</button>
     </div>
     <form id="custom-form" class="dialog-body" novalidate>
@@ -860,9 +879,9 @@
     </form>
   </dialog>
 
-  <dialog id="detail-dialog" aria-labelledby="detail-title">
+  <dialog id="detail-dialog" aria-labelledby="detail-title" aria-describedby="detail-description">
     <div class="dialog-header">
-      <div><span id="detail-kind" class="eyebrow hidden">Details</span><h2 id="detail-title">Details</h2></div>
+      <div><h2 id="detail-title">Details</h2></div>
       <button id="detail-close" class="button secondary" type="button">Close</button>
     </div>
     <div class="dialog-body">
@@ -1033,7 +1052,7 @@
           <label class="commit-check"><input id="commit-where-new" type="radio" name="commit-where" value="new" /> Create a new branch first</label>
           <input id="commit-branch" class="commit-branch" type="text" aria-label="New branch name" autocomplete="off" autocapitalize="off" spellcheck="false" />
         </div>
-        <label class="commit-check"><input id="commit-skip-hooks" type="checkbox" /> Skip hooks (<code>--no-verify</code>)</label>
+        <label class="commit-check"><input id="commit-skip-hooks" type="checkbox" /> <span class="commit-check-text">Skip hooks (<code>--no-verify</code>)</span></label>
         <p class="commit-hint commit-hooks-note">The repository's commit hooks run first (pre-commit, commit-msg), with your Git identity and settings, as in a terminal.</p>
       </section>
       <section id="commit-after" class="commit-after" aria-label="Push and pull request" hidden>
@@ -1072,7 +1091,7 @@
     </div>
     <div class="dialog-body">
       <div id="branch-list" class="branch-list" role="radiogroup" aria-label="Branches"></div>
-      <label id="branch-stash-row" class="commit-check" hidden><input id="branch-stash" type="checkbox" /> Stash my uncommitted changes first (<code>git stash pop</code> brings them back)</label>
+      <label id="branch-stash-row" class="commit-check" hidden><input id="branch-stash" type="checkbox" /> <span class="commit-check-text">Stash my uncommitted changes first. “Restore stashed changes” in the Git panel brings them back.</span></label>
       <p id="branch-status" class="commit-status" role="status" aria-live="polite"></p>
       <div class="button-row consent-actions">
         <button id="branch-cancel" class="button secondary" type="button">Cancel</button>
@@ -1110,6 +1129,23 @@
     <div class="dialog-search"><label for="sessions-search">Search task titles and messages</label><input id="sessions-search" type="search" placeholder="Type to search" autocomplete="off" spellcheck="false" role="combobox" aria-controls="sessions-list" aria-expanded="true" aria-autocomplete="list" /></div>
     <div id="sessions-list" class="sessions-list" role="listbox" aria-label="Recent sessions"></div>
     <p class="sessions-keys"><kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>↩</kbd> open · <kbd>⌘⇧O</kbd> from anywhere</p>
+  </dialog>
+
+  <!-- One question before an action that cannot be taken back: delete a task, merge or remove a
+       worktree (src/confirm-dialog.js askConfirm). Cancel has the focus; Escape cancels. -->
+  <dialog id="confirm-dialog" class="consent-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <div class="dialog-header">
+      <div><span id="confirm-context" class="dialog-context"></span><h2 id="confirm-title">Are you sure?</h2></div>
+    </div>
+    <div class="dialog-body">
+      <p id="confirm-message" class="body-copy confirm-message"></p>
+      <ul id="confirm-details" class="consent-list confirm-details" hidden></ul>
+      <p id="confirm-note" class="commit-hint confirm-note" hidden></p>
+      <div class="button-row consent-actions">
+        <button id="confirm-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="confirm-accept" class="button danger" type="button">OK</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
