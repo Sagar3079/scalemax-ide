@@ -1451,7 +1451,7 @@ input[type="range"] {
   background: transparent;
   color: var(--riso-ink-2);
   font-family: var(--sm-font-display);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 12px;
   letter-spacing: 0.04em;
@@ -1577,13 +1577,6 @@ input[type="range"] {
   color: var(--riso-ink-2);
 }
 
-/* Kept for the few dialog lines JS still writes into; not used above headings. */
-.eyebrow {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--riso-ink-2);
-}
-
 /* A plain note (the Experts page, the connector dialog): words under a 1px rule, no box and no
    fill. Notices that report a failure or need the user keep a sheet of their own below. */
 .notice {
@@ -1656,13 +1649,13 @@ input[type="range"] {
   display: none;
 }
 
-/* View switches cross-fade in 160ms. */
+/* View switches settle in on the second motion step (DESIGN.md Motion). */
 .view.active {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  animation: sm-view-in 160ms var(--sm-ease-out);
+  animation: sm-view-in var(--sm-dur-2) var(--sm-ease-out);
 }
 
 /* A view settles in from almost there, never from nothing: a frame that stalls (a busy main
@@ -4123,6 +4116,19 @@ input[type="range"] {
   border-top: 1px solid var(--riso-rule);
   border-radius: 0;
   background: transparent;
+  /* Revealed with its head at the top: room for the heading above it. */
+  scroll-margin-top: 72px;
+}
+
+/* A server just added (src/mcp-ui.js revealServer): marked as the selection for a moment, in
+   blue ink, so it is found below the preset tiles. The negative margin keeps the row in place. */
+.mcp-server.is-new {
+  margin: 0 -8px;
+  padding: 12px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--riso-blue) 7%, transparent);
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 0;
 }
 
 .mcp-server-head {

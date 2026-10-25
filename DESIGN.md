@@ -309,7 +309,7 @@ The friendly character busts are printed, not painted: every fill is reduced to 
 CodeMirror on flat raised stock (no grain), blue caret, yellow highlighter selection and search matches. Syntax uses the inks at text weight: blue keywords and tags, green strings, pink numbers and regular expressions, deep blue types, ink-3 italic comments, functions in ink at 600.
 
 ### Motion
-One ease-out curve (cubic-bezier(0.16, 1, 0.3, 1)) at 120 / 200 / 320ms. A view switch settles in from mostly visible (opacity 0.55, 3px rise, 160ms), never from blank. Everything goes still under Reduce Motion.
+One ease-out curve (cubic-bezier(0.16, 1, 0.3, 1)) at 120 / 200 / 320ms. A view switch settles in from mostly visible (opacity 0.55, 3px rise, 200ms), never from blank. Everything goes still under Reduce Motion.
 
 ## Do's and Don'ts
 

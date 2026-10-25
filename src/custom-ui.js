@@ -13,7 +13,7 @@ const KINDS = {
   skill: {
     listKey: 'customSkills',
     validate: validateCustomSkill,
-    promptLabel: 'Prompt template',
+    promptLabel: 'Skill instructions',
     promptHint: 'Write the instructions for this skill. Use {{input}} where the conversation material should go. Install the skill to apply it to chat, or Run it on the file open in the editor.',
     placeholder: 'Review {{input}} and produce …',
   },

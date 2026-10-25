@@ -223,3 +223,29 @@
     animation: none !important;
   }
 }
+
+/* ---- Connector dialog: the one-click sign-in's link while it waits (src/catalog-ui.js) ------- */
+
+.connector-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.connector-consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* A consent URL runs to a few hundred characters: two lines of it, the rest is copied whole. */
+.connector-consent-url {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  user-select: all;
+}

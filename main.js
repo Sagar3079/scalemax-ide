@@ -262,6 +262,7 @@ function requestToolApproval(request, { signal } = {}) {
     const finish = (decision, notify, how = 'user') => {
       if (!pendingApprovals.has(approvalId)) return;
       pendingApprovals.delete(approvalId);
+      automations.asking(request.requestId, false);
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', onAbort);
       if (notify && !target.isDestroyed()) target.send('tool:approval-closed', { approvalId });
@@ -272,6 +273,8 @@ function requestToolApproval(request, { signal } = {}) {
     };
     const onAbort = () => finish('deny', true, 'stopped');
     pendingApprovals.set(approvalId, { finish, webContentsId: target.id });
+    // An automation run's row says "Waiting for approval" until this call is answered.
+    automations.asking(request.requestId, true);
     timer = setTimeout(() => finish('deny', true, 'timeout'), APPROVAL_TIMEOUT_MS);
     if (signal?.aborted) { onAbort(); return; }
     signal?.addEventListener?.('abort', onAbort, { once: true });
@@ -1227,7 +1230,9 @@ const mcpChannels = {
   'mcp:oauth-start': (_event, input) => mcp.startOAuth(input, {
     openExternal: (url) => shell.openExternal(url)
   }),
-  'mcp:oauth-cancel': () => mcp.cancelOAuth()
+  'mcp:oauth-cancel': () => mcp.cancelOAuth(),
+  // The sign-in in progress and the consent page it opened (to copy when no browser came up).
+  'mcp:oauth-status': () => mcp.oauthStatus()
 };
 
 for (const [channel, run] of Object.entries(mcpChannels)) {

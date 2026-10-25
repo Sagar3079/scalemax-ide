@@ -39,7 +39,19 @@ export function automationContext(app) {
  * the window has was just made here, and one only main has was just deleted here.
  */
 export function mergeAutomations(own, incoming) {
-  const fresh = new Map(normalizeAutomations(incoming).map((record) => [record.id, record]));
+  const sent = new Map((Array.isArray(incoming) ? incoming : []).filter(isRecord).map((record) => [record.id, record]));
+  const fresh = new Map(normalizeAutomations(incoming).map((record) => {
+    // Main decides when a schedule fires: its next slot is shown as main has it, also one that
+    // comes due this very moment. (normalizeAutomations moves a passed slot on to the next one,
+    // which is right for a state file read at start-up, but here the row would then show a time
+    // main never fires at, and the run main is about to start would look early.)
+    const nextRun = sent.get(record.id)?.nextRun;
+    if (record.active && Number.isFinite(nextRun)) {
+      record.nextRun = nextRun;
+      record.pendingCatchUp = sent.get(record.id).pendingCatchUp === true;
+    }
+    return [record.id, record];
+  }));
   return (Array.isArray(own) ? own : []).map((record) => {
     const main = fresh.get(record.id);
     if (!main) return record;
@@ -67,6 +79,20 @@ export function automationPermissionHint(permission) {
 /** How a run went, as the row and its history say it ('denied' runs need approval). */
 export function automationStatusLabel(status) {
   return status === 'denied' ? 'Needs approval' : (typeof status === 'string' && status ? status : 'idle');
+}
+
+/**
+ * An automation's status line in the list. `live`: what its run in progress does now ('running',
+ * or 'waiting' for an approval in this window), from main; it is shown as a state tag
+ * ({ state: 'working' | 'waiting', text }) in place of how the last run went.
+ */
+export function automationStatusLine(automation, live = null, formatTime = (time) => new Date(time).toLocaleString()) {
+  const next = automation?.active && Number.isFinite(automation.nextRun)
+    ? formatTime(automation.nextRun) : (automation?.active ? 'not scheduled' : 'paused');
+  const last = Number.isFinite(automation?.lastRun) ? `Last: ${formatTime(automation.lastRun)} · ` : '';
+  const tag = live === 'waiting' ? { state: 'waiting', text: 'Waiting for approval' }
+    : live === 'running' ? { state: 'working', text: 'Running…' } : null;
+  return { tag, text: `${tag ? '' : `${automationStatusLabel(automation?.lastStatus)} · `}${last}Next: ${next}` };
 }
 
 /** One line of Run history: "<time> · success — <preview>", "<time> · needs approval (<note>) — …". */
@@ -155,11 +181,13 @@ function updateStatus(app, state) {
     return;
   }
   const automations = Array.isArray(app.automations) ? app.automations : [];
-  const running = automations.filter((automation) => state.running.has(automation.id));
+  const waiting = automations.filter((automation) => state.waiting.has(automation.id));
+  const running = automations.filter((automation) => state.running.has(automation.id) && !state.waiting.has(automation.id));
   const next = automations
     .filter((automation) => automation.active && Number.isFinite(automation.nextRun))
     .reduce((soonest, automation) => (!soonest || automation.nextRun < soonest.nextRun ? automation : soonest), null);
   const parts = [];
+  if (waiting.length) parts.push(`Waiting for your approval: ${waiting.map((automation) => automation.name).join(', ')}`);
   if (running.length) parts.push(`Running: ${running.map((automation) => automation.name).join(', ')}…`);
   parts.push(next ? `Next run: ${next.name} at ${new Date(next.nextRun).toLocaleString()}` : 'No schedules enabled.');
   // Preferences > Automations off: nothing fires while the window is closed.
@@ -177,7 +205,8 @@ function renderBackgroundToggle(app) {
 export function startScheduler(app) {
   if (started) return started;
   const api = bridge();
-  const state = { running: new Set(), pushed: '' };
+  // `waiting`: automations whose run waits for an answer to an approval in this window.
+  const state = { running: new Set(), waiting: new Set(), pushed: '' };
   const sync = () => {
     if (typeof app.renderAutomations === 'function') app.renderAutomations();
     updateStatus(app, state);
@@ -209,6 +238,7 @@ export function startScheduler(app) {
     if (!isRecord(change)) return;
     if (Array.isArray(change.automations)) app.automations = mergeAutomations(app.automations, change.automations);
     if (Array.isArray(change.running)) state.running = new Set(change.running.filter((id) => typeof id === 'string'));
+    if (Array.isArray(change.waiting)) state.waiting = new Set(change.waiting.filter((id) => typeof id === 'string'));
     if (isRecord(change.run)) {
       const task = mergeRun(app.tasks, change.run);
       if (task) {
@@ -245,8 +275,11 @@ export function startScheduler(app) {
   const ready = api?.state
     ? Promise.resolve(api.state()).then((result) => {
       if (!result?.ok || !isRecord(result.data)) return;
-      const { running, automations, runs } = result.data;
-      applyChange({ running: Array.isArray(running) ? running : [], ...(Array.isArray(automations) ? { automations } : {}) });
+      const { running, waiting, automations, runs } = result.data;
+      applyChange({
+        running: Array.isArray(running) ? running : [], waiting: Array.isArray(waiting) ? waiting : [],
+        ...(Array.isArray(automations) ? { automations } : {}),
+      });
       for (const run of Array.isArray(runs) ? runs : []) applyChange({ run });
     }).catch(() => {}).finally(sync)
     : Promise.resolve(sync());
@@ -282,6 +315,11 @@ export function startScheduler(app) {
     /** True while a run of this automation is in progress (main said so). */
     isRunning(automationId) {
       return state.running.has(automationId);
+    },
+    /** What this automation's run in progress does now: 'waiting' (for an approval), 'running' or null. */
+    liveState(automationId) {
+      if (state.waiting.has(automationId)) return 'waiting';
+      return state.running.has(automationId) ? 'running' : null;
     },
     stop() {
       unsubscribe?.();

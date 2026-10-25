@@ -27,7 +27,7 @@ import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
 import {
-  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLabel, automationHistoryLine,
+  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLine, automationHistoryLine,
   automationFolderChoices,
 } from './scheduler.js';
 import { renderAvatar } from './avatars.js';
@@ -3213,7 +3213,7 @@ const app = {
     const heading = $('#skills-title');
     if (heading) {
       const custom = this.customSkills.length;
-      heading.textContent = `${skills.length} templates${custom ? ` · ${custom} custom` : ''}`;
+      heading.textContent = `${skills.length} skills${custom ? ` · ${custom} custom` : ''}`;
     }
     this.renderCatalog('#skills-list', skills, this.skillStates, 'skill', 'installed', 'Install', 'Installed');
   },
@@ -3252,7 +3252,7 @@ const app = {
         actions.dataset.connectorAction = entry.id;
         foot.append(actions);
       }
-      card.append(head, element('p', `${kind}-desc`, entry.description || 'Custom prompt template'), foot);
+      card.append(head, element('p', `${kind}-desc`, entry.description || 'Custom skill'), foot);
       return card;
     }));
   },
@@ -3356,10 +3356,15 @@ const app = {
       const prompt = element('div', 'automation-prompt', automation.prompt);
       prompt.title = automation.prompt;
       info.append(element('strong', 'automation-name', automation.name), prompt);
-      const next = automation.active && Number.isFinite(automation.nextRun)
-        ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
-      const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
-      const status = element('div', 'status-text', `${automationStatusLabel(automation.lastStatus)}${last} · Next: ${next}`);
+      // A run in progress shows what it does now ("Running…", "Waiting for approval") as a state tag.
+      const live = window.scalemaxScheduler?.liveState?.(automation.id) || null;
+      const line = automationStatusLine(automation, live);
+      const status = element('div', 'status-text', line.text);
+      if (line.tag) {
+        const tag = element('span', 'sm-state-tag', line.tag.text);
+        tag.dataset.state = line.tag.state;
+        status.prepend(tag, ' ');
+      }
       info.append(status);
       // Where it runs and under which permission: fixed when it was made or edited, never the
       // folder or permission that happen to be current when it fires.
@@ -3401,8 +3406,9 @@ const app = {
       const runNow = element('button', 'automation-run-now');
       runNow.append(icon('play', 'automation-icon'), 'Run now');
       runNow.dataset.action = 'run-now';
-      runNow.title = `Run ${automation.name} immediately`;
+      runNow.title = live ? `${automation.name} is running now` : `Run ${automation.name} immediately`;
       runNow.setAttribute('aria-label', runNow.title);
+      runNow.disabled = Boolean(live);
       const toggle = element('button', 'automation-toggle');
       toggle.append(icon(automation.active ? 'pause' : 'play', 'automation-icon'));
       toggle.dataset.action = 'toggle';
