@@ -383,9 +383,12 @@
   flex-direction: column;
   gap: 4px;
 }
-.commit-branch {
+/* input.commit-branch: the global input[type="text"] rule (styles.css, width: 100%) is more
+   specific than a class alone, and with the indent it ran past the dialog's right edge. */
+.commit-where input.commit-branch {
   margin-left: 24px;
   width: calc(100% - 24px);
+  max-width: calc(100% - 24px);
   font-family: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
 }

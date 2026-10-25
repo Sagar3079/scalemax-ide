@@ -101,6 +101,13 @@
 
       <main id="main-content" tabindex="-1">
         <div id="global-error" class="notice danger-notice" role="alert" aria-atomic="true" hidden></div>
+        <!-- A tool call of a task that is not on screen (or of an automation) waits here until the
+             user reviews it (src/composer-ui.js syncApprovalPrompt). It never takes the keyboard focus. -->
+        <div id="approval-notice" class="approval-notice" role="status" hidden>
+          <span class="sm-state-tag approval-notice-tag" data-state="waiting" aria-hidden="true">Waiting for you</span>
+          <span id="approval-notice-text" class="approval-notice-text"></span>
+          <button id="approval-notice-review" class="button secondary compact approval-notice-review" type="button" aria-haspopup="dialog" aria-controls="tool-approval-dialog" aria-describedby="approval-notice-text">Review</button>
+        </div>
 
         <section id="view-chat" class="view active" aria-labelledby="welcome-title">
           <div class="view-toolbar">
@@ -151,6 +158,15 @@
                   <div id="folder-picker-recent-list" class="folder-picker-recent-list"></div>
                 </div>
               </section>
+              <!-- And a model, while none is connected (src/app.js renderFolderPicker). -->
+              <section id="model-picker" class="folder-picker model-picker" aria-labelledby="model-picker-title" hidden>
+                <h2 id="model-picker-title" class="folder-picker-title">Connect a model</h2>
+                <p class="folder-picker-text">ScaleMax replies through a model you connect in Assistant: the ScaleMax API or any OpenAI-compatible provider.</p>
+                <button id="model-picker-open" class="button primary folder-picker-open" type="button">
+                  <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3" /><path d="M6 7h12v4a6 6 0 0 1-12 0V7Z" /><path d="M12 17v4" /></svg>
+                  <span>Connect a model…</span>
+                </button>
+              </section>
             </header>
 
             <!-- The mode decides which tools the assistant is offered (lib/modes.cjs). The pills
@@ -170,6 +186,12 @@
                   <svg class="task-folder-notice-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
                   <span id="task-folder-notice-text" class="task-folder-notice-text"></span>
                   <button id="task-folder-notice-action" class="button secondary compact task-folder-notice-action" type="button" aria-describedby="task-folder-notice-text" hidden></button>
+                </div>
+                <!-- Enter while no model is connected (src/app.js showConnectModel): nothing was sent. -->
+                <div id="connect-model-notice" class="task-folder-notice connect-model-notice" role="status" hidden>
+                  <svg class="task-folder-notice-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3" /><path d="M6 7h12v4a6 6 0 0 1-12 0V7Z" /><path d="M12 17v4" /></svg>
+                  <span id="connect-model-notice-text" class="task-folder-notice-text">Connect a model to start</span>
+                  <button id="connect-model-notice-action" class="button secondary compact task-folder-notice-action" type="button" aria-describedby="connect-model-notice-text">Open Assistant</button>
                 </div>
                 <!-- Background commands the model left running (src/jobs-ui.js renderJobsBar). -->
                 <div id="jobs-bar" class="jobs-bar" role="status" hidden>
@@ -365,7 +387,7 @@
                       <h3 id="workspace-empty-title">Open a project folder</h3>
                       <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this Mac.</p>
                       <button id="workspace-open-empty" class="button primary" type="button">Open folder</button>
-                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment</p>
+                      <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment · <kbd>Esc</kbd> then <kbd>Tab</kbd> leaves the editor</p>
                     </div>
                   </div>
                 </section>
@@ -413,6 +435,7 @@
             <footer class="ws-statusbar">
               <span id="editor-status" class="ws-status-main" role="status" aria-live="polite">Choose a file before editing or saving.</span>
               <span class="ws-status-spacer"></span>
+              <span id="editor-keys-hint" class="ws-status-item ws-keys-hint">Esc then Tab to leave the editor</span>
               <span id="editor-location" class="ws-status-item">Ln 1, Col 1</span>
               <span id="editor-language" class="ws-status-item">Plain text</span>
               <span id="editor-branch" class="ws-status-item">No branch</span>
@@ -461,25 +484,28 @@
                 <input id="provider-api-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="sm_live_…" />
               </div>
 
-              <div class="form-group" id="provider-model-text-group">
-                <label for="provider-model">Provider model ID</label>
-                <input id="provider-model" type="text" placeholder="Exact model ID" autocomplete="off" spellcheck="false" autocapitalize="off" />
-              </div>
-
+              <!-- The models the endpoint lists (after Test connection, or saved with it). A custom
+                   endpoint's list ends with "Other model ID…", which shows the ID field below. -->
               <div class="form-group" id="provider-model-select-group" hidden>
                 <label id="model-picker-label">Model for chat</label>
                 <div class="picker" id="model-picker">
-                  <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label">Choose a model</button>
+                  <button id="model-picker-button" class="picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="model-picker-label model-picker-button">Choose a model</button>
                   <div id="model-picker-list" class="picker-list" role="listbox" aria-labelledby="model-picker-label" popover="manual" hidden></div>
                 </div>
               </div>
 
+              <div class="form-group" id="provider-model-text-group">
+                <label for="provider-model">Model ID</label>
+                <input id="provider-model" type="text" placeholder="Exact model ID" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="provider-model-hint" />
+                <p id="provider-model-hint" class="status-text">Test the connection to list the endpoint's models, or type the exact ID it expects.</p>
+              </div>
+
               <div class="button-row">
-                <button id="provider-save" class="button primary" type="submit">Save provider</button>
                 <span class="test-control">
                   <button id="provider-test" class="button secondary" type="button">Test connection</button>
                   <span id="provider-test-dot" class="status-dot" role="status" aria-label="Connection status"></span>
                 </span>
+                <button id="provider-save" class="button primary" type="submit">Save provider</button>
                 <button id="provider-clear" class="button danger" type="button">Clear provider</button>
               </div>
               <p id="provider-status" class="status-text" role="status" aria-live="polite" aria-atomic="true">Provider not configured.</p>
@@ -576,6 +602,13 @@
                 <div class="form-group" data-automation-field="weekday" hidden><label for="automation-weekday">Day of the week</label><select id="automation-weekday"><option value="0">Sunday</option><option value="1" selected>Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
                 <div class="form-group" data-automation-field="monthday" hidden><label for="automation-monthday">Day of the month</label><input id="automation-monthday" type="number" min="1" max="31" value="1" step="1" /></div>
               </div>
+              <!-- Where and how its runs work, whatever is open when it fires (src/app.js fillAutomationFolders; main honours Bypass only with the consent given here). -->
+              <div class="form-row automation-run-settings">
+                <div class="form-group"><label for="automation-folder">Folder</label><select id="automation-folder"></select></div>
+                <div class="form-group"><label for="automation-mode">Mode</label><select id="automation-mode"><option value="working">Working</option><option value="coding">Coding</option></select></div>
+                <div class="form-group"><label for="automation-permission">Permission</label><select id="automation-permission" aria-describedby="automation-permission-hint"><option value="plan">Plan (read only)</option><option value="manual">Manual (ask for every tool call)</option><option value="basic">Basic (ask before changes)</option><option value="bypass">Bypass all permissions</option></select></div>
+              </div>
+              <p id="automation-permission-hint" class="status-text automation-permission-hint"></p>
               <input id="automation-edit-id" type="hidden" value="" />
               <div class="button-row"><button id="automation-submit" class="button primary" type="submit">Consent &amp; create schedule</button><button id="automation-cancel-edit" class="button secondary" type="button" hidden>Cancel edit</button></div>
             </form>
@@ -603,7 +636,7 @@
               <div class="preference-row">
                 <div class="form-group preference-text">
                   <label id="project-notes-label" for="project-notes-toggle">Project notes</label>
-                  <p id="project-notes-desc" class="status-text">On the first message in a folder, create .scalemax/SCALEMAX.md with what ScaleMax finds there. ScaleMax reads it, and any AGENTS.md, CLAUDE.md or Kiro steering files, in every chat in that folder.</p>
+                  <p id="project-notes-desc" class="status-text">On the first message in a folder, create .scalemax/SCALEMAX.md with what ScaleMax finds there. ScaleMax reads it, and any AGENTS.md, CLAUDE.md or Kiro steering files, in every chat in that folder. A task in a separate worktree reads the project's notes and adds none to its branch.</p>
                 </div>
                 <button id="project-notes-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="project-notes-label" aria-describedby="project-notes-desc"><span class="switch-thumb"></span></button>
               </div>
@@ -858,15 +891,21 @@
     </div>
   </dialog>
 
+  <!-- Asks before a tool call (src/composer-ui.js). The focus starts on the heading, never on a
+       button, and Enter and Space do nothing for a moment after a prompt appears, so typing
+       cannot answer it. The preview shows the call readably; the raw arguments stay one click away. -->
   <dialog id="tool-approval-dialog" class="consent-dialog" aria-labelledby="approval-title" aria-describedby="approval-summary">
     <div class="dialog-header">
-      <div><span id="approval-eyebrow" class="dialog-context">Tool call</span><h2 id="approval-title">Allow this tool call?</h2></div>
+      <div><span id="approval-eyebrow" class="dialog-context">Tool call</span><h2 id="approval-title" tabindex="-1">Allow this tool call?</h2></div>
       <span id="approval-queue" class="badge" hidden></span>
     </div>
-    <div class="dialog-body">
+    <div id="approval-body" class="dialog-body">
       <p id="approval-summary" class="body-copy"></p>
-      <span class="small-label">Arguments</span>
-      <pre id="approval-arguments" class="code-output approval-arguments"></pre>
+      <div id="approval-preview" class="approval-preview"></div>
+      <details id="approval-raw" class="approval-raw">
+        <summary>Show raw arguments</summary>
+        <pre id="approval-arguments" class="code-output approval-arguments"></pre>
+      </details>
       <div class="button-row consent-actions">
         <button id="approval-deny" class="button secondary" type="button">Deny</button>
         <button id="approval-all" class="button secondary" type="button">Allow all in this reply</button>

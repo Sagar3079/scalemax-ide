@@ -256,21 +256,30 @@ function requestToolApproval(request, { signal } = {}) {
   return new Promise((resolve) => {
     const approvalId = randomUUID();
     let timer = null;
-    const finish = (decision, notify) => {
+    // `how` a call ended up not allowed: 'user' (Deny), 'timeout', 'closed' (the window went away)
+    // or 'stopped' (the reply was stopped). A call of an automation run that was not allowed is
+    // counted, so the run is recorded as denied rather than as a success (lib/automations.cjs).
+    const finish = (decision, notify, how = 'user') => {
       if (!pendingApprovals.has(approvalId)) return;
       pendingApprovals.delete(approvalId);
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', onAbort);
       if (notify && !target.isDestroyed()) target.send('tool:approval-closed', { approvalId });
+      if (decision === 'deny' && how !== 'stopped') {
+        automations.refused(request.requestId, `${mcpServerName(request.serverId)} · ${request.toolName}`, how);
+      }
       resolve(decision);
     };
-    const onAbort = () => finish('deny', true);
+    const onAbort = () => finish('deny', true, 'stopped');
     pendingApprovals.set(approvalId, { finish, webContentsId: target.id });
-    timer = setTimeout(() => finish('deny', true), APPROVAL_TIMEOUT_MS);
+    timer = setTimeout(() => finish('deny', true, 'timeout'), APPROVAL_TIMEOUT_MS);
     if (signal?.aborted) { onAbort(); return; }
     signal?.addEventListener?.('abort', onAbort, { once: true });
+    // A call of an automation run names the automation, so the prompt says which one asks.
+    const run = automations.info(request.requestId);
     target.send('tool:approval-request', {
       approvalId,
+      ...(run ? { automation: run.name.slice(0, 120) } : {}),
       requestId: request.requestId,
       serverId: request.serverId,
       serverName: mcpServerName(request.serverId),
@@ -299,7 +308,7 @@ function requestToolApproval(request, { signal } = {}) {
 }
 
 function denyAllApprovals() {
-  for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false);
+  for (const entry of [...pendingApprovals.values()]) entry.finish('deny', false, 'closed');
 }
 
 // Background commands the model starts (lib/jobs.cjs). They outlive the reply that started them
@@ -626,7 +635,9 @@ async function openChatSession(input) {
   return Object.assign(chat, {
     tools,
     previousTodos: todos.current(),
-    notes: createProjectNotes({ getWorkspace: getSession }),
+    // A task's separate worktree gets no notes file of its own (it would end up in the branch):
+    // its chats read the main checkout's notes (lib/project-notes.cjs).
+    notes: createProjectNotes({ getWorkspace: getSession, isTaskWorktree: isManagedWorktree }),
     source: combineToolSources({
       builtins: (mode) => modeFamilies(mode).map((family) => families[family]).filter(Boolean),
       mcp,
@@ -700,6 +711,20 @@ function checkpointPaths(input) {
     throw bridgeError('INVALID_CHECKPOINT', 'Choose the changed files by their project paths.');
   }
   return paths;
+}
+// Part of one file undone in the editor's inline review, which saved it itself
+// (lib/checkpoints.cjs editorUndo): `{ path, from, revision, changes?, lines? }`.
+function checkpointPart(input) {
+  const part = input && typeof input === 'object' ? input.part : undefined;
+  if (part === undefined || part === null) return null;
+  const revision = /^[a-f0-9]{64}$/;
+  if (typeof part !== 'object' || typeof part.path !== 'string' || !part.path || part.path.length > 1024
+    || typeof part.from !== 'string' || !revision.test(part.from) || typeof part.revision !== 'string' || !revision.test(part.revision)
+    || (part.changes !== undefined && (!Number.isSafeInteger(part.changes) || part.changes < 1 || part.changes > 1000))
+    || (part.lines !== undefined && (!Array.isArray(part.lines) || part.lines.length > 20 || part.lines.some((line) => !Number.isSafeInteger(line) || line < 1)))) {
+    throw bridgeError('INVALID_CHECKPOINT', 'That undo in the editor could not be recorded.');
+  }
+  return { path: part.path, from: part.from, revision: part.revision, changes: part.changes ?? 1, lines: part.lines ?? [] };
 }
 
 function projectNotesEnabled() {
@@ -1029,7 +1054,9 @@ const providerChannels = {
       const mode = normalizeMode(extras.mode || input?.mode);
       // Read once: the whole reply runs under the permission it started with, and Plan adds a
       // working agreement of its own (investigate, then propose) on top of the mode's.
-      const permission = extras.readOnly ? 'plan' : chatPermission();
+      // An automation run works under its own permission (main re-checks its Bypass consent,
+      // lib/automations.cjs runPermission); one made before automations had one uses the chat's.
+      const permission = extras.readOnly ? 'plan' : (automations.info(requestId)?.permission || chatPermission());
       const prepared = await prepareChatRequest(extras.input, {
         workspaceTools: chat.tools,
         projectNotes: chat.notes,
@@ -1239,6 +1266,15 @@ const checkpointChannels = {
   },
   'checkpoint:undo': (_event, input) => {
     const id = checkpointId(input);
+    // The editor's inline review already saved the file: this only records it, after checking
+    // the revisions, so a reply working elsewhere in the folder does not hold it up.
+    const part = checkpointPart(input);
+    if (part) {
+      return queueCheckpoint(id, () => withCheckpointFolder(id, (session) => {
+        requireSettled(id);
+        return checkpoints.editorUndo(id, part.path, part, { workspace: session });
+      }));
+    }
     const paths = checkpointPaths(input);
     return queueCheckpoint(id, () => withCheckpointFolder(id, (session, folder) => {
       requireSettled(id, folder.path);
@@ -1675,6 +1711,8 @@ const automations = createAutomations({
   notify: (change) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('automations:changed', change);
   },
+  // The window deleted an automation while it ran: its request is stopped like Stop in chat.
+  cancel: (requestId) => providerChannels['provider:cancel'](null, requestId),
 });
 /**
  * The answer to a tool call that needs approval while no window is open to ask in: a call of an
@@ -1836,7 +1874,12 @@ const gitFlowChannels = {
   'git:commit': async (_event, input) => {
     const folder = await gitFolder(input);
     requireNoReplyIn(folder);
-    return gitFlow.commit(folder, { paths: input.paths, message: input.message, branch: input.branch, skipHooks: input.skipHooks === true });
+    // `base`: a task worktree's base branch, so the branch left behind by "Create a new branch
+    // first" can be tidied away when it has nothing of its own (lib/git-flow.cjs leftBehind).
+    return gitFlow.commit(folder, {
+      paths: input.paths, message: input.message, branch: input.branch, skipHooks: input.skipHooks === true,
+      base: typeof input.base === 'string' ? input.base : null,
+    });
   },
   'git:push': async (_event, input) => gitFlow.push(await gitFolder(input)),
   'git:pull': async (_event, input) => {

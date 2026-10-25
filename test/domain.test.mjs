@@ -356,6 +356,43 @@ test('normalizeAutomations accepts interval and once schedules', () => {
   assert.equal(list[1].nextRun, now + 60000);
 });
 
+test('normalizeAutomations keeps each automation\'s permission, Bypass only with its consent', () => {
+  const now = Date.UTC(2026, 4, 10, 12, 0);
+  const base = { name: 'A', prompt: 'p', schedule: 'daily', time: '09:00', active: true, schemaVersion: 2 };
+  const list = normalizeAutomations([
+    { ...base, id: 'plan', permission: 'plan', bypassConsent: true },
+    { ...base, id: 'bypass', permission: 'bypass', bypassConsent: true },
+    { ...base, id: 'unconsented', permission: 'bypass' },
+    { ...base, id: 'invalid', permission: 'everything' },
+    { ...base, id: 'legacy' },
+  ], now);
+  const by = Object.fromEntries(list.map((item) => [item.id, item]));
+  assert.equal(by.plan.permission, 'plan');
+  assert.equal('bypassConsent' in by.plan, false, 'consent is kept only with Bypass');
+  assert.equal(by.bypass.permission, 'bypass');
+  assert.equal(by.bypass.bypassConsent, true);
+  assert.equal(by.unconsented.permission, 'basic');
+  assert.equal('bypassConsent' in by.unconsented, false);
+  assert.equal('permission' in by.invalid, false);
+  assert.equal('permission' in by.legacy, false, 'made before automations had one: runs use the chat permission');
+});
+
+test('normalizeAutomations keeps runs that were denied tool calls, with their note', () => {
+  const [record] = normalizeAutomations([{
+    id: 'a1', name: 'A', prompt: 'p', schedule: 'daily', time: '09:00', active: true, schemaVersion: 2, lastStatus: 'denied',
+    history: [
+      { time: 2, status: 'denied', preview: 'Nothing changed.', note: '1 tool call denied: by you' },
+      { time: 1, status: 'success', preview: 'Done.' },
+      { time: 0, status: 'bogus', preview: 'x' },
+    ],
+  }], Date.UTC(2026, 4, 10, 12, 0));
+  assert.equal(record.lastStatus, 'denied');
+  assert.deepEqual(record.history[0], { time: 2, status: 'denied', preview: 'Nothing changed.', note: '1 tool call denied: by you' });
+  assert.deepEqual(record.history[1], { time: 1, status: 'success', preview: 'Done.' }, 'no note key without a note');
+  assert.equal(record.history.length, 2, 'an unknown status is dropped');
+  assert.equal(normalizeAutomations([{ ...record, history: [{ time: 1, status: 'denied', preview: '', note: 'x'.repeat(500) }] }])[0].history[0].note.length, 200);
+});
+
 test('search includes valid custom experts and skills and skips invalid ones', () => {
   const experts = [
     { id: 'custom-expert-legal', name: 'Contract Reviewer', role: 'Legal', prompt: 'Review contracts carefully.', custom: true },

@@ -284,7 +284,9 @@ const BASE = [
   highlightSelectionMatches(),
   search({ top: true }),
   scrollPastEnd(),
-  EditorView.contentAttributes.of({ 'aria-label': 'File contents', 'aria-describedby': 'editor-status' }),
+  // Tab indents here, so the way out is part of the editor's description (#editor-keys-hint, which
+  // the Workspace also shows while the editor has focus).
+  EditorView.contentAttributes.of({ 'aria-label': 'File contents', 'aria-describedby': 'editor-keys-hint editor-status' }),
   // Pasted or dropped text takes the file's line breaks (a CRLF file stays CRLF).
   EditorView.clipboardInputFilter.of((text, state) => text.replace(/\r\n?|\n/g, state.lineBreak)),
   // Escape then Tab moves focus out of the editor (CodeMirror's tab focus mode), so the Tab

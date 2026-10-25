@@ -1522,7 +1522,7 @@ async function run(win) {
     mcpSecretHidden: Boolean(e2e && e2e.mcpSecretHidden),
     toolLoopReply: Boolean(e2e && e2e.toolChatText === 'tool said: smoke-echo'
       && Array.isArray(e2e.toolChatCalls) && e2e.toolChatCalls.length === 1 && e2e.toolChatCalls[0].ok === true),
-    manualApprovalAllow: Boolean(e2e && e2e.approvalShown && /Smoke tools · echo/.test(e2e.approvalTitle)
+    manualApprovalAllow: Boolean(e2e && e2e.approvalShown && /echo on Smoke tools/.test(e2e.approvalTitle)
       && Array.isArray(e2e.approvedCalls) && e2e.approvedCalls.length === 1 && e2e.approvedCalls[0].ok === true
       && e2e.approvedText === 'tool said: smoke-echo'),
     workspaceFolderPrompt: Boolean(e2e && e2e.wsNoFolderText === 'folder: none' && e2e.wsSelected

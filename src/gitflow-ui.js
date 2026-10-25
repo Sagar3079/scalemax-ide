@@ -164,9 +164,11 @@ function fileLetter(file) {
 function fileClass(letter) {
   return { M: 'is-modified', A: 'is-added', U: 'is-untracked', D: 'is-deleted', R: 'is-modified', '!': 'is-conflict' }[letter] || '';
 }
-// Ticked by default: the reply's files (or every change), never a file that looks like a secret.
+// Ticked by default: the reply's files (or every change), never a file that looks like a secret,
+// and never ScaleMax's own untracked project notes (`notes`, lib/git-flow.cjs): they are
+// ScaleMax's, not the task's work, so they stay out of a commit unless the user ticks them.
 function ticked(file, wanted) {
-  if (file.secret || file.kind === 'conflict') return false;
+  if (file.secret || file.kind === 'conflict' || file.notes) return false;
   if (!wanted) return true;
   for (const item of wanted) {
     if (item === file.path || item === file.from) return true;
@@ -201,6 +203,9 @@ function renderFiles(state, wanted) {
     if (file.secret) {
       row.append(element('span', 'commit-file-note is-warning', 'Looks like a secret'));
       row.title = 'This file looks like it holds secrets (keys, passwords). It is not ticked, and its contents are never sent to write the message.';
+    } else if (file.notes) {
+      row.append(element('span', 'commit-file-note', 'ScaleMax project notes'));
+      row.title = 'ScaleMax\'s own notes about this project (.scalemax/SCALEMAX.md). Not ticked: they never hold back a merge, a pull request or removing a worktree. Tick them to commit them too.';
     } else if (file.kind === 'untracked' && file.path.endsWith('/')) {
       row.append(element('span', 'commit-file-note', 'New folder'));
     } else if (file.kind === 'conflict') {
@@ -286,6 +291,52 @@ function taskOf(app, taskId) {
   return taskId ? app.tasks.find((item) => item.id === taskId) || null : null;
 }
 
+/** The task worktree (not removed) at `folder`, as a task remembers it, or null. */
+function worktreeAt(app, folder) {
+  for (const task of app.tasks) {
+    const own = normalizeWorktree(task.worktree);
+    if (own && !own.removed && own.path === folder) return own;
+  }
+  return null;
+}
+
+/**
+ * The branch a task worktree has checked out now (a commit to a new branch, Switch branch or a
+ * terminal moved it): every task working there remembers it, so the header, the Merge item, the
+ * Merge and Remove prompts and the notice after removal name the branch Git really has there.
+ * True when something changed.
+ */
+export function syncWorktreeBranch(app, folder, branch) {
+  if (typeof branch !== 'string' || !branch || !folder) return false;
+  let changed = false;
+  for (const task of app.tasks) {
+    const own = normalizeWorktree(task.worktree);
+    if (!own || own.path !== folder || own.branch === branch) continue;
+    const next = normalizeWorktree({ ...own, branch });
+    if (!next) continue;
+    task.worktree = next;
+    changed = true;
+  }
+  if (changed) {
+    void app.persist('tasks');
+    renderWorktreeBar(app);
+    app.renderTaskFolderNotice?.();
+  }
+  return changed;
+}
+
+/** What became of the branch a new branch replaced in a task worktree (lib/git-flow.cjs leftBehind). */
+export function leftBehindNote(committed) {
+  const previous = committed?.previous;
+  if (!previous || typeof previous.branch !== 'string') return '';
+  if (previous.deleted) return `${previous.branch} had no commits of its own, so it was deleted.`;
+  if (previous.pushed) return `${previous.branch} is kept: it was pushed.`;
+  if (Number.isInteger(previous.commits) && previous.commits > 0) {
+    return `${previous.branch} is kept: its ${plural(previous.commits, 'commit')} ${previous.commits === 1 ? 'is' : 'are'} on ${committed.branch} too.`;
+  }
+  return `${previous.branch} is kept.`;
+}
+
 function renderSubtitle() {
   const state = commit.state;
   const node = $('#commit-subtitle');
@@ -307,7 +358,8 @@ function renderAfter() {
   if (result) {
     result.textContent = committed
       ? `Committed ${committed.short} on ${committed.branch || 'HEAD'}: ${committed.subject}`
-      : 'Nothing to commit: every change is committed.';
+      : state.files.length ? 'Nothing else to commit: only ScaleMax\'s project notes are not committed, and they stay out of the branch.'
+        : 'Nothing to commit: every change is committed.';
   }
   const remote = state.remotes?.length ? state.remotes.includes('origin') ? 'origin' : state.remotes[0] : '';
   const push = $('#commit-push');
@@ -389,7 +441,9 @@ export async function openCommitDialog(app, { folder = '', taskId = null, paths 
   $('#commit-cancel').textContent = 'Cancel';
   setCommitStatus('');
   renderSubtitle();
-  const committable = state.files.length > 0;
+  // A pull request needs no commit for ScaleMax's own notes: with only those left, it goes
+  // straight to the pull request form.
+  const committable = mode === 'pr' ? state.files.some((file) => !file.notes) : state.files.length > 0;
   if (committable) {
     $('#commit-form-section').hidden = false;
     $('#commit-after').hidden = true;
@@ -403,7 +457,9 @@ export async function openCommitDialog(app, { folder = '', taskId = null, paths 
     current.checked = !state.detached;
     fresh.checked = state.detached;
     const task = taskOf(app, taskId);
-    $('#commit-branch').value = `scalemax/${slugify(task?.title || 'changes')}`;
+    // A task worktree is already on scalemax/<its title>: the suggestion must be a new name.
+    const suggested = `scalemax/${slugify(task?.title || 'changes')}`;
+    $('#commit-branch').value = suggested === state.branch ? `${suggested}-2` : suggested;
     $('#commit-skip-hooks').checked = false;
     if (state.conflicts) setCommitStatus(`${plural(state.conflicts, 'file is', 'files are')} still in conflict. Resolve them first.`, { error: true });
     else if (state.operation === 'merge') setCommitStatus('A merge is being finished: commit all of its files at once.');
@@ -439,7 +495,9 @@ async function submitCommit() {
   commit.busy = true;
   updateCommitControls();
   setCommitStatus(skipHooks ? 'Committing…' : 'Committing… (the repository\'s commit hooks run first)');
-  const result = await call(api.commit, { folder: commit.folder, paths, message, branch, skipHooks });
+  // In a task's worktree, its base branch: the branch left behind by a new one can be tidied away.
+  const own = worktreeAt(app, commit.folder);
+  const result = await call(api.commit, { folder: commit.folder, paths, message, branch, skipHooks, ...(own?.base ? { base: own.base } : {}) });
   commit.busy = false;
   if (!result.ok) {
     setCommitStatus(errorText(result, 'The commit did not go through.'), { error: true });
@@ -449,15 +507,18 @@ async function submitCommit() {
     return;
   }
   commit.committed = result.data;
+  // A new branch in a task's worktree: the task, its header and every prompt now name that one.
+  syncWorktreeBranch(app, commit.folder, result.data.branch);
   const latest = await call(api.status, { folder: commit.folder });
   if (latest.ok && latest.data?.isRepo) commit.state = latest.data;
   renderSubtitle();
-  setCommitStatus('');
+  const left = leftBehindNote(result.data);
+  setCommitStatus(left);
   renderAfter();
   if (commit.mode === 'pr') showPrForm();
   else if ($('#commit-push') && !$('#commit-push').hidden) $('#commit-push').focus();
   else $('#commit-cancel')?.focus();
-  app.showToast(`Committed ${result.data.short}`);
+  app.showToast(left ? `Committed ${result.data.short} on ${result.data.branch}. ${left}` : `Committed ${result.data.short}`);
   void afterGitChange(app, commit.folder);
 }
 
@@ -737,7 +798,20 @@ async function readWorktreeInfo(app, task, worktree) {
   const result = await call(api.info, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}) });
   reading.delete(task.id);
   infos.set(task.id, { at: Date.now(), data: result.ok ? result.data : null, error: result.ok ? '' : errorText(result, '') });
+  // Git's branch there wins over the one the task remembers (syncWorktreeBranch redraws).
+  if (result.ok && syncWorktreeBranch(app, worktree.path, result.data?.branch)) return;
   if (app.currentTaskId === task.id) renderWorktreeBar(app);
+}
+
+/** Reads the worktree's state now (its branch above all) before a prompt names it. */
+async function freshWorktree(app, task, worktree) {
+  const api = worktreeApi();
+  if (!api?.info) return { worktree, info: null };
+  const result = await call(api.info, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}) });
+  if (!result.ok) return { worktree, info: null };
+  infos.set(task.id, { at: Date.now(), data: result.data, error: '' });
+  syncWorktreeBranch(app, worktree.path, result.data?.branch);
+  return { worktree: normalizeWorktree(task.worktree) || worktree, info: result.data };
 }
 
 function worktreeAction(label, action, title) {
@@ -819,16 +893,17 @@ function renderWorktreeBar(app) {
   if (!worktree.removed && (!entry || Date.now() - entry.at > INFO_MAX_AGE_MS)) void readWorktreeInfo(app, task, worktree);
 }
 
-async function mergeWorktree(app, task, worktree) {
+async function mergeWorktree(app, task, current) {
   const api = worktreeApi();
-  if (!api?.merge || !worktree.base) return;
+  if (!api?.merge || !current.base) return;
+  const { worktree } = await freshWorktree(app, task, current);
   const sure = window.confirm(`Merge ${worktree.branch} into ${worktree.base} in "${worktree.mainName}"?\n\nGit merges in that checkout, which must have no uncommitted changes and be on ${worktree.base}. A merge that conflicts is undone at once.`);
   if (!sure) return;
   app.showToast(`Merging into ${worktree.base}…`);
   const result = await call(api.merge, { folder: worktree.path, base: worktree.base, into: worktree.mainRoot });
   infos.delete(task.id);
   if (!result.ok) {
-    if (result.error?.code === 'WORKTREE_DIRTY' && window.confirm(`${result.error.message}\n\nCommit them now?`)) {
+    if (result.error?.code === 'WORKTREE_DIRTY' && window.confirm(`${result.error.message}\n\nOpen Commit… now?`)) {
       await openCommitDialog(app, { folder: worktree.path, taskId: task.id });
     } else {
       app.showToast(errorText(result, 'The merge did not go through.'));
@@ -841,19 +916,21 @@ async function mergeWorktree(app, task, worktree) {
   await afterGitChange(app, worktree.mainRoot, { files: true });
 }
 
-async function removeWorktree(app, task, worktree) {
+async function removeWorktree(app, task, current) {
   const api = worktreeApi();
   if (!api?.remove) return;
   if (app.replies.has(task.id)) {
     app.showToast('Wait for the reply to finish, or stop it, then remove the worktree.');
     return;
   }
-  if (app.workspace.root === worktree.path && app.hasUnsavedEdits()) {
+  if (app.workspace.root === current.path && app.hasUnsavedEdits()) {
     app.showToast(UNSAVED);
     return;
   }
+  const { worktree, info } = await freshWorktree(app, task, current);
   const others = app.tasks.filter((item) => item !== task && item.folder?.path === worktree.path).length;
-  const sure = window.confirm(`Remove this task's worktree?\n\nThe folder ${worktree.path} is deleted; the branch ${worktree.branch} and its commits are kept.${others ? `\n\n${plural(others, 'other task')} also ${others === 1 ? 'works' : 'work'} there.` : ''}`);
+  const notes = info?.notes ? ' ScaleMax\'s project notes there go with it (the project\'s own are not touched).' : '';
+  const sure = window.confirm(`Remove this task's worktree?\n\nThe folder ${worktree.path} is deleted; the branch ${worktree.branch} and its commits are kept.${notes}${others ? `\n\n${plural(others, 'other task')} also ${others === 1 ? 'works' : 'work'} there.` : ''}`);
   if (!sure) return;
   let result = await call(api.remove, { folder: worktree.path, ...(worktree.base ? { base: worktree.base } : {}) });
   if (!result.ok && ['WORKTREE_DIRTY', 'UNMERGED'].includes(result.error?.code)) {
@@ -864,9 +941,11 @@ async function removeWorktree(app, task, worktree) {
     app.showToast(errorText(result, 'The worktree could not be removed.'));
     return;
   }
+  // The branch Git had there when it went (the notice after removal names it).
+  const kept = typeof result.data?.branch === 'string' && result.data.branch ? result.data.branch : worktree.branch;
   for (const item of app.tasks) {
     const own = normalizeWorktree(item.worktree);
-    if (own?.path === worktree.path) item.worktree = { ...own, removed: true };
+    if (own?.path === worktree.path) item.worktree = normalizeWorktree({ ...own, branch: kept, removed: true }) || { ...own, removed: true };
   }
   infos.delete(task.id);
   void app.persist('tasks');
@@ -875,7 +954,7 @@ async function removeWorktree(app, task, worktree) {
   // (its notice says its folder is gone).
   if (app.workspace.root === worktree.path) await app.runFolderJob(() => app.selectFolderNow(worktree.mainRoot));
   app.settleCurrentTask();
-  app.showToast(`Removed the worktree; the branch ${worktree.branch} is kept`);
+  app.showToast(`Removed the worktree; the branch ${kept} is kept`);
 }
 
 async function runWorktreeAction(app, action, opener) {

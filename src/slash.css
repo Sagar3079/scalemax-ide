@@ -6,6 +6,18 @@
 .slash-menu {
   max-height: 280px;
 }
+/* The menu prints in the top layer as a manual popover, placed by src/slash-ui.js
+   placeSlashMenu (top or bottom, left, width and max-height in px), so it is never covered by
+   the empty task's starter chips and never runs off the window. The UA popover box (inset 0,
+   margin auto, Canvas colours) gives way to the .mention-menu sheet. */
+.slash-menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  color: inherit;
+}
 .slash-option {
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;

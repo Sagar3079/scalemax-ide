@@ -1041,6 +1041,14 @@ test('a passing failure (rate limit, overloaded server, cut stream, dropped conn
   assert.equal(calls.length, 4);
 });
 
+test('retries that never streamed anything are announced too, so the window can say it is retrying', async () => {
+  const { provider } = await configuredProvider(() => jsonResponse({ error: { message: 'busy' } }, { status: 500 }));
+  const heard = [];
+  await assert.rejects(() => provider.complete({ requestId: 'n-500', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) }),
+    (error) => error.status === 500);
+  assert.deepEqual(heard.map((delta) => [delta.type, delta.attempt, delta.of, delta.reset]), [['retry', 1, 3, false], ['retry', 2, 3, false], ['retry', 3, 3, false]]);
+});
+
 test('refusals are not retried, and retries give up after three', async () => {
   for (const [status, expected] of [[400, 1], [401, 1], [404, 1]]) {
     const { provider, calls } = await configuredProvider(() => jsonResponse({ error: { message: 'no' } }, { status }));
@@ -1155,8 +1163,10 @@ test('an error event in the stream that names a passing failure is retried like 
   const result = await provider.complete({ requestId: 'se-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: (delta) => heard.push(delta) });
   assert.equal(result.content, 'The whole answer.');
   assert.equal(calls.length, 4);
-  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'text']);
+  // Every retry is announced, as retry n of 3; only the first had shown text to take back.
+  assert.deepEqual(heard.map((delta) => delta.type), ['text', 'retry', 'retry', 'retry', 'text']);
   assert.equal(heard[1].reason, 'NETWORK');
+  assert.deepEqual(heard.slice(1, 4).map((delta) => [delta.attempt, delta.of, delta.reset]), [[1, 3, true], [2, 3, false], [3, 3, false]]);
   // A refusal in the stream keeps its code and type but is not asked again.
   const refusing = await configuredProvider(() => sseResponse([{ error: { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'too long' } }]));
   await assert.rejects(() => refusing.provider.complete({ requestId: 'se-2', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
@@ -1284,4 +1294,146 @@ test('choosing a provider with a model it cannot use changes nothing', async () 
   await provider.selectProfile({ id: scalemaxId, model: 'space-bunny' });
   await assert.rejects(() => provider.selectProfile({ id: scalemaxId, model: 'flux-2-pro' }), /does not support chat/);
   assert.equal(provider.get().model, 'space-bunny');
+});
+
+// ---- Connection failures name the endpoint and the cause (UX: "Provider request failed" said nothing) ----
+
+/** What fetch() throws for a failed connection: TypeError('fetch failed') with the system error as cause. */
+function fetchFailed(code, { aggregate = false } = {}) {
+  const system = Object.assign(new Error(`connect ${code}`), { code });
+  const cause = aggregate ? Object.assign(new AggregateError([system, system], ''), { code }) : system;
+  return new TypeError('fetch failed', { cause });
+}
+
+test('a failed connection says which endpoint and why, with one hint, and never shows the key', async () => {
+  const key = 'sk-test-local-secret-1234567890';
+  const cases = [
+    ['ECONNREFUSED', 'http://127.0.0.1:47399/v1', "Couldn't reach http://127.0.0.1:47399/v1 — nothing is listening there. Is the server running?", 'NETWORK'],
+    ['ENOTFOUND', 'https://api.example.test/v1', "Couldn't find api.example.test. Check the address in the base URL, or your internet connection.", 'NETWORK'],
+    ['EAI_AGAIN', 'https://api.example.test/v1', "Couldn't look up api.example.test right now. Check your internet connection.", 'NETWORK'],
+    ['UND_ERR_CONNECT_TIMEOUT', 'https://slow.example.test/v1', "slow.example.test didn't answer within 10 s. Check that the server is up and reachable.", 'TIMEOUT'],
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', 'https://box.local:8443/v1', /^box\.local:8443's certificate isn't trusted \(self-signed or from an unknown issuer\)\. /, 'TLS'],
+    ['CERT_HAS_EXPIRED', 'https://old.example.test/v1', "old.example.test's certificate has expired. Renew it on the server, then test again.", 'TLS'],
+    ['ERR_TLS_CERT_ALTNAME_INVALID', 'https://wrong.example.test/v1', "wrong.example.test's certificate is for a different name. Check the address in the base URL.", 'TLS'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'https://127.0.0.1:47301/v1', /didn't answer over HTTPS .*use http:\/\/ instead\.$/, 'TLS'],
+    ['ECONNRESET', 'https://api.example.test/v1', "api.example.test closed the connection without answering. Try again in a moment.", 'NETWORK'],
+    ['EHOSTUNREACH', 'https://10.0.0.9/v1', /^Couldn't reach 10\.0\.0\.9 — there is no network route to it\./, 'NETWORK'],
+    ['EWHATEVER', 'https://api.example.test/v1', "Couldn't reach https://api.example.test/v1 (EWHATEVER). Check the base URL and your connection.", 'NETWORK'],
+  ];
+  for (const [code, baseUrl, message, kind] of cases) {
+    const { provider } = makeProvider({ respond: () => { throw fetchFailed(code); } });
+    await assert.rejects(() => provider.discover({ kind: 'custom', baseUrl, apiKey: key }), (error) => {
+      if (typeof message === 'string') assert.equal(error.message, message, code);
+      else assert.match(error.message, message, code);
+      assert.equal(error.code, kind, code);
+      assert.equal(error.network, code);
+      assert.equal(error.message.includes(key), false);
+      return true;
+    });
+  }
+  // localhost tries ::1 and 127.0.0.1: an AggregateError that carries the shared code.
+  const { provider } = makeProvider({ respond: () => { throw fetchFailed('ECONNREFUSED', { aggregate: true }); } });
+  await assert.rejects(() => provider.discover({ kind: 'custom', baseUrl: 'http://localhost:47399/v1' }),
+    { message: "Couldn't reach http://localhost:47399/v1 — nothing is listening there. Is the server running?" });
+  // An error without any system code still names the endpoint.
+  const bare = makeProvider({ respond: () => { throw new TypeError('fetch failed'); } });
+  await assert.rejects(() => bare.provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:47399/v1' }),
+    { message: "Couldn't reach http://127.0.0.1:47399/v1. Check the base URL and your connection.", code: 'NETWORK' });
+});
+
+test('chat replies keep retrying a refused connection and end on the specific message; certificate errors are not retried', async () => {
+  const refused = await configuredProvider(() => { throw fetchFailed('ECONNREFUSED'); });
+  await assert.rejects(() => refused.provider.complete({ requestId: 'nc-1', messages: [{ role: 'user', content: 'Hi' }] }),
+    { message: "Couldn't reach http://127.0.0.1:11434/v1 — nothing is listening there. Is the server running?", code: 'NETWORK' });
+  assert.equal(refused.calls.length, 4, 'the first try and three retries');
+  const reset = await configuredProvider(() => { throw fetchFailed('ECONNRESET'); });
+  await assert.rejects(() => reset.provider.send({ requestId: 'nc-2', messages: [{ role: 'user', content: 'Hi' }] }), { code: 'NETWORK' });
+  assert.equal(reset.calls.length, 4);
+  const tls = await configuredProvider(() => { throw fetchFailed('CERT_HAS_EXPIRED'); });
+  await assert.rejects(() => tls.provider.complete({ requestId: 'nc-3', messages: [{ role: 'user', content: 'Hi' }] }), { code: 'TLS' });
+  assert.equal(tls.calls.length, 1, 'a certificate problem does not pass in seconds');
+});
+
+test('a connection lost after the reply began says the reply was cut short', async () => {
+  const lost = () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"index":0,"delta":{"content":"Hal"}}]}\n\n'));
+      controller.error(new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) }));
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  const { provider, calls } = await configuredProvider(lost);
+  await assert.rejects(() => provider.complete({ requestId: 'cut-1', messages: [{ role: 'user', content: 'Hi' }] }, { onDelta: () => {} }),
+    { message: '127.0.0.1:11434 closed the connection before the reply finished. Try again in a moment.', code: 'NETWORK' });
+  assert.equal(calls.length, 4);
+});
+
+test('ScaleMax that cannot be reached at all says why, naming its host', async () => {
+  const { provider } = makeProvider({ respond: () => { throw fetchFailed('ENOTFOUND'); } });
+  await assert.rejects(() => provider.discover({ kind: 'scalemax', apiKey: 'sm_live_test_key_1234567890' }),
+    { message: "Couldn't find api.scalemax.pro. Check the address in the base URL, or your internet connection.", network: 'ENOTFOUND' });
+});
+
+test('the catalog shows the name an endpoint gives a model (display_name, else name), else its id', async () => {
+  const { provider } = makeProvider({
+    respond: () => jsonResponse({ object: 'list', data: [
+      { id: 'stub-coder-large', name: 'Stub Coder Large' },
+      { id: 'both', display_name: 'Display Name', name: 'Plain Name' },
+      { id: 'plain-id' },
+      { id: 'bad-name', name: 'Bad\nName' },
+    ] }),
+  });
+  const found = await provider.discover({ kind: 'custom', baseUrl: 'http://127.0.0.1:47301/v1' });
+  assert.deepEqual(found.models.map((model) => model.displayName), ['Stub Coder Large', 'Display Name', 'plain-id', 'bad-name']);
+});
+
+test('a saved custom endpoint is named after its host, never "ScaleMax"; a name the user gave stays', async () => {
+  const { provider } = profileProvider();
+  // The first provider starts as "ScaleMax"; saving a custom endpoint in it names it after the host.
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:47301/v1', model: 'stub-coder-large' });
+  assert.equal(provider.get().profileName, '127.0.0.1:47301');
+  assert.equal(provider.profiles().profiles[0].name, '127.0.0.1:47301');
+  // Another endpoint in the same provider: the automatic name follows it.
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:8080/v1', model: 'llama3' });
+  assert.equal(provider.get().profileName, '127.0.0.1:8080');
+  // Back to ScaleMax: "ScaleMax" again.
+  await provider.save({ kind: 'scalemax', baseUrl: 'https://api.scalemax.pro/v1', model: 'deepseek-v4-flash', apiKey: 'sm_live_first_key_1234567890' });
+  assert.equal(provider.get().profileName, 'ScaleMax');
+  // "Provider 2" from Add provider becomes the host when it is saved.
+  await provider.addProfile({});
+  assert.equal(provider.get().profileName, 'Provider 2');
+  await provider.save({ kind: 'custom', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: 'sk-test-local-key-123' });
+  assert.equal(provider.get().profileName, 'api.openai.com');
+  // A name the user typed is never replaced, whether given on Add or by renaming.
+  await provider.addProfile({ name: 'Local Ollama' });
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3' });
+  assert.equal(provider.get().profileName, 'Local Ollama');
+  const openai = provider.profiles().profiles.find((profile) => profile.name === 'api.openai.com');
+  await provider.selectProfile({ id: openai.id });
+  await provider.renameProfile({ id: openai.id, name: 'ScaleMax' });
+  await provider.save({ kind: 'custom', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiKey: 'sk-test-local-key-123' });
+  assert.equal(provider.get().profileName, 'ScaleMax', 'the user chose this name, even if it reads like the default');
+});
+
+test('choosing a model of a provider that is not saved yet says to save it in Assistant', async () => {
+  const { provider } = profileProvider();
+  await assert.rejects(() => provider.setModel({ model: 'stub-coder-large' }),
+    { message: 'Save "ScaleMax" in Assistant first, then choose its model here.' });
+  await provider.save({ kind: 'custom', baseUrl: 'http://127.0.0.1:47301/v1', model: 'stub-coder-large' });
+  const savedId = provider.get().profileId;
+  await provider.addProfile({});
+  await provider.selectProfile({ id: savedId });
+  const unsaved = provider.profiles().profiles.find((profile) => profile.id !== savedId);
+  await assert.rejects(() => provider.selectProfile({ id: unsaved.id, model: 'anything' }),
+    { message: 'Save "Provider 2" in Assistant first, then choose its model here.' });
+  // Once saved, the model menu's choice goes through.
+  await provider.setModel({ model: 'stub-coder-mini' });
+  assert.equal(provider.get().model, 'stub-coder-mini');
+});
+
+test('a custom endpoint saved under "ScaleMax" by an earlier version is listed by its host', () => {
+  const record = { kind: 'custom', baseUrl: 'http://127.0.0.1:47301/v1', model: 'stub-coder-large', keyStorage: 'none', enabledModels: [] };
+  const store = memoryStore({ provider: record, providerProfiles: { activeId: 'default', profiles: [{ id: 'default', name: 'ScaleMax', record }] } });
+  const { provider } = makeProvider({ store, respond: () => jsonResponse({}) });
+  assert.equal(provider.get().profileName, '127.0.0.1:47301');
+  assert.equal(provider.profiles().profiles[0].name, '127.0.0.1:47301');
 });

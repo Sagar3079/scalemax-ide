@@ -7,6 +7,7 @@ import {
   normalizeTodos, normalizeMessageImages, openTodos,
   automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
+  retryableReply,
 } from './domain.mjs';
 import {
   createReply, applyProgress, patchReply, renderLiveReply, tickReply, partialReply, renderMessageSteps, renderTodoList,
@@ -25,14 +26,17 @@ import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
-import { startScheduler } from './scheduler.js';
+import {
+  startScheduler, AUTOMATION_PERMISSION_LABELS, automationPermissionHint, automationStatusLabel, automationHistoryLine,
+  automationFolderChoices,
+} from './scheduler.js';
 import { renderAvatar } from './avatars.js';
 import { validateCustomExpert, validateCustomSkill, normalizeCustomList } from './custom-catalog.js';
 import { bindCustomCatalogUi, openCustomDialog, deleteCustom } from './custom-ui.js';
 import { bindMcpUi } from './mcp-ui.js';
 import {
   bindComposerUi, renderModelButton, renderPermission, setPermission, refreshProfiles, renderFolderMenu,
-  renderMode, setMode,
+  renderMode, setMode, syncApprovalPrompt, askBypassConsent,
 } from './composer-ui.js';
 import { bindMediaUi, mediaMode, generateFromComposer, cancelGeneration, renderMediaItems, renderMediaBar } from './media-ui.js';
 import {
@@ -68,6 +72,8 @@ const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 // A task works in one folder: chat waits until there is one, and a task's folder never changes
 // after its first message (see openFolderForTask).
 const NEEDS_FOLDER_HINT = 'Choose a project folder to start…';
+// The name of a custom slash command a user message was the prompt of (lib/slash-commands.cjs NAME).
+const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?::[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,2}$/;
 const CHAT_PLACEHOLDER = 'Describe an idea, ask a question, or plan your next step…';
 const UNSAVED_FILES = 'Save or close your unsaved files first.';
 // Error codes main reports for a folder that was moved or deleted (lib/workspace.cjs).
@@ -83,6 +89,19 @@ const REPLY_OUTCOMES = { stopped: 'stopped', failed: 'failed', closed: 'cut off'
 const TASK_MOOD_LABELS = {
   thinking: 'Working', working: 'Working', waiting: 'Waiting for you', done: 'New reply', error: 'Reply failed',
 };
+// The Assistant's provider form: a custom endpoint's starting URL, and how long Test connection
+// waits before it says the endpoint did not answer.
+const DEFAULT_CUSTOM_BASE_URL = 'https://api.openai.com/v1';
+const TEST_TIMEOUT_MS = 20_000;
+// Two base URLs name the same endpoint (spaces and trailing slashes aside).
+function sameBaseUrl(a, b) {
+  const clean = (value) => String(value ?? '').trim().replace(/\/+$/, '');
+  return clean(a) === clean(b);
+}
+// "host:port" of a typed base URL, for messages.
+function hostOf(baseUrl) {
+  try { return new URL(baseUrl).host || 'the endpoint'; } catch { return 'the endpoint'; }
+}
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -204,7 +223,17 @@ const app = {
   provider: null,
   providerKind: 'scalemax',
   providerBase: '',
+  // The saved (active) provider's models: the composer's menu, costs and context use these.
   providerCatalog: [],
+  // The Assistant form's models (saved, or from its last Test connection) and the endpoint they
+  // belong to; see syncProviderForm.
+  formCatalog: [],
+  formCatalogFor: null,
+  formEdited: false,
+  formProfileId: null,
+  formSavedKey: '',
+  // A custom endpoint's model typed as an exact ID ("Other model ID…") instead of picked.
+  modelOther: false,
   enabledModels: new Set(),
   selectedModel: '',
   attachment: null,
@@ -423,6 +452,7 @@ const app = {
         if (todos.length) normalized.todos = todos;
         const images = message.role === 'user' ? normalizeMessageImages(message.images) : [];
         if (images.length) normalized.images = images;
+        if (message.role === 'user' && typeof message.command === 'string' && COMMAND_NAME.test(message.command)) normalized.command = message.command;
         // Generated images and videos (files stay in the app's media folder).
         const media = normalizeMediaItems(message.media);
         if (media.length) normalized.media = media;
@@ -498,14 +528,10 @@ const app = {
       this.provider = null;
     }
     const meta = this.provider || {};
-    this.providerKind = meta.kind === 'custom' ? 'custom' : 'scalemax';
     this.providerCatalog = Array.isArray(meta.models) ? meta.models : [];
     this.enabledModels = new Set(Array.isArray(meta.enabledModels) ? meta.enabledModels : []);
-    // Only surface an endpoint once it has actually been verified and saved.
-    this.providerBase = meta.configured ? (meta.baseUrl || '') : '';
-    if ($('#provider-kind')) $('#provider-kind').value = this.providerKind;
+    this.syncProviderForm();
     this.renderProviderStatus();
-    this.applyProviderKind();
     this.renderProviderModels();
   },
 
@@ -513,50 +539,95 @@ const app = {
     return $('#provider-kind')?.value === 'custom' ? 'custom' : 'scalemax';
   },
 
+  // ---- The Assistant's provider form ----------------------------------------------
+  // The form shows the saved provider (its type, endpoint, model and model list) until the user
+  // changes something: typing, Test connection or picking a model marks it edited, and a render
+  // in between keeps those edits. Saving, clearing or choosing another provider shows the saved
+  // provider again. What Test connection finds stays in the form (formCatalog) until it is
+  // saved: the composer's model menu and the costs keep using the saved provider's models
+  // (providerCatalog), so they never list models that cannot be chosen yet.
+  savedFormKey(meta = this.provider || {}) {
+    return [meta.profileId, meta.kind, meta.baseUrl, meta.model, Boolean(meta.configured), (meta.models || []).length].join('|');
+  },
+
+  syncProviderForm() {
+    const meta = this.provider || {};
+    const kind = meta.kind === 'custom' ? 'custom' : 'scalemax';
+    this.formEdited = false;
+    this.formProfileId = meta.profileId ?? null;
+    this.formSavedKey = this.savedFormKey(meta);
+    this.providerKind = kind;
+    // The ScaleMax endpoint that accepted the key (Endpoint, under the key); a custom one is typed.
+    this.providerBase = kind === 'scalemax' && meta.configured ? (meta.baseUrl || '') : '';
+    this.formCatalog = Array.isArray(meta.models) ? meta.models : [];
+    this.formCatalogFor = { kind, baseUrl: meta.baseUrl || '' };
+    if ($('#provider-kind')) $('#provider-kind').value = kind;
+    if ($('#provider-base-url')) $('#provider-base-url').value = kind === 'custom' && meta.baseUrl ? meta.baseUrl : DEFAULT_CUSTOM_BASE_URL;
+    if ($('#provider-model')) $('#provider-model').value = kind === 'custom' ? (meta.model || '') : '';
+    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.selectedModel = meta.model || '';
+    // A custom model the endpoint does not list is shown as typed, under "Other model ID…".
+    this.modelOther = kind === 'custom' && Boolean(meta.model)
+      && !this.formModelOptions().some((model) => model.id === meta.model);
+    this.applyProviderKind();
+  },
+
+  // The user changed the form: it is theirs until it is saved (see syncProviderForm).
+  markFormEdited() {
+    this.formEdited = true;
+  },
+
   applyProviderKind() {
     const kind = this.providerKindValue();
     this.providerKind = kind;
     const custom = kind === 'custom';
     if ($('#provider-base-url-group')) $('#provider-base-url-group').hidden = !custom;
-    if ($('#provider-model-text-group')) $('#provider-model-text-group').hidden = !custom;
-    if ($('#provider-model-select-group')) $('#provider-model-select-group').hidden = custom;
     if ($('#provider-detected-group')) $('#provider-detected-group').hidden = custom;
-    if ($('#provider-api-key')) {
-      $('#provider-api-key').placeholder = this.provider?.hasKey
-        ? 'Key stored — leave blank to keep it'
-        : custom ? 'Your provider API key' : 'sm_live_…';
-    }
-    this.renderProviderStatus();
+    this.renderKeyPlaceholder();
+    this.renderModelSelect();
+  },
+
+  // "Key stored" only while the form still points at the endpoint that key belongs to: another
+  // endpoint never inherits it (lib/provider.cjs), so the field asks for one again.
+  renderKeyPlaceholder() {
+    const input = $('#provider-api-key');
+    if (!input) return;
+    const meta = this.provider || {};
+    const kind = this.providerKindValue();
+    const sameEndpoint = kind === (meta.kind === 'custom' ? 'custom' : 'scalemax')
+      && (kind !== 'custom' || sameBaseUrl($('#provider-base-url')?.value, meta.baseUrl));
+    input.placeholder = meta.hasKey && sameEndpoint ? 'Key stored — leave blank to keep it'
+      : kind === 'custom' ? 'Your API key' : 'sm_live_…';
   },
 
   renderProviderStatus() {
     const meta = this.provider || {};
+    // The saved provider changed under the form (another provider chosen in the model menu, a
+    // model switch, the catalog reloaded): show it, unless the user is editing this provider.
+    if ((meta.profileId ?? null) !== this.formProfileId
+      || (!this.formEdited && this.savedFormKey(meta) !== this.formSavedKey)) this.syncProviderForm();
     const configured = Boolean(meta.configured);
     const model = meta.model || '';
     const baseUrl = meta.baseUrl || '';
     const kindLabel = meta.kind === 'custom' ? 'Custom provider' : 'ScaleMax';
+    const catalog = Array.isArray(meta.models) ? meta.models : [];
+    const entry = catalog.find((item) => item.id === model);
+    const modelName = entry?.displayName && entry.displayName !== model ? `${entry.displayName} (${model})` : model;
     if ($('#app-status')) {
       $('#app-status').textContent = configured ? `${kindLabel}: ${model}` : 'Provider not configured';
     }
     if ($('#provider-status')) {
-      const count = Array.isArray(meta.models) ? meta.models.length : 0;
+      const count = catalog.length;
       $('#provider-status').textContent = configured
-        ? `Connected via ${kindLabel} — ${model} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
+        ? `Connected via ${kindLabel} — ${modelName} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
         : meta.keyStorage === 'session'
           ? 'The API key was session-only and expired after restart. Enter it again and save.'
           : 'Provider not configured. Choose a provider, add your API key, and test the connection.';
     }
     if ($('#provider-detected-base')) {
-      $('#provider-detected-base').textContent = this.providerBase || baseUrl || 'Not connected';
+      $('#provider-detected-base').textContent = this.providerBase || 'Not connected';
     }
-    if ($('#provider-base-url') && meta.kind === 'custom' && baseUrl) $('#provider-base-url').value = baseUrl;
-    if ($('#provider-model') && meta.kind === 'custom' && model) $('#provider-model').value = model;
-    if ($('#provider-api-key')) {
-      $('#provider-api-key').placeholder = meta.hasKey
-        ? 'Key stored — leave blank to keep it'
-        : meta.kind === 'custom' ? 'Your provider API key' : 'sm_live_…';
-    }
-    if (meta.kind === 'custom' || configured) this.selectedModel = model || this.selectedModel;
+    this.renderKeyPlaceholder();
     // The local-first shell reuses the sidebar identity slot for the open folder and provider state.
     this.renderSidebarFolder();
     if ($('#user-email')) $('#user-email').textContent = configured ? model : 'Provider not configured';
@@ -567,6 +638,8 @@ const app = {
         : 'Provider not configured';
     }
     this.renderModelPill();
+    // The Automation view's "Connect a provider…" line follows the provider too.
+    window.scalemaxScheduler?.refreshStatus?.();
   },
 
   // The active model is the button next to Send (src/composer-ui.js) and the statusbar.
@@ -574,6 +647,53 @@ const app = {
     const model = this.provider?.model || '';
     if ($('#statusbar-model')) $('#statusbar-model').textContent = model || 'No model';
     renderModelButton(this);
+    this.renderModelSetup();
+  },
+
+  // ---- Without a model ------------------------------------------------------------------
+  // The desktop app never answers without a model: Send waits, Enter says how to connect one
+  // (showConnectModel), the empty task lists it as a first step next to the folder, and the
+  // sidebar footer and the status bar open Assistant. The browser preview keeps its demo reply.
+
+  /** Brings the "connect a model" places up to date with the provider (renderProviderStatus). */
+  renderModelSetup() {
+    const missing = !this.canReply() && !this.isBrowserPreview();
+    if (missing) {
+      // renderProviderStatus wrote "Provider not configured" in both just before.
+      const status = $('#statusbar-provider');
+      if (status) status.replaceChildren(this.assistantLink('Provider not configured', 'statusbar-link'));
+      const footer = $('#user-email');
+      if (footer) footer.replaceChildren(this.assistantLink('Connect a model', 'sidebar-connect-link'));
+    }
+    this.renderFolderPicker();
+    this.updateSendEnabled();
+  },
+
+  // A button that opens Assistant, where a model is connected.
+  assistantLink(text, className) {
+    const button = element('button', `assistant-link ${className}`, text);
+    button.dataset.openAssistant = 'true';
+    button.title = 'Open Assistant to connect a model';
+    return button;
+  },
+
+  /** Assistant, where the provider and its key are set up. */
+  openAssistant() {
+    this.switchView('assistant');
+    $('#provider-kind')?.focus();
+  },
+
+  /** Enter without a model: the message box says so, with a way to connect one. */
+  showConnectModel() {
+    const notice = $('#connect-model-notice');
+    if (!notice) {
+      this.showToast('Connect a model to start: open Assistant.');
+      return;
+    }
+    notice.hidden = false;
+    // Said again when it already showed, for a screen reader.
+    const text = $('#connect-model-notice-text');
+    if (text) text.textContent = 'Connect a model to start';
   },
 
   // Every model the provider offers is available; there is no per-model enable step any more.
@@ -711,15 +831,25 @@ const app = {
     else node.removeAttribute('title');
   },
 
-  // The chat's first step while no folder is chosen: open one, or pick a recent one.
+  // The chat's first steps on an empty task: a folder while none is chosen (open one, or pick a
+  // recent one), and a model while none is connected.
   renderFolderPicker() {
     const picker = $('#folder-picker');
     if (!picker) return;
     const task = this.currentTask();
-    const show = this.startFolderSettled && Boolean(task) && !task.messages.length
-      && taskFolderStatus(task, this.workspace.root) === 'none';
+    const empty = this.startFolderSettled && Boolean(task) && !task.messages.length;
+    const show = empty && taskFolderStatus(task, this.workspace.root) === 'none';
+    const needsModel = empty && !this.canReply() && !this.isBrowserPreview();
     picker.hidden = !show;
-    $('.sm-home-page')?.classList.toggle('needs-folder', show);
+    const modelStep = $('#model-picker');
+    if (modelStep) modelStep.hidden = !needsModel;
+    // With both steps showing the folder comes first: its button stays the primary one.
+    const connect = $('#model-picker-open');
+    if (connect) {
+      connect.classList.toggle('primary', !show);
+      connect.classList.toggle('secondary', show);
+    }
+    $('.sm-home-page')?.classList.toggle('needs-folder', show || needsModel);
     if (!show) return;
     const recent = (Array.isArray(this.workspace.recent) ? this.workspace.recent : [])
       .filter((item) => typeof item?.path === 'string' && item.path).slice(0, PICKER_RECENT);
@@ -767,39 +897,95 @@ const app = {
     action.dataset.noticeAction = missing ? 'new-task' : 'open';
   },
 
-  // Chat-capable, available models for the Assistant's "Model for chat" picker.
-  modelOptions() {
-    const catalog = this.providerCatalog || [];
-    return catalog.filter((model) => model.available !== false && model.chat !== false);
+  // Chat-capable, available models for the Assistant's "Model for chat" picker: those of the
+  // endpoint the form shows (saved, or found by its last Test connection). After the type or the
+  // base URL changes, the list belongs to another endpoint and none are offered until a new test.
+  formModelOptions() {
+    const source = this.formCatalogFor;
+    const kind = this.providerKindValue();
+    if (!source || source.kind !== kind) return [];
+    const typed = $('#provider-base-url')?.value;
+    if (kind === 'custom' && typed !== undefined && !sameBaseUrl(typed, source.baseUrl)) return [];
+    return (Array.isArray(this.formCatalog) ? this.formCatalog : [])
+      .filter((model) => model.available !== false && model.chat !== false);
+  },
+
+  // The model the form would save: the one picked in the list, or for a custom endpoint the
+  // exact ID typed (no list, or "Other model ID…").
+  formModel() {
+    const custom = this.providerKindValue() === 'custom';
+    const options = this.formModelOptions();
+    if (custom && (this.modelOther || !options.length)) return $('#provider-model')?.value.trim() || '';
+    return options.some((model) => model.id === this.selectedModel) ? this.selectedModel : '';
   },
 
   renderModelSelect() {
+    const custom = this.providerKindValue() === 'custom';
+    const options = this.formModelOptions();
+    const typing = custom && (this.modelOther || !options.length);
+    // ScaleMax always lists its models (after Test connection); a custom endpoint shows the list
+    // once a test found models, and the exact-ID field when it listed none or "Other" is chosen.
+    if ($('#provider-model-select-group')) $('#provider-model-select-group').hidden = custom && !options.length;
+    if ($('#provider-model-text-group')) $('#provider-model-text-group').hidden = !typing;
+    if ($('#provider-model-hint')) {
+      $('#provider-model-hint').textContent = options.length
+        ? 'Type the exact model ID the endpoint expects.'
+        : 'Test the connection to list the endpoint\'s models, or type the exact ID it expects.';
+    }
     const button = $('#model-picker-button');
     const list = $('#model-picker-list');
     if (!button || !list) return;
-    const options = this.modelOptions();
-    if (this.selectedModel && !options.some((model) => model.id === this.selectedModel)) {
-      this.selectedModel = '';
+    const other = custom && this.modelOther && options.length > 0;
+    // The choice is kept while another endpoint is shown; formModel() only uses a listed one.
+    const chosen = other ? null : options.find((model) => model.id === this.selectedModel) || null;
+    if (chosen) {
+      const name = chosen.displayName || chosen.id;
+      // The space only separates the two in the accessible name (a flex box drops it on screen).
+      button.replaceChildren(element('span', 'picker-button-name', name),
+        ...(name !== chosen.id ? [' ', element('span', 'picker-button-id', chosen.id)] : []));
+    } else {
+      button.textContent = other ? 'Other model ID…'
+        : (options.length ? 'Choose a model' : 'Test the connection to load models');
     }
-    const active = this.selectedModel || this.provider?.model || '';
-    const chosen = options.find((model) => model.id === active);
-    if (chosen) this.selectedModel = chosen.id;
-    button.textContent = chosen
-      ? (chosen.displayName && chosen.displayName !== chosen.id
-        ? `${chosen.displayName} — ${chosen.id}` : chosen.id)
-      : (options.length ? 'Choose a model' : 'Test the connection to load models');
     button.disabled = options.length === 0;
-    list.replaceChildren(...options.map((model) => {
+    const nodes = options.map((model) => {
       const option = element('button', 'picker-option');
       option.dataset.modelId = model.id;
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(model.id === chosen?.id));
-      option.append(
-        element('span', 'picker-option-name', model.displayName || model.id),
-        element('span', 'picker-option-id', model.id),
-      );
+      const name = model.displayName || model.id;
+      // The name the endpoint gives, and the ID once below it (not twice when it gives none).
+      option.append(element('span', 'picker-option-name', name));
+      if (name !== model.id) option.append(' ', element('span', 'picker-option-id', model.id));
       return option;
-    }));
+    });
+    if (custom && options.length) {
+      const option = element('button', 'picker-option picker-option-other');
+      option.dataset.modelOther = 'true';
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(other));
+      option.append(element('span', 'picker-option-name', 'Other model ID…'), ' ',
+        element('span', 'picker-option-note', 'Type an ID the endpoint does not list'));
+      nodes.push(option);
+    }
+    list.replaceChildren(...nodes);
+  },
+
+  // Picks a listed model, or "Other model ID…" (the ID field, focused).
+  pickFormModel(option) {
+    this.markFormEdited();
+    if (option.dataset.modelOther === 'true') {
+      this.modelOther = true;
+      const input = $('#provider-model');
+      if (input && !input.value.trim() && this.selectedModel) input.value = this.selectedModel;
+    } else {
+      this.modelOther = false;
+      this.selectedModel = option.dataset.modelId;
+    }
+    this.toggleModelPicker(false);
+    this.renderModelSelect();
+    if (this.modelOther) $('#provider-model')?.focus();
+    else $('#model-picker-button')?.focus();
   },
 
   toggleModelPicker(open) {
@@ -807,6 +993,7 @@ const app = {
     const button = $('#model-picker-button');
     if (!list || !button) return;
     const next = open ?? list.hidden;
+    if (!next && list.hidden) return;
     list.hidden = !next;
     button.setAttribute('aria-expanded', String(next));
     // The list opens in the top layer (a manual popover), so the Assistant page's scrolling and
@@ -817,6 +1004,31 @@ const app = {
       else if (!next && shown) list.hidePopover();
     }
     if (next) this.placeModelPicker();
+  },
+
+  // Arrow keys move through the options, Home/End jump, Escape closes back to the button.
+  modelPickerKeys(event) {
+    const list = $('#model-picker-list');
+    const button = $('#model-picker-button');
+    if (!list || !button) return;
+    if (event.key === 'Escape' && !list.hidden) {
+      event.preventDefault();
+      this.toggleModelPicker(false);
+      button.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = [...list.querySelectorAll('.picker-option')];
+    if (!options.length) return;
+    event.preventDefault();
+    if (list.hidden) this.toggleModelPicker(true);
+    const at = options.indexOf(document.activeElement);
+    const selected = options.findIndex((option) => option.getAttribute('aria-selected') === 'true');
+    const from = at >= 0 ? at : (selected >= 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp') ? selected : -1);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+      : event.key === 'ArrowDown' ? (at < 0 && from >= 0 ? from : Math.min(options.length - 1, from + 1))
+        : (at < 0 && from >= 0 ? from : Math.max(0, from - 1));
+    options[index]?.focus();
   },
 
   // Under the button, or above it when there is more room there; never past the window, scrolling
@@ -842,17 +1054,38 @@ const app = {
     list.style.setProperty('width', `${Math.round(rect.width)}px`);
   },
 
+  // Says what is missing before Save, next to the field that needs it.
+  formProblem(message, focus) {
+    this.showToast(message);
+    if ($('#provider-status')) $('#provider-status').textContent = message;
+    focus?.focus();
+  },
+
   async saveProvider() {
     const bridge = this.getProviderBridge();
     if (!bridge?.save) { this.showToast('Provider connections require the desktop app'); return; }
     const kind = this.providerKindValue();
-    const model = kind === 'custom' ? ($('#provider-model')?.value.trim() || '') : (this.selectedModel || '');
+    const options = this.formModelOptions();
+    const model = this.formModel();
+    if (!model) {
+      if (kind === 'custom' && !options.length) {
+        this.formProblem('Type the model ID, or Test connection to list the endpoint\'s models.', $('#provider-model'));
+      } else if (kind === 'custom' && this.modelOther) {
+        this.formProblem('Type the model ID, or pick one of the listed models.', $('#provider-model'));
+      } else if (!options.length) {
+        this.formProblem('Test the connection first: it loads the models to choose from.', $('#provider-test'));
+      } else {
+        this.formProblem('Choose a model to use for chat.', $('#model-picker-button'));
+      }
+      return;
+    }
     const input = {
       kind,
       model,
       // Kept for the stored record's shape: the chat model is the only "enabled" one.
-      enabledModels: kind === 'custom' || !model ? [] : [model],
-      models: this.providerCatalog || [],
+      enabledModels: kind === 'custom' ? [] : [model],
+      // The list the form shows belongs to this endpoint (formModelOptions checked it).
+      models: options.length ? this.formCatalog : [],
     };
     if (kind === 'custom') input.baseUrl = $('#provider-base-url')?.value.trim() || '';
     else if (this.providerBase) input.baseUrl = this.providerBase;
@@ -869,11 +1102,10 @@ const app = {
     this.provider = result.data;
     this.providerCatalog = Array.isArray(result.data.models) ? result.data.models : this.providerCatalog;
     this.enabledModels = new Set(Array.isArray(result.data.enabledModels) ? result.data.enabledModels : []);
-    this.providerBase = result.data.baseUrl || this.providerBase;
-    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.syncProviderForm();
     this.renderProviderStatus();
     this.renderProviderModels();
-    this.showToast('Provider settings saved');
+    this.showToast(`Provider saved: ${result.data.profileName || 'provider'} · ${result.data.model}`);
     void refreshProfiles(this).then(() => this.renderProfiles());
   },
 
@@ -894,6 +1126,7 @@ const app = {
     if (!bridge?.discover) { this.showToast('Provider connections require the desktop app'); return; }
     const button = $('#provider-test');
     if (button) button.disabled = true;
+    this.markFormEdited();
     this.setTestDot('pending');
     if ($('#provider-status')) $('#provider-status').textContent = 'Testing connection and loading models…';
     try {
@@ -901,11 +1134,15 @@ const app = {
       const apiKey = $('#provider-api-key')?.value ?? '';
       if (apiKey.trim()) input.apiKey = apiKey.trim();
       if (input.kind === 'custom') input.baseUrl = $('#provider-base-url')?.value.trim() || '';
+      const where = input.kind === 'custom' ? hostOf(input.baseUrl) : 'ScaleMax';
+      // What the user picked or typed before testing again stays chosen when the endpoint lists it.
+      const wanted = this.formModel() || this.selectedModel || this.provider?.model || '';
       let slowTimer;
       const result = await Promise.race([
         bridge.discover(input),
         new Promise((resolve) => {
-          slowTimer = setTimeout(() => resolve({ ok: false, error: { message: 'The provider did not respond in time.' } }), 20000);
+          slowTimer = setTimeout(() => resolve({ ok: false, error: {
+            message: `${where} didn't answer within ${TEST_TIMEOUT_MS / 1000} s. Check that the server is running and reachable.` } }), TEST_TIMEOUT_MS);
         }),
       ]).finally(() => clearTimeout(slowTimer));
       if (!result?.ok) {
@@ -915,26 +1152,26 @@ const app = {
         this.showToast(message);
         return;
       }
-      this.providerBase = result.data.baseUrl;
-      this.providerCatalog = Array.isArray(result.data.models) ? result.data.models : [];
-      // Keep the chosen model if the provider still offers it; otherwise pick the first chat model.
-      const options = this.modelOptions();
-      const keep = options.find((model) => model.id === (this.selectedModel || this.provider?.model));
-      const first = keep || options[0];
+      if (result.data.kind === 'scalemax') {
+        this.providerBase = result.data.baseUrl;
+        if ($('#provider-detected-base')) $('#provider-detected-base').textContent = result.data.baseUrl;
+      }
+      this.formCatalog = Array.isArray(result.data.models) ? result.data.models : [];
+      this.formCatalogFor = { kind: result.data.kind, baseUrl: result.data.baseUrl };
+      // The previous choice when the endpoint still lists it, else its first chat model, so Save
+      // works right away. An exact ID typed for a custom endpoint that it does not list is kept.
+      const options = this.formModelOptions();
+      const keep = options.find((model) => model.id === wanted);
+      const typedOther = result.data.kind === 'custom' && !keep && Boolean($('#provider-model')?.value.trim());
+      const first = keep || (typedOther ? null : options.find((model) => model.chat === true) || options[0]);
+      this.modelOther = typedOther;
       this.selectedModel = first ? first.id : '';
-      this.enabledModels = new Set(first ? [first.id] : []);
-      this.provider = {
-        ...(this.provider || {}),
-        kind: result.data.kind,
-        baseUrl: result.data.baseUrl,
-        models: this.providerCatalog,
-        enabledModels: [...this.enabledModels],
-      };
-      this.renderProviderModels();
-      this.renderProviderStatus();
-      const count = this.providerCatalog.length;
+      this.renderModelSelect();
+      const count = this.formCatalog.length;
+      const chosenName = first ? (first.displayName || first.id) : '';
       if ($('#provider-status')) {
-        $('#provider-status').textContent = `Connection succeeded — ${count} model${count === 1 ? '' : 's'} found at ${result.data.baseUrl}.`;
+        $('#provider-status').textContent = `Connection succeeded — ${count} model${count === 1 ? '' : 's'} found at ${result.data.baseUrl}.`
+          + (first ? ` ${chosenName} is selected; Save provider to use it.` : typedOther ? ' Save provider to use the model ID you typed.' : '');
       }
       this.setTestDot('ok');
       this.showToast('Provider connection succeeded');
@@ -952,8 +1189,8 @@ const app = {
     this.provider = result.data;
     this.providerCatalog = [];
     this.enabledModels = new Set();
-    this.providerBase = '';
-    if ($('#provider-api-key')) $('#provider-api-key').value = '';
+    this.syncProviderForm();
+    this.setTestDot('');
     this.renderProviderStatus();
     this.renderProviderModels();
     this.showToast('Provider cleared');
@@ -973,18 +1210,32 @@ const app = {
       event.preventDefault();
       void this.clearProvider();
     });
-    $('#provider-kind')?.addEventListener('change', () => this.applyProviderKind());
+    $('#provider-kind')?.addEventListener('change', () => {
+      this.markFormEdited();
+      this.applyProviderKind();
+    });
+    // A new base URL is another endpoint: its models are listed after a test of their own.
+    $('#provider-base-url')?.addEventListener('input', () => {
+      this.markFormEdited();
+      this.renderKeyPlaceholder();
+      this.renderModelSelect();
+    });
+    for (const selector of ['#provider-api-key', '#provider-model']) {
+      $(selector)?.addEventListener('input', () => this.markFormEdited());
+    }
     $('#model-picker-button')?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       this.toggleModelPicker();
     });
+    $('#model-picker')?.addEventListener('keydown', (event) => this.modelPickerKeys(event));
     $('#model-picker-list')?.addEventListener('click', (event) => {
-      const option = event.target.closest('.picker-option[data-model-id]');
-      if (!option) return;
-      this.selectedModel = option.dataset.modelId;
-      this.toggleModelPicker(false);
-      this.renderModelSelect();
+      const option = event.target.closest('.picker-option');
+      if (option) this.pickFormModel(option);
+    });
+    // Leaving the picker with Tab closes it.
+    $('#model-picker')?.addEventListener('focusout', (event) => {
+      if (!event.relatedTarget || !event.relatedTarget.closest?.('#model-picker')) this.toggleModelPicker(false);
     });
     document.addEventListener('click', (event) => {
       if (!event.target.closest('#model-picker')) this.toggleModelPicker(false);
@@ -1464,6 +1715,20 @@ const app = {
       if (event.currentTarget.dataset.noticeAction === 'new-task') this.newTask();
       else void this.openTaskFolder();
     });
+    // Connecting a model: the empty task's step, the message box's prompt, the sidebar footer
+    // and the status bar all open Assistant.
+    $('#model-picker-open')?.addEventListener('click', () => this.openAssistant());
+    $('#connect-model-notice-action')?.addEventListener('click', () => this.openAssistant());
+    for (const selector of ['#statusbar-provider', '#user-email']) {
+      $(selector)?.addEventListener('click', (event) => {
+        if (event.target.closest?.('[data-open-assistant]')) this.openAssistant();
+      });
+    }
+    // Retry under a reply that failed.
+    $('#chat-messages')?.addEventListener('click', (event) => {
+      const retry = event.target.closest?.('.msg-retry-btn[data-task-id]');
+      if (retry && !retry.disabled) void this.retryReply(retry.dataset.taskId);
+    });
     this.bindComposerHint();
     $('#chat-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -1660,6 +1925,8 @@ const app = {
     this.renderReplyState();
     this.renderChat();
     this.renderFolder();
+    // A tool call of this task that waited while it was in the background asks now (src/composer-ui.js).
+    syncApprovalPrompt();
   },
 
   // Runs inside runFolderJob (see selectTask): opens the task's folder unless a newer selection or
@@ -1867,6 +2134,8 @@ const app = {
     const reply = this.currentReply();
     // The companion rests under the newest reply when none is running (a running one has its own).
     const companionAt = !reply && messages[messages.length - 1]?.role === 'assistant' ? messages.length - 1 : -1;
+    // The newest reply failed: Retry asks for it again (none while a reply of this task runs).
+    const retryAt = reply ? -1 : retryableReply(task)?.index ?? -1;
     container.replaceChildren(...messages.map((message, index) => {
       const bubble = element('div', `chat-bubble ${message.role}`);
       bubble.style.whiteSpace = 'pre-wrap';
@@ -1924,9 +2193,19 @@ const app = {
         if (card) bubble.append(card);
       }
       if (message.notice) {
-        const notice = element('span', 'msg-notice', message.notice);
+        // A reply that failed says why in the failure's red; other notes stay quiet.
+        const failed = message.role === 'assistant' && message.interrupted === 'failed';
+        const notice = element('span', `msg-notice${failed ? ' is-failed' : ''}`, message.notice);
         notice.setAttribute('role', 'note');
-        bubble.append(notice);
+        if (index === retryAt) {
+          const row = element('div', 'msg-failure');
+          row.append(notice, this.renderRetryButton(task));
+          bubble.append(row);
+        } else {
+          bubble.append(notice);
+        }
+      } else if (index === retryAt) {
+        bubble.append(this.renderRetryButton(task));
       }
       if (index === companionAt) bubble.append(this.renderCompanionMoment(task, message));
       // A reply that was stopped or failed can still carry billed usage, so the footer shows for
@@ -2036,6 +2315,19 @@ const app = {
       row.dataset.state = 'idle';
     }, COMPANION_MOMENT_MS - since);
     return row;
+  },
+
+  /** Retry under a failed reply (retryReply); it waits while anything else runs in the task. */
+  renderRetryButton(task) {
+    const button = element('button', 'button secondary compact msg-retry-btn', 'Retry');
+    button.dataset.taskId = task.id;
+    button.title = 'Ask for this reply again, without sending your message twice';
+    button.disabled = this.retryBusy(task.id);
+    return button;
+  },
+  // Something else runs in the task (a reply, the preview's demo reply, a compaction).
+  retryBusy(taskId) {
+    return Boolean(this.replies.has(taskId) || this.demoBusy || this.compactingTasks.has(taskId));
   },
 
   // ---- Replies in progress (src/reply-ui.js): one per task, several tasks at once ----------
@@ -2191,6 +2483,8 @@ const app = {
     if (todos.length) message.todos = todos;
     const images = role === 'user' ? normalizeMessageImages(extra.images) : [];
     if (images.length) message.images = images;
+    // The custom slash command this message is the prompt of: a Retry sends it as that command again.
+    if (role === 'user' && typeof extra.command === 'string' && COMMAND_NAME.test(extra.command)) message.command = extra.command;
     const media = normalizeMediaItems(extra.media);
     if (media.length) message.media = media;
     if (typeof extra.mediaRequest === 'string' && extra.mediaRequest) message.mediaRequest = extra.mediaRequest.slice(0, 300);
@@ -2344,27 +2638,19 @@ const app = {
         return sent;
       }
     }
-    // A task that asked for a worktree of its own gets it before its first message (src/gitflow-ui.js).
-    if (wantsWorktree(task) && !(await prepareWorktree(this, task, text))) return false;
-    // No chat without a folder, and a task only sends from its own folder.
-    if (taskFolderStatus(task, this.workspace.root) === 'none') {
-      this.showToast('Choose a project folder first.');
-      this.focusFolderChoice();
+    // No model connected: nothing is sent and nothing changes. The draft stays in the message
+    // box, the task keeps its title and folder, and the message box says how to connect one. Only
+    // the browser preview answers with a labelled demo reply (src/web-shim.js has no model).
+    if (!this.canReply() && !this.isBrowserPreview()) {
+      this.showConnectModel();
       return false;
     }
-    if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
-      const outcome = await this.openTaskFolder(task);
-      // Deleted while its folder opened: nothing is sent for a task that is gone.
-      if (!this.tasks.includes(task) || this.leaving) return false;
-      if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.activeRequestId || this.demoBusy) {
-        // The switch already said why when it was refused or failed.
-        if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
-        return false;
-      }
-    }
+    // A task that asked for a worktree of its own gets it before its first message (src/gitflow-ui.js).
+    if (wantsWorktree(task) && !(await prepareWorktree(this, task, text))) return false;
     // The reply works in this folder, through a session of its own in main, even if another
     // task's folder is opened while it runs. main refuses folders never opened (FOLDER_NOT_OPENED).
-    const folder = task.folder?.path || this.workspace.root;
+    const folder = await this.replyFolder(task);
+    if (!folder) return false;
     // `/compact` is an exact app command, not a prompt: never append or send it as a user turn.
     if (text === '/compact') {
       const compacted = await this.compactCurrentTask();
@@ -2381,24 +2667,25 @@ const app = {
       this.updateSendEnabled();
       return Boolean(sent);
     }
-    const bridge = this.getProviderBridge();
+    const live = this.canReply();
     // A project's own hooks run only once the user allowed them as they are (src/hooks-ui.js asks).
-    if (bridge?.send && this.provider?.configured) await reviewProjectHooks(this, folder);
+    if (live) await reviewProjectHooks(this, folder);
     // Check automatic compaction against this pending user text before it is persisted/cleared.
     // If compaction fails, the exact draft remains in the composer and no hidden task turn exists.
-    if (bridge?.send && this.provider?.configured && !(await this.compactIfNeeded(task, text))) return false;
+    if (live && !(await this.compactIfNeeded(task, text))) return false;
     // Deleted while older context was compacted: a reply started now could neither be seen nor
     // stopped, so nothing is sent and the draft stays in the message box.
     if (!this.tasks.includes(task) || this.leaving) return false;
     // Pictures waiting in the message box go with this message (src/context-ui.js).
     const context = internal ? { images: [] } : takeComposerContext(this);
-    if (!this.appendMessage('user', text, taskId, { images: context.images })) return false;
+    // A custom command's name stays with its prompt, so a Retry asks main for the same command.
+    if (!this.appendMessage('user', text, taskId, { images: context.images, command })) return false;
     // Only the sent text is cleared; "/init" puts the user's draft back itself.
     if (input.value.trim() === text) input.value = '';
     this.updateSendEnabled();
 
-    if (!bridge?.send || !this.provider?.configured) {
-      // No provider yet — keep the workspace demoable with a labelled reply.
+    if (!live) {
+      // The browser preview only: a labelled demo reply keeps it usable without a model.
       if (this.demoBusy) return true;
       this.demoBusy = true;
       this.updateSendEnabled();
@@ -2409,7 +2696,79 @@ const app = {
       }, 400);
       return true;
     }
+    return this.runReply(task, { text, attachment, command, folder });
+  },
 
+  /** Whether a model is connected, so a message gets a real reply. */
+  canReply() {
+    return Boolean(this.getProviderBridge()?.send && this.provider?.configured);
+  },
+
+  /** The browser preview (src/web-shim.js) instead of the desktop app. */
+  isBrowserPreview() {
+    try {
+      return window.scalemaxAPI?.getPlatform?.() === 'browser';
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * The folder a reply of `task` works in, once it is the open one: a task without a folder asks
+   * for one, and a task whose folder is not open opens it first. '' when nothing can be sent
+   * (the reason was already shown).
+   */
+  async replyFolder(task) {
+    // No chat without a folder, and a task only sends from its own folder.
+    if (taskFolderStatus(task, this.workspace.root) === 'none') {
+      this.showToast('Choose a project folder first.');
+      this.focusFolderChoice();
+      return '';
+    }
+    if (taskFolderStatus(task, this.workspace.root) === 'mismatch') {
+      const outcome = await this.openTaskFolder(task);
+      // Deleted while its folder opened: nothing is sent for a task that is gone.
+      if (!this.tasks.includes(task) || this.leaving) return '';
+      if (taskFolderStatus(task, this.workspace.root) !== 'ready' || this.replies.has(task.id) || this.demoBusy) {
+        // The switch already said why when it was refused or failed.
+        if (!['unsaved', 'missing', 'failed'].includes(outcome)) this.showToast(`This task works in "${task.folder.name}". Open it first.`);
+        return '';
+      }
+    }
+    return task.folder?.path || this.workspace.root;
+  },
+
+  /**
+   * Retry under a reply that failed (the task's last message): the same request for the same
+   * task again, without a second user message. The failed reply stays where it is, with what it
+   * had written and done; the model is told it broke off (domain.mjs historyMessages `retry`).
+   */
+  async retryReply(taskId = this.currentTaskId) {
+    const task = this.tasks.find((item) => item.id === taskId);
+    const target = retryableReply(task);
+    if (!task || !target || this.replies.has(taskId) || this.demoBusy || this.compactingTasks.has(taskId)) return false;
+    if (!this.canReply()) {
+      this.showConnectModel();
+      return false;
+    }
+    const folder = await this.replyFolder(task);
+    if (!folder) return false;
+    await reviewProjectHooks(this, folder);
+    if (!(await this.compactIfNeeded(task))) return false;
+    // Something else started meanwhile (another Retry, a message), or the task is gone.
+    if (!this.tasks.includes(task) || this.leaving || this.replies.has(taskId) || this.demoBusy
+      || retryableReply(task)?.message !== target.message) return false;
+    const command = typeof target.asked.command === 'string' ? target.asked.command : '';
+    return this.runReply(task, { text: target.asked.text, command, folder, retry: true });
+  },
+
+  /**
+   * The reply to the task's newest user message (`text`), or with `retry` to the one before a
+   * reply that failed. Resolves to true once it ended, however it ended.
+   */
+  async runReply(task, { text, attachment = null, command = '', folder, retry = false }) {
+    const taskId = task.id;
+    const bridge = this.getProviderBridge();
     // The reply shows at once; the task can be left while it works (the sidebar shows a spinner).
     const requestId = `chat-${taskId}-${Date.now()}`;
     const live = this.beginReply(taskId, requestId);
@@ -2426,7 +2785,7 @@ const app = {
       // app-owned summary plus an uncompacted raw tail; interrupted replies still get their note.
       // A model that cannot read pictures (its catalog entry, or a refusal this session) gets a
       // note where they were instead.
-      const messages = taskHistoryMessages(task, { images: picturesAllowed(this) });
+      const messages = taskHistoryMessages(task, { images: picturesAllowed(this), retry });
       if (attachment) {
         const last = messages[messages.length - 1];
         const block = `Attached file: ${attachment.path}\n\n\`\`\`\n${attachment.content}\n\`\`\``;
@@ -2462,7 +2821,8 @@ const app = {
       // Main reads the command's file again for its mode, model and allowed-tools.
       if (command) payload.command = command;
       // The to-do list the previous reply left open, so this one picks it up (lib/todo-tools.cjs).
-      const todos = openTodos({ messages: task.messages.slice(0, -1) });
+      // A retry picks up the list of the reply that failed.
+      const todos = openTodos({ messages: retry ? task.messages : task.messages.slice(0, -1) });
       if (todos.length) payload.todos = todos;
       const temperature = requestTemperature(this.settings);
       if (temperature !== undefined) payload.temperature = temperature;
@@ -2489,9 +2849,11 @@ const app = {
       let reason = result?.error?.message || 'Provider request failed';
       // The model cannot read pictures: from now on this task's pictures are left out for it (with
       // a note to the model), so the next message goes through instead of failing the same way.
-      if (result?.error?.code === 'IMAGES_UNSUPPORTED' && this.provider?.model) {
+      // That changes what later messages send, so it is also said in a toast.
+      const picturesRefused = result?.error?.code === 'IMAGES_UNSUPPORTED' && Boolean(this.provider?.model);
+      if (picturesRefused) {
         this.noPictureModels.add(this.provider.model);
-        reason = `${reason} Pictures are left out for this model from now on: send your message again to go on without them.`;
+        reason = `${reason} Pictures are left out for this model from now on: press Retry, or send your message again, to go on without them.`;
       }
       const failureMetrics = normalizeMetrics(result?.error?.metrics);
       let partial = partialReply(reply);
@@ -2510,6 +2872,10 @@ const app = {
       // A provider can have billed completed tool rounds even when the next round failed before
       // producing visible text. Keep an explicit partial reply with its incomplete accounting.
       if (!partial && failureMetrics) partial = { text: '', steps: [], reasoning: '', changes: null };
+      // A reply that failed always stays in the task, even with nothing written: the user sees
+      // why under it (with Retry), the sidebar marks the task failed, and the next request tells
+      // the model the reply broke off. Only a Stop before anything was written leaves nothing.
+      if (!partial && !cancelled) partial = { text: '', steps: [], reasoning: '', changes: null, todos: [] };
       if (partial) {
         const notice = cancelled
           ? (partial.text ? 'Stopped before the reply was finished.' : 'Stopped before an answer was written.')
@@ -2519,10 +2885,10 @@ const app = {
           changes: partial.changes, metrics: failureMetrics, plan: planning && Boolean(partial.text), todos: partial.todos,
         });
         // The notice under the reply says why; a task in the background also gets a toast.
-        if (!cancelled && taskId !== this.currentTaskId) say(reason);
+        if (!cancelled && (taskId !== this.currentTaskId || picturesRefused)) say(reason);
       } else {
         if (taskId === this.currentTaskId) this.renderChat();
-        say(cancelled ? 'Response cancelled' : reason);
+        say('Response cancelled');
       }
       // A stopped step may still have changed files, so every Workspace step counts here.
       this.showReplyChanges(folder, { changes: partial?.changes, steps: partial?.steps });
@@ -2664,8 +3030,17 @@ const app = {
     const busy = Boolean(this.activeRequestId || this.demoBusy || this.compactingTasks.has(this.currentTaskId));
     // No chat (or image / video) without a folder, and a task only sends from its own folder.
     const ready = taskFolderStatus(this.currentTask(), this.workspace.root) === 'ready';
+    // Nor without a model (the browser preview answers with its demo reply instead).
+    const noModel = !this.canReply() && !this.isBrowserPreview();
     if (input) input.disabled = false;
-    if (send) send.disabled = busy || !ready || !input?.value.trim() || composerBusy();
+    if (send) {
+      send.disabled = busy || !ready || noModel || !input?.value.trim() || composerBusy();
+      send.title = noModel ? 'Connect a model in Assistant to send' : '';
+    }
+    // Connected now: the prompt to connect one has done its job.
+    const connect = $('#connect-model-notice');
+    if (connect && !noModel) connect.hidden = true;
+    for (const retry of $$('.msg-retry-btn')) retry.disabled = this.retryBusy(retry.dataset.taskId);
     const compact = $('#compact-btn');
     if (compact) {
       compact.disabled = busy || !ready || !this.provider?.configured || !compactionBoundary(this.currentTask());
@@ -2708,6 +3083,7 @@ const app = {
     if (!$('#folder-menu')?.matches(':popover-open')) $('#folder-chip')?.click();
   },
 
+  // The browser preview's answer without a model (src/web-shim.js); the desktop app never gives one.
   localDemoReply(text) {
     return `Local demo response — configure a provider in Assistant for real AI replies.\n\n${this.simulateResponse(text)}`;
   },
@@ -2971,6 +3347,7 @@ const app = {
   renderAutomations() {
     const list = $('#automation-list');
     if (!list) return;
+    const composerPermission = AUTOMATION_PERMISSION_LABELS[effectivePermission(this.settings)];
     list.replaceChildren(...this.automations.map((automation) => {
       const row = element('div', 'automation-item');
       row.dataset.automationId = automation.id;
@@ -2982,14 +3359,18 @@ const app = {
       const next = automation.active && Number.isFinite(automation.nextRun)
         ? new Date(automation.nextRun).toLocaleString() : (automation.active ? 'not scheduled' : 'paused');
       const last = Number.isFinite(automation.lastRun) ? ` · Last: ${new Date(automation.lastRun).toLocaleString()}` : '';
-      const status = element('div', 'status-text', `${automation.lastStatus || 'idle'}${last} · Next: ${next}`);
+      const status = element('div', 'status-text', `${automationStatusLabel(automation.lastStatus)}${last} · Next: ${next}`);
       info.append(status);
-      // Where it runs: fixed when it was made, never the folder that happens to be open.
+      // Where it runs and under which permission: fixed when it was made or edited, never the
+      // folder or permission that happen to be current when it fires.
+      const permission = AUTOMATION_PERMISSION_LABELS[automation.permission]
+        ? AUTOMATION_PERMISSION_LABELS[automation.permission] : `Permission: the composer's (${composerPermission})`;
+      const mode = automation.mode === 'coding' ? 'Coding' : 'Working';
       const where = element('div', 'status-text automation-where', !('folder' in automation)
         ? 'Runs in whichever folder is open when it fires. Edit and save it to fix it to the open folder.'
         : automation.folder
-          ? `Runs in ${automation.folder.name} · ${automation.mode === 'coding' ? 'Coding' : 'Working'}`
-          : 'No folder: runs without file tools');
+          ? `Runs in ${automation.folder.name} · ${mode} · ${permission}`
+          : `No folder: runs without file tools · ${mode} · ${permission}`);
       where.title = automation.folder ? automation.folder.path : ('folder' in automation ? 'Made while no folder was open' : '');
       info.append(where);
       if (automation.lastStatus === 'error' || automation.lastStatus === 'interrupted') {
@@ -3000,15 +3381,17 @@ const app = {
         }
       }
       const history = Array.isArray(automation.history) ? automation.history : [];
+      // The last run answered, but tool calls it needed were not allowed: it did not do all of it.
+      if (automation.lastStatus === 'denied') {
+        const note = history[0]?.status === 'denied' && history[0].note ? `${history[0].note} · ` : '';
+        info.append(element('div', 'status-text automation-warning',
+          `${note}Nothing that needed approval was done. Run it now with ScaleMax open to approve, or edit its permission.`));
+      }
       if (history.length) {
         const details = element('details', 'automation-history');
         details.append(element('summary', '', `Run history (${history.length})`));
         const items = element('ol', 'automation-history-list');
-        for (const entry of history) {
-          const item = element('li', `automation-history-${entry.status}`,
-            `${new Date(entry.time).toLocaleString()} · ${entry.status}${entry.preview ? ` — ${entry.preview}` : ''}`);
-          items.append(item);
-        }
+        for (const entry of history) items.append(element('li', `automation-history-${entry.status}`, automationHistoryLine(entry)));
         details.append(items);
         info.append(details);
       }
@@ -3038,6 +3421,10 @@ const app = {
       row.append(info, element('span', 'badge', schedule), dot, runNow, toggle, edit, remove);
       return row;
     }));
+    // A new schedule's form follows the current task until the user changes its fields.
+    this.applyAutomationDefaults();
+    // "Next run: …" above the form changes with every pause, resume, edit and delete too.
+    window.scalemaxScheduler?.refreshStatus?.();
   },
 
   describeSchedule(automation) {
@@ -3070,10 +3457,137 @@ const app = {
     if (hint) hint.textContent = schedule === 'hourly' ? '(minute past each hour)' : '';
   },
 
+  // The folder a new schedule works in by default: the current task's, else the open one.
+  automationDefaultFolder() {
+    // Not a folder that is gone (a removed worktree, a deleted project).
+    const folder = this.currentTask()?.folder;
+    return (folder && !this.missingFolders.has(folder.path) ? folder : null) || this.rootFolder() || null;
+  },
+
+  /**
+   * The Folder field's choices: the current task's folder, recent folders, folders other
+   * automations use, "No folder" ('') and "Choose a folder…". `selected` is a path, or '' for none;
+   * `extra` adds a folder that is not among the others (one picked with Choose a folder…).
+   */
+  fillAutomationFolders(selected, extra = null) {
+    const select = $('#automation-folder');
+    if (!select) return;
+    const choices = automationFolderChoices({
+      current: this.automationDefaultFolder(),
+      recent: this.workspace.recent,
+      automations: this.automations,
+    });
+    if (extra && !choices.some((item) => item.path === extra.path)) choices.push(extra);
+    if (selected && !choices.some((item) => item.path === selected)) {
+      choices.push({ name: selected.split('/').filter(Boolean).pop() || selected, path: selected });
+    }
+    const option = (value, label, title = '') => {
+      const node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      if (title) node.title = title;
+      return node;
+    };
+    // Unchanged choices are not rebuilt: a redraw while the list is open would close it.
+    const signature = JSON.stringify([choices, selected || '']);
+    if (select.dataset.choices !== signature) {
+      select.replaceChildren(
+        ...choices.map((item) => option(item.path, item.name, item.path)),
+        option('', 'No folder (no file tools)'),
+        option('__choose__', 'Choose a folder…'),
+      );
+      select.dataset.choices = signature;
+    }
+    select.value = selected || '';
+    this.automationFolderValue = select.value;
+  },
+
+  // What the chosen permission means for a run, under the Permission field.
+  syncAutomationPermissionHint() {
+    const hint = $('#automation-permission-hint');
+    if (hint) hint.textContent = automationPermissionHint($('#automation-permission')?.value || 'basic');
+  },
+
+  // A new schedule's folder, mode and permission: those of the current task, until the user
+  // changes one of them (an edit fills the automation's own instead).
+  applyAutomationDefaults() {
+    if ($('#automation-edit-id')?.value || this.automationFormTouched) return;
+    const folder = this.automationDefaultFolder();
+    this.fillAutomationFolders(folder?.path || '');
+    if ($('#automation-mode')) $('#automation-mode').value = this.settings.mode === 'coding' ? 'coding' : 'working';
+    const permission = effectivePermission(this.settings);
+    if ($('#automation-permission')) $('#automation-permission').value = permission;
+    this.automationPermissionValue = permission;
+    // The composer's Bypass consent covers chat, not runs while nobody watches: a schedule made
+    // with Bypass asks for its own consent (when it is saved, at the latest).
+    this.automationBypassConsent = false;
+    this.syncAutomationPermissionHint();
+  },
+
   bindAutomationForm() {
     $('#automation-schedule')?.addEventListener('change', () => this.syncAutomationFields());
     $('#automation-cancel-edit')?.addEventListener('click', () => this.resetAutomationForm());
+    $('#automation-mode')?.addEventListener('change', () => { this.automationFormTouched = true; });
+    $('#automation-folder')?.addEventListener('change', (event) => void this.chooseAutomationFolder(event.target));
+    $('#automation-permission')?.addEventListener('change', (event) => void this.chooseAutomationPermission(event.target));
+    // The defaults follow the current task: refreshed whenever the Automation view is shown.
+    const view = $('#view-automation');
+    if (view && typeof MutationObserver === 'function') {
+      new MutationObserver(() => {
+        if (view.classList.contains('active')) this.applyAutomationDefaults();
+      }).observe(view, { attributes: true, attributeFilter: ['class'] });
+    }
     this.syncAutomationFields();
+    this.applyAutomationDefaults();
+  },
+
+  // "Choose a folder…" opens the folder dialog; a cancelled one puts the previous choice back.
+  async chooseAutomationFolder(select) {
+    this.automationFormTouched = true;
+    if (select.value !== '__choose__') {
+      this.automationFolderValue = select.value;
+      return;
+    }
+    const previous = this.automationFolderValue ?? '';
+    select.value = previous;
+    let picked = null;
+    try {
+      const result = await window.scalemaxAPI?.dialog?.openFolder?.();
+      picked = result?.ok && typeof result.data?.path === 'string' && result.data.path ? result.data.path : null;
+    } catch {
+      picked = null;
+    }
+    if (!picked) {
+      select.value = previous;
+      return;
+    }
+    this.fillAutomationFolders(picked, { name: folderName(picked), path: picked });
+  },
+
+  // The Bypass consent dialog, named for this automation (the composer's own dialog and wording).
+  askAutomationBypassConsent() {
+    const name = $('#automation-name')?.value.trim();
+    return askBypassConsent({ title: name ? `Bypass all permissions for runs of “${name}”?` : 'Bypass all permissions for this automation?' });
+  },
+
+  // Bypass all permissions asks for the same consent as the composer's, every time it is chosen.
+  async chooseAutomationPermission(select) {
+    this.automationFormTouched = true;
+    const previous = this.automationPermissionValue || 'basic';
+    if (select.value === 'bypass' && !this.automationBypassConsent) {
+      const consent = await this.askAutomationBypassConsent();
+      if (!consent) {
+        select.value = previous;
+        this.syncAutomationPermissionHint();
+        this.showToast('Permission unchanged');
+        return;
+      }
+      this.automationBypassConsent = true;
+    } else if (select.value !== 'bypass') {
+      this.automationBypassConsent = false;
+    }
+    this.automationPermissionValue = select.value;
+    this.syncAutomationPermissionHint();
   },
 
   resetAutomationForm() {
@@ -3083,7 +3597,9 @@ const app = {
     if ($('#automation-submit')) $('#automation-submit').textContent = 'Consent & create schedule';
     if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = true;
     if ($('#automation-form-title')) $('#automation-form-title').textContent = 'New schedule';
+    this.automationFormTouched = false;
     this.syncAutomationFields();
+    this.applyAutomationDefaults();
   },
 
   // Reads the form into schedule fields; returns an error string on bad input.
@@ -3097,12 +3613,22 @@ const app = {
     }
     const time = $('#automation-time')?.value || '09:00';
     if (schedule !== 'interval' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: 'Choose a valid time' };
+    const permission = $('#automation-permission')?.value || 'basic';
+    if (!Object.hasOwn(AUTOMATION_PERMISSION_LABELS, permission)) return { error: 'Choose a permission' };
+    if (permission === 'bypass' && this.automationBypassConsent !== true) return { error: 'Confirm Bypass all permissions first' };
+    const folderPath = $('#automation-folder')?.value || '';
+    if (folderPath === '__choose__') return { error: 'Choose a folder' };
     const fields = {
       name, prompt, schedule, time,
       dayOfWeek: Number.parseInt($('#automation-weekday')?.value ?? '1', 10),
       dayOfMonth: Number.parseInt($('#automation-monthday')?.value ?? '1', 10),
       intervalMinutes: null,
       runAt: null,
+      // Where and how it runs: the folder ('' = none: no file tools), the mode and the permission.
+      folder: folderPath ? { name: this.folderLabel(folderPath) || folderName(folderPath), path: folderPath } : null,
+      mode: $('#automation-mode')?.value === 'coding' ? 'coding' : 'working',
+      permission,
+      ...(permission === 'bypass' ? { bypassConsent: true } : {}),
     };
     if (schedule === 'interval') {
       fields.intervalMinutes = Number.parseInt($('#automation-interval')?.value ?? '', 10);
@@ -3125,34 +3651,38 @@ const app = {
 
   async createAutomation(event) {
     event.preventDefault();
+    // Bypass shown by default (taken over from the composer) is consented to before it is saved.
+    if ($('#automation-permission')?.value === 'bypass' && this.automationBypassConsent !== true) {
+      if (!(await this.askAutomationBypassConsent())) {
+        this.showToast('Not saved: choose another permission, or confirm Bypass all permissions');
+        return;
+      }
+      this.automationBypassConsent = true;
+    }
     const { fields, error } = this.readAutomationForm();
     if (error) { this.showToast(error); return; }
     const now = Date.now();
     const editId = $('#automation-edit-id')?.value || '';
     const existing = editId ? this.automations.find((item) => item.id === editId) : null;
-    // A new schedule works in the folder and mode that are open now, whatever is open when it
-    // fires (lib/automations.cjs); an edit keeps where it runs. `editedAt` tells main this copy is
-    // newer than the schedule state it keeps itself.
-    const automation = existing ? { ...existing, ...fields, editedAt: now } : {
+    // The form says where and how it runs (folder, mode, permission); main runs it there whatever
+    // is open when it fires (lib/automations.cjs). An edit keeps whether it is paused. `editedAt`
+    // tells main this copy is newer than the schedule state it keeps itself.
+    const automation = existing ? { ...existing, ...fields, active: existing.active, editedAt: now } : {
       id: `auto-${now}-${Math.random().toString(36).slice(2, 8)}`, ...fields,
       active: true, createdAt: now, schemaVersion: 2, nextRun: null, pendingCatchUp: false,
-      lastRun: null, lastStatus: 'idle', lastError: '', history: [],
-      folder: this.rootFolder() || null, mode: this.settings.mode === 'coding' ? 'coding' : 'working', editedAt: now,
+      lastRun: null, lastStatus: 'idle', lastError: '', history: [], editedAt: now,
     };
+    if (automation.permission !== 'bypass') delete automation.bypassConsent;
     try {
       automation.nextRun = nextRunAt(automation, now);
     } catch (problem) {
       this.showToast(problem?.message || 'Choose a valid schedule and time');
       return;
     }
-    // One made before automations remembered their folder is fixed to the open one by an edit.
-    if (existing && !('folder' in existing)) {
-      automation.folder = this.rootFolder() || null;
-      automation.mode = this.settings.mode === 'coding' ? 'coding' : 'working';
-    }
     if (existing) {
       // Mutated in place: the list may be drawn from it before the save reaches main.
-      Object.assign(existing, automation, { active: true });
+      Object.assign(existing, automation);
+      if (!('bypassConsent' in automation)) delete existing.bypassConsent;
     } else {
       this.automations.push(automation);
     }
@@ -3160,7 +3690,8 @@ const app = {
     this.renderAutomations();
     this.resetAutomationForm();
     await saved;
-    this.showToast(existing ? 'Automation updated' : 'Automation created');
+    this.showToast(!existing ? 'Automation created'
+      : existing.active ? 'Automation updated' : 'Automation updated · still paused (resume it to run on schedule)');
   },
 
   editAutomation(automation) {
@@ -3177,6 +3708,16 @@ const app = {
       set('#automation-date', `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
     } else set('#automation-date', '');
     set('#automation-edit-id', automation.id);
+    // Its own folder, mode and permission; one made before automations remembered them shows the
+    // current ones, which a save then fixes it to.
+    this.fillAutomationFolders('folder' in automation ? (automation.folder?.path || '') : (this.automationDefaultFolder()?.path || ''));
+    set('#automation-mode', automation.mode || (this.settings.mode === 'coding' ? 'coding' : 'working'));
+    const permission = AUTOMATION_PERMISSION_LABELS[automation.permission] ? automation.permission : effectivePermission(this.settings);
+    set('#automation-permission', permission);
+    this.automationPermissionValue = permission;
+    // Consent given for this automation is kept; Bypass taken over from the composer asks on save.
+    this.automationBypassConsent = automation.permission === 'bypass' && automation.bypassConsent === true;
+    this.syncAutomationPermissionHint();
     if ($('#automation-submit')) $('#automation-submit').textContent = 'Save changes';
     if ($('#automation-cancel-edit')) $('#automation-cancel-edit').hidden = false;
     if ($('#automation-form-title')) $('#automation-form-title').textContent = `Edit ${automation.name}`;
@@ -3191,10 +3732,12 @@ const app = {
     if (!automation) return;
     const action = button.dataset.action;
     if (action === 'delete') {
-      if (!window.confirm(`Delete the automation "${automation.name}"?`)) return;
+      // Deleting one that runs now stops its run too (main sees it gone, lib/automations.cjs).
+      const running = Boolean(window.scalemaxScheduler?.isRunning?.(automation.id));
+      if (!window.confirm(running ? `"${automation.name}" is running now. Stop it and delete it?` : `Delete the automation "${automation.name}"?`)) return;
       this.automations = this.automations.filter((item) => item.id !== automation.id);
       if ($('#automation-edit-id')?.value === automation.id) this.resetAutomationForm();
-      this.showToast('Automation deleted');
+      this.showToast(running ? `Stopped and deleted ${automation.name}` : 'Automation deleted');
     } else if (action === 'toggle') {
       automation.active = !automation.active;
       if (automation.active) {

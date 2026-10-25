@@ -2457,6 +2457,22 @@ input[type="range"] {
   padding: 4px 8px;
 }
 
+/* No models (no provider yet): no empty scroll box above the note. */
+.model-menu:popover-open .model-menu-list:empty {
+  display: none;
+}
+
+/* Why the last pick failed (src/composer-ui.js reportModelError): failure ink. */
+.model-menu > .model-menu-error {
+  color: var(--riso-red-text);
+}
+
+/* "Open Assistant" under the empty note: a button of its own size, in line with the note. */
+.model-menu-assistant {
+  align-self: flex-start;
+  margin: 0 8px 4px;
+}
+
 /* Switches: an ink track that prints blue when on. */
 .switch {
   position: relative;
@@ -3100,7 +3116,9 @@ input[type="range"] {
   gap: 8px;
 }
 
-/* Saved providers in Assistant. */
+/* Saved providers in Assistant: the list takes the whole first row, so "Name — active · not
+   connected" is never cut off (the column is at most 680px wide, 600px in a 900px window); the
+   name field and the buttons share the second. */
 .profile-row {
   display: flex;
   flex-wrap: wrap;
@@ -3109,12 +3127,12 @@ input[type="range"] {
 }
 
 .profile-row select {
-  flex: 1 1 220px;
+  flex: 1 1 100%;
   min-width: 0;
 }
 
 .profile-row input {
-  flex: 0 1 160px;
+  flex: 1 1 160px;
   min-width: 0;
 }
 
@@ -3213,8 +3231,6 @@ input[type="range"] {
 }
 
 .approval-arguments {
-  max-height: 220px;
-  margin-top: 4px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -3663,6 +3679,29 @@ input[type="range"] {
   color: var(--riso-red-text);
 }
 
+/* A run that answered but was not allowed the tool calls it needed (text token, both themes). */
+.automation-warning {
+  color: var(--sm-app-text-warning);
+}
+
+/* Folder, mode and permission of a schedule: long folder names shorten instead of widening the form. */
+.automation-run-settings {
+  flex-wrap: wrap;
+}
+
+.automation-run-settings .form-group {
+  min-width: 160px;
+}
+
+.automation-run-settings select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.automation-permission-hint {
+  margin: -8px 0 16px;
+}
+
 .automation-item .dot {
   background: var(--riso-ink-3);
 }
@@ -3833,6 +3872,9 @@ input[type="range"] {
 }
 
 .picker-button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   width: 100%;
   min-height: 32px;
   padding: 4px 12px;
@@ -3851,6 +3893,25 @@ input[type="range"] {
 }
 
 .picker-button:disabled {
+  color: var(--riso-ink-3);
+}
+
+/* The chosen model: its name, then its ID in mono (only when the endpoint names it). */
+.picker-button-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-button-id {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sm-font-mono);
+  font-size: 11px;
   color: var(--riso-ink-3);
 }
 
@@ -3892,6 +3953,23 @@ input[type="range"] {
 
 .picker-option:hover {
   background: var(--riso-ink-tint);
+}
+
+.picker-option:focus-visible {
+  outline: 2px solid var(--riso-blue);
+  outline-offset: -2px;
+}
+
+/* "Other model ID…" closes a custom endpoint's list, under a rule. */
+.picker-option-other {
+  margin-top: 4px;
+  border-top: 1px solid var(--riso-rule);
+  border-radius: 0 0 6px 6px;
+}
+
+.picker-option-note {
+  font-size: 11px;
+  color: var(--riso-ink-3);
 }
 
 .picker-option[aria-selected="true"] {
@@ -4361,6 +4439,119 @@ dialog::backdrop {
 #bypass-dialog:focus-visible,
 #tool-approval-dialog:focus-visible {
   outline: none;
+}
+
+/* Wider than the bypass consent, so an edit's lines fit (about 80 monospace columns). */
+#tool-approval-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+/* The heading only holds the starting focus (src/composer-ui.js): no ring on it. */
+#approval-title:focus {
+  outline: none;
+}
+
+/* What the call does, readably: an edit as a line diff, a new file's first lines, a command as
+   typed. The diff rows use the shared .diff-line inks (added green, removed red). */
+.approval-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.approval-path {
+  margin: 0;
+  font-family: var(--sm-font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink);
+  overflow-wrap: anywhere;
+}
+
+/* After .code-output (max-height: none), so the cap holds. */
+.approval-diff,
+.approval-file,
+.approval-command,
+.approval-arguments {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.approval-diff {
+  padding: 4px 0;
+}
+
+.approval-diff .diff-line {
+  padding-inline-end: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-diff-sign {
+  display: inline-block;
+  width: 20px;
+  text-align: center;
+  user-select: none;
+}
+
+.approval-command {
+  color: var(--riso-ink);
+}
+
+.approval-notes,
+.approval-more,
+.approval-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-2);
+}
+
+.approval-raw {
+  margin-top: 8px;
+}
+
+.approval-raw > summary {
+  width: fit-content;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-2);
+  cursor: pointer;
+}
+
+.approval-raw[open] > summary {
+  margin-bottom: 4px;
+}
+
+/* A tool call of a task that is not on screen waits here, over every view: a highlighter pass
+   under ink, flat like the other notices. Review opens the prompt. */
+.approval-notice {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: 12px 24px 0;
+  padding: 4px 4px 4px 12px;
+  border-radius: 6px;
+  background: var(--riso-yellow-wash);
+  /* Ink, never grey, on the highlighter. */
+  color: var(--riso-ink);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.approval-notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-notice-review {
+  flex-shrink: 0;
 }
 
 .custom-form-top {

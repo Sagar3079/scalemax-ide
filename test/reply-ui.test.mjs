@@ -53,7 +53,8 @@ test('status follows approvals and tools in plain words', () => {
   const reply = createReply({ taskId: 't1', requestId: R });
   assert.equal(statusText(reply), 'Writing…');
   applyProgress(reply, { phase: 'approval', callId: 'step-1', title: 'Wrote a.md', serverId: 'Workspace', toolName: 'write_file' });
-  assert.equal(statusText(reply), 'Waiting for your approval: writing a file');
+  // Not yet allowed: what it will do, not what it is doing.
+  assert.equal(statusText(reply), 'Waiting for your approval to write a file');
   applyProgress(reply, { phase: 'tool', callId: 'step-1', title: 'Wrote a.md', serverId: 'Workspace', toolName: 'write_file' });
   assert.equal(statusText(reply), 'Writing a file…');
   assert.equal(reply.items.length, 1, 'approval and run are one step');
@@ -183,6 +184,35 @@ test('a reply\'s changes are kept bounded, summarised, and undone files reach th
     { role: 'assistant', text: '', interrupted: 'stopped', steps: [{ type: 'tool', title: 'Edited src/a.js', ok: true }], changes },
   ]);
   assert.deepEqual(both, [{ role: 'user', content: '[Note from ScaleMax, the app: the user pressed Stop while you were writing your previous reply, so it ends where they stopped it. It had already done this: Edited src/a.js. Also, after that reply the user undid its changes to src/a.js, so this file is back as it was before it.]' }]);
+});
+
+test('changes partly undone in the editor are kept, summarised, and named to the model', async () => {
+  const { normalizeChanges, changesSummary, historyMessages } = await import('../src/domain.mjs');
+  const changes = normalizeChanges({
+    id: 'chat-task-1-3',
+    files: [
+      { path: 'src/format-date.js', kind: 'modified', added: 1, removed: 1, status: 'changed', partly: { changes: 1, lines: [21, 'x', -3, 0] } },
+      { path: 'src/pad.js', kind: 'modified', added: 1, removed: 0, status: 'undone' },
+      { path: 'src/odd.js', kind: 'modified', added: 1, removed: 0, partly: { changes: 0, lines: [2] } },
+      { path: 'src/kept.js', kind: 'modified', added: 2, removed: 2, status: 'kept', partly: { changes: 2, lines: [4, 9, 12, 15, 18, 30] } },
+    ],
+  });
+  assert.deepEqual(changes.files.map((file) => file.partly), [{ changes: 1, lines: [21] }, undefined, undefined, { changes: 2, lines: [4, 9, 12, 15, 18, 30] }]);
+  assert.equal(changesSummary(changes), '4 files changed · +5 −3 · 1 undone · 1 kept · 1 partly undone');
+  const turns = historyMessages([
+    { role: 'user', text: 'Tidy it.' },
+    { role: 'assistant', text: 'Tidied.', changes },
+    { role: 'user', text: 'Next?' },
+  ]);
+  assert.deepEqual(turns[2], {
+    role: 'user',
+    content: '[Note from ScaleMax, the app: after that reply the user undid its changes to src/pad.js, so this file is back as it was before it.'
+      + ' Also, after that reply the user undid some of its changes in the editor: 1 change to src/format-date.js (at line 21); 2 changes to src/kept.js (at lines 4, 9, 12, 15, 18, …).'
+      + ' Those parts are back as they were before that reply; its other changes are still there.]',
+  });
+  // Partly undone alone is a note too.
+  const alone = historyMessages([{ role: 'assistant', text: 'Tidied.', changes: { id: 'c', files: [{ path: 'a.js', status: 'changed', partly: { changes: 1, lines: [] } }] } }]);
+  assert.equal(alone[1].content, '[Note from ScaleMax, the app: after that reply the user undid some of its changes in the editor: 1 change to a.js. Those parts are back as they were before that reply; its other changes are still there.]');
 });
 
 test('a live reply keeps the latest changes, and a stopped one carries them', () => {
@@ -391,4 +421,113 @@ test('main\'s steps of a finished reply get the times the window measured, call 
   assert.equal(normalizeSteps(timed)[4].agent.steps[0].durationMs, 300, 'kept with the reply');
   assert.equal(timedSteps(undefined, reply), undefined);
   assert.deepEqual(timedSteps(fromMain, null), fromMain);
+});
+
+test('a failed reply is asked again (Retry): the model hears it broke off, or nothing when it never got going', async () => {
+  const { historyMessages, taskHistoryMessages, retryableReply } = await import('../src/domain.mjs');
+  const empty = { role: 'assistant', text: '', interrupted: 'failed', notice: 'The reply ended early: HTTP 500' };
+  // Nothing written or done: the retry sends the conversation as it was.
+  assert.deepEqual(historyMessages([{ role: 'user', text: 'Fix it.' }, empty], { retry: true }), [{ role: 'user', content: 'Fix it.' }]);
+  // Without the retry (the user typed a new message instead) the model is told it broke off.
+  assert.deepEqual(historyMessages([{ role: 'user', text: 'Fix it.' }, empty, { role: 'user', text: 'Hello?' }]).map((turn) => turn.content), [
+    'Fix it.', '[Note from ScaleMax, the app: your previous reply broke off because of a connection or provider error, not because of you or the user.]', 'Hello?',
+  ]);
+  // Retried and answered: the empty failure is left out of later requests.
+  assert.deepEqual(historyMessages([{ role: 'user', text: 'Fix it.' }, empty, { role: 'assistant', text: 'Fixed.' }]).map((turn) => turn.role), ['user', 'assistant']);
+  // Part written or done: it stays, with a note that says to answer again.
+  const partial = { role: 'assistant', text: 'Looking at a.js', interrupted: 'failed', steps: [{ type: 'tool', title: 'Read a.js', ok: true }] };
+  const retried = taskHistoryMessages({ messages: [{ role: 'user', text: 'Fix it.' }, partial] }, { retry: true });
+  assert.deepEqual(retried.map((turn) => turn.role), ['user', 'assistant', 'user']);
+  assert.match(retried[2].content, /broke off because of a connection or provider error.*It had already done this: Read a\.js\. The user pressed Retry: answer their last message again/);
+  // What Retry belongs to: the last message, a failed reply, after a user message.
+  const task = { messages: [{ role: 'user', text: 'Fix it.', command: 'fix' }, partial] };
+  assert.equal(retryableReply(task).asked.command, 'fix');
+  assert.equal(retryableReply(task).index, 1);
+  assert.equal(retryableReply({ messages: [{ role: 'user', text: 'x' }, { role: 'assistant', text: 'y', interrupted: 'stopped' }] }), null);
+  assert.equal(retryableReply({ messages: [partial] }), null);
+  assert.equal(retryableReply(null), null);
+});
+
+test('a retry says which try it is, and text written before it is kept for a reply that then fails', () => {
+  const reply = createReply({ taskId: 't', requestId: 'r', thinking: true });
+  feed(reply, [
+    { phase: 'thinking', round: 0 },
+    { phase: 'delta', kind: 'reasoning', text: 'Plan it.' },
+    { phase: 'delta', kind: 'text', text: 'The deploy pipeline has three' },
+    // The provider dies: main takes back what it showed and asks again.
+    { phase: 'text-set', kind: 'text', text: '' },
+    { phase: 'text-set', kind: 'reasoning', text: '' },
+    { phase: 'retry', attempt: 2, of: 3 },
+  ]);
+  assert.equal(statusText(reply), 'Retrying (2 of 3)…');
+  applyProgress(reply, { phase: 'retry', attempt: 1 });
+  assert.match(statusText(reply), /trying again/, 'without a count it says so in words');
+  // Every try failed: the reply keeps what it had written.
+  const partial = partialReply(reply);
+  assert.equal(partial.text, 'The deploy pipeline has three');
+  assert.equal(partial.reasoning, 'Plan it.');
+  // A retry that writes again replaces it.
+  feed(reply, [{ phase: 'delta', kind: 'text', text: 'Three stages.' }]);
+  assert.equal(partialReply(reply).text, 'Three stages.');
+});
+
+test('calls nobody let run are not failures: denied, refused in Plan, blocked by a hook', async () => {
+  const { stepOutcome, stepOutcomeLabel, toolCallGroups, historyMessages } = await import('../src/domain.mjs');
+  const reply = createReply({ taskId: 't', requestId: 'r' });
+  feed(reply, [
+    { phase: 'approval', callId: 'step-1', title: 'Edited src/a.js', serverId: 'Workspace', toolName: 'edit_file' },
+    { phase: 'tool-done', callId: 'step-1', ok: false, outcome: 'denied' },
+    { phase: 'tool', callId: 'step-2', title: 'Wrote NOTES.md', serverId: 'Workspace', toolName: 'write_file' },
+    { phase: 'tool-done', callId: 'step-2', ok: false, outcome: 'hook', hook: './guard.sh' },
+    { phase: 'tool', callId: 'step-3', title: 'Ran npm test', serverId: 'Workspace', toolName: 'run_command' },
+    { phase: 'tool-done', callId: 'step-3', ok: false, outcome: 'nonsense' },
+  ]);
+  assert.deepEqual(reply.items.map((item) => [item.state, item.outcome]), [['declined', 'denied'], ['declined', 'hook'], ['error', undefined]]);
+  const steps = partialReply(reply).steps;
+  assert.deepEqual(steps.map((step) => [step.ok, step.outcome, step.hook]), [[false, 'denied', undefined], [false, 'hook', './guard.sh'], [false, undefined, undefined]]);
+  // Kept steps from before main said why are read from the error the model got.
+  const kept = normalizeSteps([
+    { type: 'tool', title: 'Edited a.js', ok: false, server: 'Workspace', tool: 'edit_file', preview: 'Error: the user denied this tool call. Do not retry it.' },
+    { type: 'tool', title: 'Wrote b.md', ok: false, server: 'Workspace', tool: 'write_file', preview: 'Error: this reply is in Plan permission, so nothing may be changed' },
+    { type: 'tool', title: 'PreToolUse hook: ./guard.sh (blocked, 0.1s)', ok: false, server: 'Hooks', tool: 'PreToolUse', preview: 'no' },
+    { type: 'tool', title: 'Ran npm test', ok: false, server: 'Workspace', tool: 'run_command', preview: 'Error: exit 1', outcome: 'bogus' },
+    { type: 'tool', title: 'Read a.js', ok: true, outcome: 'denied' },
+  ]);
+  assert.deepEqual(kept.map((step) => step.outcome), ['denied', 'plan', 'blocked', undefined, undefined]);
+  assert.equal(stepOutcome({ ok: false, stopped: true, outcome: 'denied' }), '', 'a stopped call is stopped');
+  assert.deepEqual(['denied', 'plan', 'hook', 'blocked'].map((outcome) => stepOutcomeLabel(outcome, './guard.sh')),
+    ['Denied by you', 'Not run (Plan)', 'Blocked by hook ./guard.sh', 'Blocked']);
+  assert.equal(stepOutcomeLabel('hook'), 'Blocked by a hook');
+  // The folded summary: no "failed" for them.
+  assert.equal(stepSummary([steps[0]]), '1 step · Edit a file · denied');
+  assert.equal(stepSummary(kept.slice(0, 3)), '3 steps · Edit a file · denied · Write a file · not run (Plan) · Hooks · PreToolUse · blocked');
+  const mixed = toolCallGroups([
+    { server: 'Workspace', tool: 'edit_file', ok: true },
+    { server: 'Workspace', tool: 'edit_file', ok: false, outcome: 'denied' },
+    { server: 'Workspace', tool: 'edit_file', ok: false },
+  ]);
+  assert.deepEqual(mixed.map((group) => [group.label, group.ok, group.failed, group.declined]), [['Edited a file · 1 failed · 1 denied', false, 1, 1]]);
+  // The model's note names them for what they were.
+  const [, , note] = historyMessages([
+    { role: 'user', text: 'Go.' },
+    { role: 'assistant', text: 'Partly', interrupted: 'failed', steps: kept },
+  ]);
+  assert.match(note.content, /Edited a\.js \(denied by the user\); Wrote b\.md \(not run: Plan permission\); PreToolUse hook: \.\/guard\.sh \(blocked, 0\.1s\) \(blocked\); Ran npm test \(failed\)/);
+});
+
+test('step titles take the tense of their state', async () => {
+  const { stepTitleForm } = await import('../src/domain.mjs');
+  assert.deepEqual(['Edited src/a.js', 'Wrote SUMMARY.md', 'Ran npm test', 'Read a.js', 'Started npm run dev in the background', 'GitHub · list_issues', 'Subagent: Find it']
+    .map((title) => [stepTitleForm(title, 'intent'), stepTitleForm(title, 'progressive'), stepTitleForm(title, 'past')]), [
+    ['Edit src/a.js', 'Editing src/a.js', 'Edited src/a.js'],
+    ['Write SUMMARY.md', 'Writing SUMMARY.md', 'Wrote SUMMARY.md'],
+    ['Run npm test', 'Running npm test', 'Ran npm test'],
+    ['Read a.js', 'Reading a.js', 'Read a.js'],
+    ['Start npm run dev in the background', 'Starting npm run dev in the background', 'Started npm run dev in the background'],
+    ['GitHub · list_issues', 'GitHub · list_issues', 'GitHub · list_issues'],
+    ['Subagent: Find it', 'Subagent: Find it', 'Subagent: Find it'],
+  ]);
+  assert.equal(stepTitleForm('Running a command', 'intent'), 'Run a command');
+  assert.equal(stepTitleForm('Readme', 'intent'), 'Readme', 'only whole verbs');
+  assert.equal(stepTitleForm(undefined, 'intent'), undefined);
 });

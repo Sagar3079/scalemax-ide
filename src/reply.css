@@ -155,6 +155,13 @@
 .reply-step[data-state="stopped"] > .reply-agent-group > summary .reply-step-icon {
   color: var(--riso-ink-3, #6B6F78);
 }
+/* Not run on purpose (denied by you, refused in Plan, blocked by a hook): a quiet dash in the
+   ink's third shade, never the failure red. */
+.reply-step[data-state="declined"] > .reply-step-row .reply-step-icon,
+.reply-step[data-state="declined"] > summary .reply-step-icon,
+.reply-step[data-state="declined"] > .reply-agent-group > summary .reply-step-icon {
+  color: var(--riso-ink-3, #6B6F78);
+}
 .reply-step[data-state="stopped"] > .reply-step-row .reply-step-icon svg,
 .reply-step[data-state="stopped"] > summary .reply-step-icon svg,
 .reply-step[data-state="stopped"] > .reply-agent-group > summary .reply-step-icon svg {
@@ -193,6 +200,21 @@
 .reply-step-output:focus-visible {
   outline: 2px solid var(--riso-blue, #0078BF);
   outline-offset: 2px;
+}
+/* Why a step is not done: " — waiting for your approval", " — Denied by you". */
+.reply-step-why {
+  color: var(--riso-ink-3, #6B6F78);
+}
+.reply-step[data-state="approval"] .reply-step-why {
+  color: var(--riso-yellow-text, #7A5D00);
+}
+/* What a hook said when it blocked a call: told, not alarmed. */
+.reply-step-why-detail {
+  margin: 0 0 4px 24px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-3, #6B6F78);
+  overflow-wrap: anywhere;
 }
 .reply-step-error {
   margin: 0 0 4px 24px;
@@ -650,4 +672,71 @@ details.reply-agent > summary .reply-step-title {
   .msg-reasoning > .msg-reasoning-label::after {
     transition: none;
   }
+}
+
+/* ---- A reply that failed: why, in the failure red, and Retry beside it -------------------- */
+
+.msg-notice.is-failed {
+  color: var(--sm-app-text-danger, var(--riso-red-text, #B42638));
+}
+.msg-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.msg-failure > .msg-notice {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.msg-retry-btn {
+  flex: none;
+}
+
+/* ---- Without a model: the ways to connect one ------------------------------------------- */
+
+/* The empty task's second step sits under the folder step, set apart by a rule. */
+.folder-picker:not([hidden]) + .model-picker {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--riso-rule, color-mix(in srgb, #1A1B1F 14%, transparent));
+}
+.model-picker .folder-picker-open svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* The message box's prompt after Enter without a model: the user has to act, so yellow. */
+.connect-model-notice {
+  border-bottom-color: color-mix(in srgb, var(--riso-yellow-text, #7A5D00) 30%, transparent);
+  background: var(--riso-yellow-wash, color-mix(in srgb, #FFE800 32%, #FAFAF8));
+  color: var(--riso-ink, #1A1B1F);
+}
+/* "Provider not configured" in the status bar and "Connect a model" in the sidebar footer: plain
+   text that opens Assistant. */
+.assistant-link {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--riso-blue-text, #005E96);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.assistant-link:hover {
+  color: var(--riso-ink, #1A1B1F);
+}
+.assistant-link:focus-visible {
+  outline: 2px solid var(--riso-blue, #0078BF);
+  outline-offset: 2px;
+  border-radius: 2px;
 }

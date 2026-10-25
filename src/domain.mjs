@@ -129,6 +129,7 @@ const MAX_REASONING = 65536;
 const MAX_ERROR = 2000;
 const MAX_HISTORY = 10;
 const MAX_PREVIEW = 400;
+const MAX_NOTE = 200;
 const SCHEDULES = ['once', 'hourly', 'daily', 'weekly', 'monthly', 'interval'];
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const MIN_INTERVAL_MINUTES = 1;
@@ -363,9 +364,77 @@ const TOOL_LABELS = {
 
 const toolLabel = (server, tool) => TOOL_LABELS[server]?.[tool] || null;
 
+// ---- Steps that were not run on purpose, and the tense of a step's title -----------------
+// A call that did not run because someone decided so is not a failure (lib/tool-loop.cjs
+// `outcome`): 'denied' by the user at the prompt, refused under 'plan' permission, blocked by a
+// PreToolUse 'hook' (its command in `hook`), or 'unattended' (an automation with nobody to ask).
+// A hook's own step that blocked is 'blocked' (lib/hooks.cjs): the hook did its job.
+export const STEP_OUTCOMES = Object.freeze(['denied', 'plan', 'hook', 'unattended', 'blocked']);
+const MAX_HOOK_NAME = 60;
+// Steps kept before main reported outcomes are read from the error main gave the model.
+const OUTCOME_PREVIEWS = [
+  ['denied', /^Error: the user denied this tool call/],
+  ['plan', /^Error: this reply is in Plan permission/],
+  ['hook', /^Error: a PreToolUse hook the user set up blocked this call/],
+  ['unattended', /^Error: this tool call needs the user's approval, but this run has nobody to ask/],
+];
+/** Why a call that did not succeed was not run ('denied', 'plan', …), or '' for a real failure. */
+export function stepOutcome(step) {
+  if (!isRecord(step) || step.ok === true || step.stopped === true) return '';
+  if (STEP_OUTCOMES.includes(step.outcome)) return step.outcome;
+  const preview = typeof step.preview === 'string' ? step.preview : '';
+  for (const [outcome, pattern] of OUTCOME_PREVIEWS) if (pattern.test(preview)) return outcome;
+  // A hook step: "PreToolUse hook: ./check.sh (blocked, 0.2s)".
+  if (step.server === 'Hooks' && typeof step.title === 'string' && /\(blocked, [^()]*\)$/.test(step.title)) return 'blocked';
+  return '';
+}
+/** What a step that was not run says instead of "failed": "Denied by you", "Not run (Plan)", … */
+export function stepOutcomeLabel(outcome, hook = '') {
+  switch (outcome) {
+    case 'denied': return 'Denied by you';
+    case 'plan': return 'Not run (Plan)';
+    case 'hook': return typeof hook === 'string' && hook.trim() ? `Blocked by hook ${hook.trim()}` : 'Blocked by a hook';
+    case 'unattended': return 'Not run: nobody was there to approve it';
+    case 'blocked': return 'Blocked';
+    default: return '';
+  }
+}
+// The same few words in a group label ("Edit a file · denied").
+const OUTCOME_WORDS = { denied: 'denied', plan: 'not run (Plan)', hook: 'blocked by a hook', unattended: 'not run', blocked: 'blocked' };
+
+// Step titles are written in the past tense once done ("Edited src/a.js", lib/workspace-tools.cjs
+// describeCall). A call still waiting for approval reads as what it will do ("Edit src/a.js"),
+// one that runs as what it is doing ("Editing src/a.js").
+const VERB_FORMS = {
+  Read: ['Read', 'Reading'], Edited: ['Edit', 'Editing'], Wrote: ['Write', 'Writing'], Ran: ['Run', 'Running'],
+  Started: ['Start', 'Starting'], Listed: ['List', 'Listing'], Searched: ['Search', 'Searching'], Checked: ['Check', 'Checking'],
+  Typed: ['Type', 'Typing'], Stopped: ['Stop', 'Stopping'], Cleared: ['Clear', 'Clearing'], Updated: ['Update', 'Updating'],
+  Opened: ['Open', 'Opening'], Showed: ['Show', 'Showing'], Copied: ['Copy', 'Copying'], Ticked: ['Tick', 'Ticking'],
+  Made: ['Make', 'Making'], Looked: ['Look', 'Looking'],
+};
+const PROGRESSIVE_INTENT = Object.fromEntries(Object.values(VERB_FORMS).map(([intent, progressive]) => [progressive, intent]));
+/**
+ * A step title in the form its state needs: 'intent' ("Edit src/a.js", waiting for approval or
+ * never run), 'progressive' ("Editing src/a.js", running) or 'past' (as main wrote it). A title
+ * that does not start with a known verb ("GitHub · list_issues") stays as it is.
+ */
+export function stepTitleForm(title, form = 'past') {
+  if (typeof title !== 'string' || form === 'past') return title;
+  const match = /^([A-Z][a-z]+)(?=\s|$)/.exec(title);
+  if (!match) return title;
+  const forms = VERB_FORMS[match[1]];
+  if (forms) return `${form === 'progressive' ? forms[1] : forms[0]}${title.slice(match[1].length)}`;
+  // Already progressive (an activity like "Running a command").
+  const intent = PROGRESSIVE_INTENT[match[1]];
+  if (intent && form === 'intent') return `${intent}${title.slice(match[1].length)}`;
+  return title;
+}
+
 /**
  * The tool calls of one reply, one entry per tool in first-use order, with a short label
- * ("Read 4 files", "GitHub · search_code ×2") and how many calls failed.
+ * ("Read 4 files", "GitHub · search_code ×2") and how many calls failed. Calls that were not run
+ * on purpose (denied, refused in Plan, blocked by a hook) are counted apart as `declined`, never
+ * as failures.
  */
 export function toolCallGroups(calls) {
   const groups = [];
@@ -376,25 +445,37 @@ export function toolCallGroups(calls) {
     const key = `${server}\u0000${call.tool}`;
     let group = byKey.get(key);
     if (!group) {
-      group = { server, tool: call.tool, count: 0, failed: 0 };
+      group = { server, tool: call.tool, count: 0, failed: 0, declined: 0, outcomes: new Set() };
       byKey.set(key, group);
       groups.push(group);
     }
     group.count += 1;
-    if (call.ok !== true) group.failed += 1;
+    if (call.ok === true) continue;
+    const outcome = stepOutcome(call);
+    if (outcome) {
+      group.declined += 1;
+      group.outcomes.add(outcome);
+    } else {
+      group.failed += 1;
+    }
   }
-  return groups.map((group) => {
+  return groups.map(({ outcomes, ...group }) => {
     const known = toolLabel(group.server, group.tool);
     const name = `${group.server ? `${group.server} · ` : ''}${group.tool}`;
     // The verb counts what worked ("Edited a file · 1 failed"); when nothing worked it says what
-    // was tried ("Tried 2 edits · failed"), never "Made 2 edits".
-    const done = group.count - group.failed;
-    const base = !known ? `${name}${group.count > 1 ? ` ×${group.count}` : ''}`
-      : done === 0 ? known.tried(group.count)
-        : done === 1 ? known.one : known.many(done);
+    // was tried ("Tried 2 edits · failed"), never "Made 2 edits". Calls nobody let run read as
+    // what they would have done ("Edit a file · denied").
+    const done = group.count - group.failed - group.declined;
+    const times = (count) => (count > 1 ? ` ×${count}` : '');
+    const base = !known ? `${name}${times(group.count)}`
+      : done > 0 ? (done === 1 ? known.one : known.many(done))
+        : group.failed ? known.tried(group.failed + group.declined)
+          : `${stepTitleForm(known.doing, 'intent')}${times(group.declined)}`;
     const failure = !group.failed ? '' : group.failed === group.count ? ' · failed' : ` · ${group.failed} failed`;
-    const calls = `${group.count} call${group.count === 1 ? '' : 's'}${group.failed ? `, ${group.failed} failed` : ''}`;
-    return { ...group, ok: group.failed === 0, label: `${base}${failure}`, title: `${name}: ${calls}` };
+    const word = outcomes.size === 1 ? OUTCOME_WORDS[[...outcomes][0]] : 'not run';
+    const declined = !group.declined ? '' : group.declined === group.count ? ` · ${word}` : ` · ${group.declined} ${word}`;
+    const calls = `${group.count} call${group.count === 1 ? '' : 's'}${group.failed ? `, ${group.failed} failed` : ''}${group.declined ? `, ${group.declined} ${word}` : ''}`;
+    return { ...group, ok: group.failed === 0, label: `${base}${failure}${declined}`, title: `${name}: ${calls}` };
   });
 }
 
@@ -445,6 +526,10 @@ export function normalizeSteps(value, { nested = false } = {}) {
       // The end of a command's output: errors and summaries are printed last.
       if (!nested && typeof step.output === 'string' && step.output) entry.output = step.output.slice(-MAX_STEP_OUTPUT);
       if (step.stopped === true) entry.stopped = true;
+      // Not run on purpose (denied, Plan, a hook): shown apart from failures (stepOutcome).
+      const outcome = stepOutcome({ ...step, ok: entry.ok, stopped: entry.stopped === true, title: entry.title });
+      if (outcome) entry.outcome = outcome;
+      if (outcome === 'hook' && typeof step.hook === 'string' && step.hook.trim()) entry.hook = step.hook.replace(/\s+/g, ' ').trim().slice(0, MAX_HOOK_NAME);
       // How long the call ran, measured in the window from its progress events (src/reply-ui.js).
       if (Number.isSafeInteger(step.durationMs) && step.durationMs >= 0 && step.durationMs <= MAX_DURATION_MS) entry.durationMs = step.durationMs;
       const agent = nested ? null : normalizeAgent(step.agent, entry.ok);
@@ -573,10 +658,10 @@ function compactionHeader(summary) {
  * The task's conversation for the next request. `images: false` (a model that cannot read
  * pictures) leaves the pictures out, with a note where each message had some.
  */
-export function taskHistoryMessages(task, { images = true } = {}) {
+export function taskHistoryMessages(task, { images = true, retry = false } = {}) {
   const messages = Array.isArray(task?.messages) ? task.messages : [];
   const compact = normalizeCompaction(task?.compaction);
-  const options = images ? { images: true } : { images: false, pictureNote: true };
+  const options = { ...(images ? { images: true } : { images: false, pictureNote: true }), retry: retry === true };
   if (!compact) return historyMessages(messages, options);
   const through = Math.min(compact.through, messages.length);
   return [{ role: 'user', content: compactionHeader(compact.summary) }, ...historyMessages(messages.slice(through), options)];
@@ -847,6 +932,32 @@ export function taskContextShare(task, windowOf, fallbackModel = '') {
 // 'closed' when the window was closed or reloaded while it worked (src/app.js keepRunningReplies).
 export const INTERRUPTIONS = Object.freeze(['stopped', 'failed', 'closed']);
 const MAX_NOTE_STEPS = 20;
+// How the note to the model names a call that was not run on purpose.
+const OUTCOME_NOTES = {
+  denied: 'denied by the user', plan: 'not run: Plan permission', hook: 'blocked by a hook', unattended: 'not run: nobody to approve it', blocked: 'blocked',
+};
+/** A reply that failed before it wrote, thought or did anything (it keeps only why it failed). */
+function emptyFailure(message) {
+  return isRecord(message) && message.role === 'assistant' && message.interrupted === 'failed' && !String(message.text || '').trim()
+    && !normalizeSteps(message.steps).some((step) => step.type === 'tool') && !normalizeChanges(message.changes);
+}
+/** The index of the failed reply a Retry asks again for: the task's last message, or -1. */
+function retryTarget(messages) {
+  const index = messages.length - 1;
+  const last = messages[index];
+  return isRecord(last) && last.role === 'assistant' && last.interrupted === 'failed' ? index : -1;
+}
+/**
+ * The failed reply a Retry button belongs to: the task's last message, a reply that failed, after
+ * a message of the user's. Null when there is nothing to retry.
+ */
+export function retryableReply(task) {
+  const messages = Array.isArray(task?.messages) ? task.messages : [];
+  const index = retryTarget(messages);
+  if (index < 0) return null;
+  const asked = messages.slice(0, index).reverse().find((message) => isRecord(message) && message.role === 'user' && typeof message.text === 'string');
+  return asked ? { message: messages[index], index, asked } : null;
+}
 /**
  * The conversation as the model gets it, one { role, content } per message. A reply that was
  * stopped or failed part way keeps the text it had written, and a note from ScaleMax follows it
@@ -854,10 +965,16 @@ const MAX_NOTE_STEPS = 20;
  * commands it ran). The model never gets the app's words as its own, and the user's newest
  * message stays last (/init and the folder marker look there).
  */
-export function historyMessages(messages, { images = false, pictureNote = false } = {}) {
+export function historyMessages(messages, { images = false, pictureNote = false, retry = false } = {}) {
   const turns = [];
-  for (const message of Array.isArray(messages) ? messages : []) {
+  const list = Array.isArray(messages) ? messages : [];
+  // `retry`: the request asks again for the reply that failed last (its Retry button).
+  const retried = retry ? retryTarget(list) : -1;
+  for (const [index, message] of list.entries()) {
     if (!isRecord(message) || !['user', 'assistant'].includes(message.role) || typeof message.text !== 'string') continue;
+    // A reply that failed before it wrote or did anything, and was asked again (a reply follows
+    // it, or this request is the retry): the model gets the conversation as if it had not been.
+    if (emptyFailure(message) && (index === retried || list.slice(index + 1).find(isRecord)?.role === 'assistant')) continue;
     // Pictures the user attached go along by id (main turns the newest few into image parts).
     const pictures = message.role === 'user' ? normalizeMessageImages(message.images) : [];
     if (images && pictures.length) {
@@ -871,9 +988,11 @@ export function historyMessages(messages, { images = false, pictureNote = false 
     }
     const interrupted = message.role === 'assistant' && INTERRUPTIONS.includes(message.interrupted);
     // Files of this reply the user undid afterwards: the model must not assume its edits exist.
-    const undone = message.role === 'assistant'
-      ? (normalizeChanges(message.changes)?.files || []).filter((file) => file.status === 'undone').map((file) => file.path) : [];
-    if (!interrupted && !undone.length) {
+    const changed = message.role === 'assistant' ? normalizeChanges(message.changes)?.files || [] : [];
+    const undone = changed.filter((file) => file.status === 'undone').map((file) => file.path);
+    // Files of it the user undid only partly, in the editor's review.
+    const partly = changed.filter((file) => file.partly && file.status !== 'undone');
+    if (!interrupted && !undone.length && !partly.length) {
       turns.push({ role: message.role, content: message.text });
       continue;
     }
@@ -881,18 +1000,28 @@ export function historyMessages(messages, { images = false, pictureNote = false 
     const notes = [];
     if (interrupted) {
       const done = normalizeSteps(message.steps).filter((step) => step.type === 'tool')
-        .map((step) => `${step.title}${step.stopped ? ' (stopped)' : step.ok ? '' : ' (failed)'}`);
+        .map((step) => `${step.title}${step.stopped ? ' (stopped)' : step.ok ? '' : step.outcome ? ` (${OUTCOME_NOTES[step.outcome]})` : ' (failed)'}`);
       const steps = done.length
         ? ` It had already done this: ${done.slice(0, MAX_NOTE_STEPS).join('; ')}${done.length > MAX_NOTE_STEPS ? '; …' : ''}.` : '';
       notes.push(message.interrupted === 'stopped'
         ? `the user pressed Stop while you were writing your previous reply, so it ends where they stopped it.${steps}`
         : message.interrupted === 'closed'
           ? `the app window was closed or reloaded while you were writing your previous reply, so it ends where the window went away.${steps}`
-          : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}`);
+          : `your previous reply broke off because of a connection or provider error, not because of you or the user.${steps}${index === retried
+            ? ' The user pressed Retry: answer their last message again, going on from what was already done.' : ''}`);
     }
     if (undone.length) {
       const names = undone.slice(0, MAX_NOTE_STEPS).join(', ') + (undone.length > MAX_NOTE_STEPS ? ', …' : '');
       notes.push(`after that reply the user undid its changes to ${names}, so ${undone.length === 1 ? 'this file is' : 'these files are'} back as ${undone.length === 1 ? 'it was' : 'they were'} before it.`);
+    }
+    if (partly.length) {
+      const items = partly.slice(0, MAX_NOTE_STEPS).map(({ path, partly: { changes, lines } }) => {
+        const at = lines.length
+          ? ` (at ${lines.length === 1 ? 'line' : 'lines'} ${lines.slice(0, 5).join(', ')}${lines.length > 5 ? ', …' : ''})` : '';
+        return `${changes} ${changes === 1 ? 'change' : 'changes'} to ${path}${at}`;
+      });
+      const list = items.join('; ') + (partly.length > MAX_NOTE_STEPS ? '; …' : '');
+      notes.push(`after that reply the user undid some of its changes in the editor: ${list}. Those parts are back as they were before that reply; its other changes are still there.`);
     }
     turns.push({ role: 'user', content: `[Note from ScaleMax, the app: ${notes.join(' Also, ')}]` });
   }
@@ -926,6 +1055,14 @@ export function normalizeChanges(value) {
     if (file.mixed === true) entry.mixed = true;
     // Counted as replaced whole (too different to compare line by line).
     if (file.approximate === true) entry.approximate = true;
+    // Part of it undone by the user in the editor's review (the counts are what is left).
+    if (isRecord(file.partly) && Number.isSafeInteger(file.partly.changes) && file.partly.changes >= 1) {
+      entry.partly = {
+        changes: Math.min(file.partly.changes, 1000),
+        lines: (Array.isArray(file.partly.lines) ? file.partly.lines : [])
+          .filter((line) => Number.isSafeInteger(line) && line >= 1 && line <= 10_000_000).slice(0, 20),
+      };
+    }
     files.push(entry);
   }
   if (!files.length) return null;
@@ -948,6 +1085,8 @@ export function changesSummary(value) {
     const number = files.filter((file) => file.status === status).length;
     if (number) parts.push(`${number} ${status}`);
   }
+  const partly = files.filter((file) => file.partly && file.status === 'changed').length;
+  if (partly) parts.push(`${partly} partly undone`);
   return parts.join(' · ');
 }
 
@@ -957,7 +1096,9 @@ export function stepSummary(steps) {
   const calls = list.filter((step) => step.type === 'tool');
   const count = calls.length;
   const head = count ? `${count} step${count === 1 ? '' : 's'}` : 'Notes';
-  const groups = toolCallGroups(calls.filter((step) => step.tool).map((step) => ({ server: step.server || '', tool: step.tool, ok: step.ok })));
+  const groups = toolCallGroups(calls.filter((step) => step.tool).map((step) => ({
+    server: step.server || '', tool: step.tool, ok: step.ok, ...(step.outcome ? { outcome: step.outcome } : {}),
+  })));
   const labels = groups.slice(0, 3).map((group) => group.label);
   if (groups.length > 3) labels.push('…');
   return [head, ...labels].join(' · ');
@@ -1127,15 +1268,25 @@ function normalizeHistory(value, fallbackTime) {
   for (const entry of value) {
     if (!isRecord(entry)) continue;
     const status = own(entry, 'status');
-    if (!['success', 'error', 'interrupted'].includes(status)) continue;
+    // 'denied': the run answered, but tool calls it needed were not allowed (lib/automations.cjs).
+    if (!['success', 'denied', 'error', 'interrupted'].includes(status)) continue;
+    const note = boundedText(own(entry, 'note'), MAX_NOTE).trim();
     result.push({
       time: timestamp(own(entry, 'time'), fallbackTime),
       status,
       preview: boundedText(own(entry, 'preview'), MAX_PREVIEW),
+      ...(note ? { note } : {}),
     });
     if (result.length === MAX_HISTORY) break;
   }
   return result;
+}
+
+function automationPermission(automation) {
+  const permission = own(automation, 'permission');
+  if (!PERMISSION_MODES.includes(permission)) return {};
+  if (permission !== 'bypass') return { permission };
+  return own(automation, 'bypassConsent') === true ? { permission, bypassConsent: true } : { permission: 'basic' };
 }
 
 export function normalizeAutomations(value, now = Date.now()) {
@@ -1188,7 +1339,7 @@ export function normalizeAutomations(value, now = Date.now()) {
       pendingCatchUp: false,
       lastRun: timestamp(own(automation, 'lastRun'), null),
       lastStatus: interrupted ? 'interrupted'
-        : ['idle', 'success', 'error', 'interrupted'].includes(status) ? status : 'idle',
+        : ['idle', 'success', 'denied', 'error', 'interrupted'].includes(status) ? status : 'idle',
       lastError: boundedText(own(automation, 'lastError'), MAX_ERROR),
       history: normalizeHistory(own(automation, 'history'), fallbackTime),
       // The folder and mode it was made in: a run works there, whatever is open when it fires.
@@ -1196,6 +1347,10 @@ export function normalizeAutomations(value, now = Date.now()) {
       // remembered their folder; it runs in the open folder until it is edited (src/app.js).
       ...(own(automation, 'folder') !== undefined ? { folder: normalizeTaskFolder(own(automation, 'folder')) } : {}),
       mode: MODE_IDS.includes(own(automation, 'mode')) ? automation.mode : null,
+      // The permission its runs work under (main re-checks it, lib/automations.cjs runPermission):
+      // Bypass only with the consent the user gave for this automation, otherwise Basic. No key:
+      // made before automations had one; its runs use the chat permission.
+      ...automationPermission(automation),
       // When the user last made, edited, paused or resumed it: main keeps its own schedule state
       // over an older copy from the window (lib/automations.cjs mergeAutomations).
       ...(validTimestamp(own(automation, 'editedAt')) ? { editedAt: automation.editedAt } : {}),
