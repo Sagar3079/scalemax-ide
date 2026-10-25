@@ -1068,9 +1068,10 @@ body:not(.companion-off) .task-item > .task-status.has-mascot:first-child {
   border: 1px solid var(--riso-rule-strong);
   border-radius: 3px;
   color: var(--riso-rail-ink-3);
-  font-family: var(--sm-font-mono);
-  font-size: 10.5px;
-  font-weight: 400;
+  /* A printed tag like the state tags: the display face on the type scale (mono is for code). */
+  font-family: var(--sm-font-display);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 14px;
   vertical-align: 1px;
 }
