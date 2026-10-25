@@ -435,7 +435,7 @@ async function run(win) {
           .every((selector) => Boolean(document.querySelector(selector))),
         attachIsIcon: (document.querySelector('#attach-btn')?.textContent || '').trim() === '' && document.querySelector('#attach-btn')?.getAttribute('aria-label') === 'Attach file',
         permissionLabel: document.querySelector('#permission-label')?.textContent || '',
-        mcpMethods: ['list','save','remove','test','tools','signIn','cancelSignIn','resources','prompts','getPrompt'].filter((m) => typeof api.mcp?.[m] === 'function'),
+        mcpMethods: ['list','save','remove','test','tools','signIn','cancelSignIn','signInStatus','resources','prompts','getPrompt'].filter((m) => typeof api.mcp?.[m] === 'function'),
         // Automations run in main (lib/automations.cjs); the window asks for Run now and hears about runs.
         automationMethods: ['state','runNow','setContext','onChanged'].filter((m) => typeof api.automations?.[m] === 'function'),
         automationControls: ['#automations-background-toggle[aria-checked="true"]', '#scheduler-status'].every((selector) => Boolean(document.querySelector(selector))),
@@ -1494,7 +1494,7 @@ async function run(win) {
     workspaceApi: probe.workspaceMethods.length === 10,
     dialogApi: probe.dialogMethods.length === 2,
     connectorApi: probe.connectorMethods.length === 15,
-    mcpApi: probe.mcpMethods.length === 10,
+    mcpApi: probe.mcpMethods.length === 11,
     automationApi: probe.automationMethods.length === 4 && probe.automationControls === true,
     providerGetOk: probe.providerGetOk,
     providerConfiguredFalse: probe.providerConfigured,

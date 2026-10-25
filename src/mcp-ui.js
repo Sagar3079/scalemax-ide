@@ -23,6 +23,10 @@ const extrasLoading = new Set();
 // What the user typed into a prompt's argument fields, so a redraw of the list keeps it.
 const promptValues = new Map();
 const promptKey = (serverId, prompt, argument) => `${serverId}\u0000${prompt}\u0000${argument}`;
+// A server just added: its card is scrolled into view and marked for a moment ({ id, until }).
+// It is listed under some 30 preset tiles, so it would otherwise be added out of sight.
+let revealed = null;
+const REVEAL_MS = 3000;
 // Shared with the connector cards (src/catalog-ui.js), which show one-click sign-ins.
 const MCP_CHANGED = 'scalemax:mcp-changed';
 
@@ -194,21 +198,50 @@ async function loadExtras(id) {
   renderServers();
 }
 
+/**
+ * The message box text for a filled-in prompt: the user's messages are the draft; assistant and
+ * system messages are the prompt's context, not the user's words, so they follow it as a quote
+ * that names where it came from and who says each line.
+ */
+export function promptDraft(result, { title = 'MCP', server = 'the server' } = {}) {
+  const draft = typeof result?.text === 'string' ? result.text.trim() : '';
+  const context = (Array.isArray(result?.messages) ? result.messages : [])
+    .filter((message) => message && message.role !== 'user' && typeof message.text === 'string' && message.text.trim());
+  if (!context.length) return { text: draft, quoted: 0 };
+  const who = (role) => (role === 'assistant' ? 'Assistant' : 'System');
+  const lines = [`> Context from the ${server} prompt "${title}" (quoted, not your words):`];
+  for (const message of context) {
+    message.text.trim().split('\n').forEach((line, index) => {
+      lines.push(`>${index === 0 ? ` ${who(message.role)}:` : ''}${line ? ` ${line}` : ''}`);
+    });
+  }
+  return { text: draft ? `${draft}\n\n${lines.join('\n')}` : lines.join('\n'), quoted: context.length };
+}
+
 // Like the specs dialog's buttons: the message box is seeded, never over a draft, and the user
-// reads (and can change) the prompt before sending it.
-function seedComposer(app, text) {
+// reads (and can change) the prompt before sending it. It goes to a chat task: an automation's
+// task only holds its runs, so with one of those open a new task is started for it (`moved`).
+export function seedComposer(app, text) {
   const input = byId('chat-input');
-  if (!input) return false;
+  if (!input) return null;
   app.switchView?.('chat');
   input.focus();
   if (input.value.trim()) {
     app.showToast('Send or clear what you have typed first');
-    return false;
+    return null;
+  }
+  const current = typeof app.currentTask === 'function' ? app.currentTask()
+    : app.tasks?.find((task) => task.id === app.currentTaskId);
+  let moved = false;
+  if (current?.automationId && typeof app.newTask === 'function') {
+    if (!app.newTask()) return null;
+    moved = true;
   }
   input.value = text;
+  input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
   app.updateSendEnabled?.();
-  return true;
+  return { moved };
 }
 
 async function insertPrompt(app, server, button) {
@@ -233,8 +266,14 @@ async function insertPrompt(app, server, button) {
     button.disabled = false;
   }
   if (!result?.ok) { app.showToast(`${server.name}: ${result?.error?.message || 'the prompt could not be filled in'}`); return; }
-  if (!result.data?.text) { app.showToast(`${server.name}: this prompt has no text`); return; }
-  if (seedComposer(app, result.data.text)) app.showToast(`${prompt.title || prompt.name} is in the message box. Read it, then send it.`);
+  const title = prompt.title || prompt.name;
+  const draft = promptDraft(result.data, { title, server: server.name });
+  if (!draft.text) { app.showToast(`${server.name}: this prompt has no text`); return; }
+  const seeded = seedComposer(app, draft.text);
+  if (!seeded) return;
+  const where = seeded.moved ? ' of a new task (automation tasks only hold their runs)' : '';
+  const quoted = draft.quoted ? ', with its other lines quoted as context' : '';
+  app.showToast(`${title} is in the message box${where}${quoted}. Read it, then send it.`);
 }
 
 function renderServers() {
@@ -244,9 +283,19 @@ function renderServers() {
     host.replaceChildren(element('p', 'empty-state', 'No MCP servers yet. Add a local command (stdio) or a remote Streamable HTTP endpoint.'));
     return;
   }
+  // The list is drawn again while a server connects and lists its extras: the focus stays where
+  // it was (the card, or the same button on it).
+  const active = document.activeElement;
+  const focusedCard = host.contains(active) ? active.closest('.mcp-server')?.dataset.mcpId : null;
+  const focusedAction = focusedCard && active.dataset?.mcpAction ? active.dataset.mcpAction : null;
+  const marked = revealed && revealed.until > Date.now() ? revealed.id : null;
   host.replaceChildren(...servers.map((server) => {
-    const card = element('div', 'mcp-server');
+    const card = element('div', `mcp-server${server.id === marked ? ' is-new' : ''}`);
     card.dataset.mcpId = server.id;
+    // Focusable from code only (revealServer), named for screen readers.
+    card.tabIndex = -1;
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-label', server.name);
     const head = element('div', 'mcp-server-head');
     const title = element('div', 'mcp-server-title');
     title.append(element('strong', 'mcp-server-name', server.name),
@@ -289,6 +338,35 @@ function renderServers() {
     if (expanded.has(server.id)) card.append(renderToolList(server), ...renderExtras(server));
     return card;
   }));
+  if (focusedCard) {
+    const card = [...host.querySelectorAll('.mcp-server')].find((node) => node.dataset.mcpId === focusedCard);
+    const target = (focusedAction && [...(card?.querySelectorAll('[data-mcp-action]') || [])]
+      .find((node) => node.dataset.mcpAction === focusedAction)) || card;
+    target?.focus({ preventScroll: true });
+  }
+}
+
+/**
+ * Scrolls a server's card into view, focuses it and marks it for a moment: a server added from
+ * the dialog or by URL is listed below the preset tiles, out of sight. Returns false when the
+ * card is not listed.
+ */
+export function revealServer(id) {
+  revealed = { id, until: Date.now() + REVEAL_MS };
+  renderServers();
+  const card = [...document.querySelectorAll('#mcp-list .mcp-server')].find((node) => node.dataset.mcpId === id);
+  if (!card) return false;
+  const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Its head at the top, under the "Your servers" heading (scroll-margin in styles.css): a card
+  // with its tools listed is taller than the window.
+  card.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+  card.focus({ preventScroll: true });
+  setTimeout(() => {
+    if (revealed?.id !== id || revealed.until > Date.now()) return;
+    revealed = null;
+    for (const node of document.querySelectorAll('#mcp-list .mcp-server.is-new')) node.classList.remove('is-new');
+  }, REVEAL_MS + 50);
+  return true;
 }
 
 async function refreshServers(app) {
@@ -370,6 +448,8 @@ async function addRemote(app, { name, url, presetId = null }) {
   const saved = await api.save({ name, transport: 'http', url, enabled: true });
   if (!saved?.ok) { app.showToast(saved?.error?.message || 'The server could not be added'); return false; }
   await refreshServers(app);
+  // Added by URL: shown in "Your servers", below the preset tiles (a preset's tile says it itself).
+  if (!presetId) revealServer(saved.data.id);
   const tested = await testServer(app, saved.data.id, { quiet: true });
   if (tested?.ok) {
     toolsToast(app, saved.data.name, tested.data.tools.length);
@@ -655,12 +735,14 @@ async function saveServer(app, event) {
       const count = tested.data.tools.length;
       expanded.add(saved.data.id);
       void loadExtras(saved.data.id);
-      renderServers();
       byId('mcp-dialog')?.close();
+      // Below the preset tiles: the new (or edited) server is brought into view.
+      revealServer(saved.data.id);
       app.showToast(`${saved.data.name}: ${count} tool${count === 1 ? '' : 's'} available`);
     } else if (tested?.error?.code === 'MCP_AUTH_REQUIRED' && input.transport === 'http' && bridge()?.signIn) {
       // The server wants a sign-in: continue straight into the browser consent page.
       byId('mcp-dialog')?.close();
+      revealServer(saved.data.id);
       app.showToast(`${saved.data.name} needs sign-in. Approve access in your browser…`);
       await signInServer(app, saved.data.id);
     } else {

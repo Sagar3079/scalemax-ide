@@ -191,20 +191,19 @@ function bindDataExport(app) {
   });
 }
 
-// Catalog entries carry full records — prompt templates for skills, setup
-// guides for connectors, prompt context for experts — that the list rows only
-// summarise. Clicking a row opens the full record.
+// Catalog entries carry full records (a skill's instructions, a connector's setup steps, an
+// expert's prompt context) that the list rows only summarise. Clicking a row opens the full record.
 const DETAIL_SOURCES = [
-  { selector: '#experts-grid', row: '.expert-card', kind: 'Expert role', entries: (app) => app.allExperts(), idFrom: (node) => node.querySelector('.expert-use')?.dataset.expertId },
-  { selector: '#skills-list', row: '.skill-card', kind: 'Prompt template', entries: (app) => app.allSkills(), idFrom: (node) => node.querySelector('.skill-toggle')?.dataset.id },
-  { selector: '#connectors-list', row: '.connector-card', kind: 'Setup guide', entries: () => CONNECTORS, idFrom: (node) => node.querySelector('[data-connector-action]')?.dataset.connectorAction },
+  { selector: '#experts-grid', row: '.expert-card', kind: 'expert', entries: (app) => app.allExperts(), idFrom: (node) => node.querySelector('.expert-use')?.dataset.expertId },
+  { selector: '#skills-list', row: '.skill-card', kind: 'skill', entries: (app) => app.allSkills(), idFrom: (node) => node.querySelector('.skill-toggle')?.dataset.id },
+  { selector: '#connectors-list', row: '.connector-card', kind: 'connector', entries: () => CONNECTORS, idFrom: (node) => node.querySelector('[data-connector-action]')?.dataset.connectorAction },
 ];
 
 const RESOURCE_KINDS = {
-  expert: { label: 'Expert role', entries: (app) => app.allExperts() },
-  skill: { label: 'Prompt template', entries: (app) => app.allSkills() },
-  community: { label: 'Community', entries: () => COMMUNITY_SKILLS },
-  connector: { label: 'Setup guide', entries: () => CONNECTORS },
+  expert: { entries: (app) => app.allExperts() },
+  skill: { entries: (app) => app.allSkills() },
+  community: { entries: () => COMMUNITY_SKILLS },
+  connector: { entries: () => CONNECTORS },
 };
 
 function detailSection(label, value, asCode = false) {
@@ -235,25 +234,25 @@ function copyButton(app, value, label) {
   return button;
 }
 
+// `kind`: 'expert', 'skill', 'community' or 'connector'. The dialog is named by its title
+// (aria-labelledby) and described by the entry's description (aria-describedby).
 function openDetailDialog(app, kind, entry) {
   const dialog = document.getElementById('detail-dialog');
-  const kindNode = document.getElementById('detail-kind');
   const titleNode = document.getElementById('detail-title');
   const descriptionNode = document.getElementById('detail-description');
   const content = document.getElementById('detail-content');
-  if (!dialog || !kindNode || !titleNode || !descriptionNode || !content) return;
+  if (!dialog || !titleNode || !descriptionNode || !content) return;
 
-  kindNode.textContent = kind;
   titleNode.textContent = entry.name;
   descriptionNode.textContent = entry.description || '';
   const parts = [];
-  if (kind === 'Expert role') {
+  if (kind === 'expert') {
     if (entry.role) parts.push(detailSection('Role', entry.role));
     if (entry.prompt) parts.push(detailSection('Prompt context applied to chat', entry.prompt, true));
-  } else if (kind === 'Prompt template') {
+  } else if (kind === 'skill') {
     if (entry.inputs?.length) parts.push(detailSection('Inputs', entry.inputs.join(' · ')));
-    if (entry.prompt) parts.push(detailSection('Template', entry.prompt, true));
-  } else if (kind === 'Community') {
+    if (entry.prompt) parts.push(detailSection('What the skill tells the assistant', entry.prompt, true));
+  } else if (kind === 'community') {
     if (entry.publisher) parts.push(detailSection('Publisher', entry.publisher));
     if (entry.licenseNote) parts.push(detailSection('License', entry.licenseNote));
     if (entry.sourceUrl) {
@@ -261,7 +260,7 @@ function openDetailDialog(app, kind, entry) {
       section.append(copyButton(app, entry.sourceUrl, 'Copy link'));
       parts.push(section);
     }
-  } else if (kind === 'Setup guide') {
+  } else if (kind === 'connector') {
     if (entry.auth) parts.push(detailSection('Authentication', entry.auth));
     if (entry.capabilities?.length) parts.push(detailSection('Capabilities', entry.capabilities.join(' · ')));
     if (entry.setupSteps?.length) parts.push(detailList('Setup steps', entry.setupSteps));
@@ -306,8 +305,11 @@ let activeOAuthConfig = null;
 let oauthPendingId = null;
 // MCP servers (sanitized list entries); one-click sign-ins are the ones with auth.directoryId.
 let mcpServers = [];
-// The connector whose one-click sign-in is in progress.
+// The connector whose one-click sign-in is in progress, and the consent page it opened (to copy
+// when the browser did not come up; known shortly after the sign-in starts).
 let mcpPendingId = null;
+let mcpConsentUrl = null;
+const CONSENT_POLL_MS = 400;
 const MCP_CHANGED = 'scalemax:mcp-changed';
 // Connectors that can sign in through an installed CLI ({ github: { installed } }), and the
 // CLI sign-in in progress ({ id, code }; code is set once the device page is open).
@@ -459,7 +461,8 @@ function decorateConnectors(app) {
       continue;
     }
     if (!record?.connected && cliAvailableFor(entry.id)) {
-      const connect = element('button', 'button secondary', 'Connect');
+      // Logs in through the GitHub CLI (an existing login is reused; otherwise its device page opens).
+      const connect = element('button', 'button secondary', 'Connect with GitHub CLI');
       connect.addEventListener('click', () => void startCliConnect(app, entry));
       const more = element('button', 'connector-more', 'More options');
       more.setAttribute('aria-label', `More ways to connect ${entry.name}`);
@@ -469,17 +472,31 @@ function decorateConnectors(app) {
     }
     const oneClick = Boolean(mcpListing(entry.id) && mcpBridge()?.signIn);
     if (!record?.connected && oneClick && mcpPendingId === entry.id) {
-      // The consent page is open in the browser; the card waits for it.
+      // The consent page is open in the browser; the card waits for it. Its link can be copied
+      // into a browser that did not come up.
       const waiting = element('span', 'connector-chip');
       waiting.append(element('span', 'status-dot pending'), element('span', 'connector-chip-text', 'Waiting for browser…'));
+      slot.append(waiting);
+      if (mcpConsentUrl) {
+        const url = mcpConsentUrl;
+        const copy = element('button', 'button secondary', 'Copy link');
+        copy.title = "Browser didn't open? Copy the sign-in link into it.";
+        copy.setAttribute('aria-label', `Copy the ${entry.name} sign-in link`);
+        copy.addEventListener('click', () => copyText(app, url, 'Sign-in link'));
+        slot.append(copy);
+      }
       const cancel = element('button', 'button secondary', 'Cancel');
       cancel.addEventListener('click', () => void cancelMcpSignIn());
-      slot.append(waiting, cancel);
+      slot.append(cancel);
       continue;
     }
     if (!record?.connected) {
-      const connect = element('button', 'button secondary', 'Connect');
-      // One-click connectors go straight to the provider's consent page; the others need the dialog.
+      // Says what happens: one-click connectors go straight to the provider's consent page in the
+      // browser; the others open the dialog (own OAuth app or an access token).
+      const connect = element('button', 'button secondary', oneClick ? 'Connect in browser' : 'Connect…');
+      connect.title = oneClick ? `Opens ${entry.name} in your browser to sign in` : 'Choose how to sign in: your own OAuth app or an access token';
+      connect.setAttribute('aria-label', oneClick ? `Connect ${entry.name}: opens ${entry.name} in your browser to sign in`
+        : `Connect ${entry.name}: choose how to sign in`);
       connect.addEventListener('click', () => (oneClick
         ? void startMcpSignIn(app, entry)
         : void openConnectorDialog(app, entry)));
@@ -572,13 +589,31 @@ function renderMcpSection(entry) {
     ? `Connected through the official ${name} MCP server. Its tools are offered in chat.`
     : `Opens ${name} in your browser. Approve access and ScaleMax connects automatically: no app registration, `
       + `keys or callback URL needed. ${name} tools then become available in chat.`);
-  setText('connector-mcp-start', server ? 'Sign in again' : `Sign in with ${entry.name}`);
+  // Named by method: the advanced section below has a sign-in of its own (your own OAuth app).
+  setText('connector-mcp-start', server ? `Sign in to ${entry.name} again (one click)` : `Sign in with ${entry.name} (one click)`);
   const start = byId('connector-mcp-start');
   if (start) start.disabled = pending;
   const cancel = byId('connector-mcp-cancel');
   if (cancel) cancel.hidden = !pending;
   const disconnect = byId('connector-mcp-disconnect');
   if (disconnect) disconnect.hidden = !server || pending;
+  // While it waits: the consent page's link, for a browser that did not open.
+  const link = byId('connector-mcp-link');
+  if (link) link.hidden = !(pending && mcpConsentUrl);
+  setText('connector-mcp-url', pending && mcpConsentUrl ? mcpConsentUrl : '');
+}
+
+/** Reads the consent page the sign-in opened (main knows it a moment after the start). */
+async function pollConsentUrl(app, entry) {
+  const mcp = mcpBridge();
+  if (!mcp?.signInStatus || mcpPendingId !== entry.id || mcpConsentUrl) return;
+  const status = await mcp.signInStatus();
+  const data = status?.ok ? status.data : null;
+  if (mcpPendingId !== entry.id || mcpConsentUrl || !data?.pending || data.directoryId !== mcpListing(entry.id)
+    || typeof data.url !== 'string' || !data.url.startsWith('https://')) return;
+  mcpConsentUrl = data.url;
+  decorateConnectors(app);
+  if (activeConnector === entry) renderMcpSection(entry);
 }
 
 // Starts the browser sign-in from the card (Connect) or from the dialog.
@@ -587,7 +622,9 @@ async function startMcpSignIn(app, entry = activeConnector) {
   if (!mcp?.signIn || !entry || mcpPendingId === entry.id) return;
   // Starting a sign-in cancels any other one in main, so only one card waits at a time.
   mcpPendingId = entry.id;
+  mcpConsentUrl = null;
   decorateConnectors(app);
+  const poll = setInterval(() => { void pollConsentUrl(app, entry); }, CONSENT_POLL_MS);
   if (activeConnector === entry) renderMcpSection(entry);
   const report = (message, toast) => {
     if (activeConnector === entry) setMcpStatus(message);
@@ -615,7 +652,11 @@ async function startMcpSignIn(app, entry = activeConnector) {
   } catch (error) {
     report(error?.message || 'Sign-in failed.', true);
   } finally {
-    if (mcpPendingId === entry.id) mcpPendingId = null;
+    clearInterval(poll);
+    if (mcpPendingId === entry.id) {
+      mcpPendingId = null;
+      mcpConsentUrl = null;
+    }
     await refreshConnectors(app);
     announceMcpChange();
   }
@@ -726,7 +767,9 @@ function renderOAuthSection(entry, config) {
   }
   if (!activeOAuthConfig || activeOAuthConfig.loopback === 'no') return;
   const current = activeOAuthConfig;
-  setText('connector-oauth-title', `Sign in with ${entry.name}`);
+  // Beside a one-click sign-in this one is named by its method, so the two never read the same.
+  const ownApp = Boolean(mcpListing(entry.id) && mcpBridge()?.signIn);
+  setText('connector-oauth-title', ownApp ? 'Use my own OAuth app' : `Sign in with ${entry.name}`);
   setText('connector-oauth-badge', LOOPBACK_LABELS[current.loopback] || 'Loopback redirect');
   setText('connector-register-url', current.registerUrl || 'See the provider documentation');
   setText('connector-redirect-uri', current.redirectUri || '');
@@ -756,7 +799,9 @@ function renderOAuthSection(entry, config) {
   const forget = byId('connector-oauth-forget');
   if (forget) forget.hidden = !current.configured;
   const record = connectorCredentials[entry.id];
-  setText('connector-oauth-start', record?.oauth && record.connected ? `Sign in to ${entry.name} again` : `Sign in with ${entry.name}`);
+  const again = record?.oauth && record.connected;
+  setText('connector-oauth-start', ownApp ? (again ? 'Sign in again with my own OAuth app' : 'Sign in with my own OAuth app')
+    : (again ? `Sign in to ${entry.name} again` : `Sign in with ${entry.name}`));
 }
 
 async function openConnectorDialog(app, entry) {
@@ -945,6 +990,7 @@ function bindConnectors(app) {
     byId('connector-mcp-start')?.addEventListener('click', () => void startMcpSignIn(app, activeConnector));
     byId('connector-mcp-cancel')?.addEventListener('click', () => void cancelMcpSignIn());
     byId('connector-mcp-disconnect')?.addEventListener('click', () => void disconnectMcp(app));
+    byId('connector-mcp-url-copy')?.addEventListener('click', () => copyText(app, mcpConsentUrl, 'Sign-in link'));
     byId('connector-register-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.registerUrl, 'Link'));
     byId('connector-redirect-copy')?.addEventListener('click', () => copyText(app, activeOAuthConfig?.redirectUri, 'Redirect URI'));
     // Closing the dialog leaves a browser sign-in running; "Cancel sign-in" stops it.
@@ -968,7 +1014,7 @@ export function openResourceDetail(app, kind, id) {
   const source = Object.hasOwn(RESOURCE_KINDS, kind) ? RESOURCE_KINDS[kind] : null;
   const entry = source?.entries(app).find((item) => item.id === id);
   if (!source || !entry) { app.showToast('No details available'); return; }
-  openDetailDialog(app, source.label, entry);
+  openDetailDialog(app, kind, entry);
 }
 
 export function bindCatalogUi(app) {

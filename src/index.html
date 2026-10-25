@@ -557,19 +557,19 @@
 
         <section id="view-experts" class="view" aria-labelledby="catalog-title">
           <div class="page page-wide">
-            <header class="page-header"><div><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Explore roles, prompt templates, reference repositories, and setup guides.</p></div></header>
+            <header class="page-header"><div><h1 id="catalog-title" class="page-title">Expertise, without the guesswork.</h1><p class="page-sub">Experts, skills, reference repos and connectors for your chats.</p></div></header>
             <div class="catalog-filters">
               <div class="form-group"><label for="catalog-search">Search the catalog</label><input id="catalog-search" type="search" placeholder="Search by name or purpose" autocomplete="off" /></div>
               <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
               <span id="catalog-count" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
-            <p class="notice">Selecting an expert or installing a skill applies its prompt to your chat requests. Connecting a service (OAuth sign-in with your own app registration, or an access token) stores the credential encrypted on this device and verifies it with the provider where a validation endpoint exists; reference repos are reading material.</p>
+            <p class="notice">Use an expert or install a skill to change how the assistant works in chat. Connect a service to sign in to it from ScaleMax: the sign-in stays encrypted on this Mac, and services that list tools in chat can then be used by the assistant.</p>
             <section class="catalog-section" aria-labelledby="experts-title">
               <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt context</span><button id="add-expert-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New expert</button></div></div>
               <div id="experts-grid" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="skills-title">
-              <div class="catalog-heading"><div><h2 id="skills-title">30 templates</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt library</span><button id="add-skill-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New skill</button></div></div>
+              <div class="catalog-heading"><div><h2 id="skills-title">30 skills</h2></div><div class="catalog-heading-actions"><span class="small-label">Install one to use it in chat</span><button id="add-skill-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New skill</button></div></div>
               <div id="skills-list" class="catalog-grid"></div>
             </section>
             <section class="catalog-section" aria-labelledby="community-title">
@@ -733,6 +733,10 @@
           <button id="connector-mcp-disconnect" class="button danger" type="button" hidden>Disconnect</button>
         </div>
         <p id="connector-mcp-status" class="status-text" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div id="connector-mcp-link" class="connector-consent" hidden>
+          <p class="status-text">Browser didn't open? Copy this sign-in link into it.</p>
+          <div class="connector-consent-row"><code id="connector-mcp-url" class="path-text connector-consent-url"></code><button id="connector-mcp-url-copy" class="button secondary compact" type="button">Copy link</button></div>
+        </div>
       </section>
       <details id="connector-advanced" class="connector-advanced" open>
       <summary id="connector-advanced-summary">Sign-in options</summary>
@@ -790,7 +794,7 @@
 
   <dialog id="custom-dialog" aria-labelledby="custom-dialog-title">
     <div class="dialog-header">
-      <div><span id="custom-dialog-kind" class="eyebrow hidden">Your own expert</span><h2 id="custom-dialog-title">New expert</h2></div>
+      <div><h2 id="custom-dialog-title">New expert</h2></div>
       <button id="custom-close" class="button secondary" type="button">Close</button>
     </div>
     <form id="custom-form" class="dialog-body" novalidate>
@@ -860,9 +864,9 @@
     </form>
   </dialog>
 
-  <dialog id="detail-dialog" aria-labelledby="detail-title">
+  <dialog id="detail-dialog" aria-labelledby="detail-title" aria-describedby="detail-description">
     <div class="dialog-header">
-      <div><span id="detail-kind" class="eyebrow hidden">Details</span><h2 id="detail-title">Details</h2></div>
+      <div><h2 id="detail-title">Details</h2></div>
       <button id="detail-close" class="button secondary" type="button">Close</button>
     </div>
     <div class="dialog-body">

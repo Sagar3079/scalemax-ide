@@ -332,6 +332,13 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     /** @returns {Promise<{ok: boolean, data?: {cancelled: boolean}, error?: object}>} */
     cancelSignIn: () => ipcRenderer.invoke('mcp:oauth-cancel'),
 
+    /**
+     * The one-click sign-in in progress and the https consent page it opened (null until then),
+     * for the window to offer as a link to copy when the browser did not open. No tokens.
+     * @returns {Promise<{ok: boolean, data?: {pending: boolean, id: string|null, directoryId: string|null, url: string|null}, error?: object}>}
+     */
+    signInStatus: () => ipcRenderer.invoke('mcp:oauth-status'),
+
     // --- MCP resources and prompts ---
     /**
      * The resources (documents, files, records) and URI templates a server offers.
