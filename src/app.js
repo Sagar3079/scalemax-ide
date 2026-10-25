@@ -23,7 +23,7 @@ import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
 import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
 import { shortcutCommand, isCommand, shortcutList } from './shortcuts.mjs';
-import { normalizeWorktree, unsharedChangeIds } from './sessions.mjs';
+import { normalizeWorktree, unsharedChangeIds, worktreeName } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
 import { bindCatalogUi, openResourceDetail } from './catalog-ui.js';
@@ -1518,7 +1518,7 @@ const app = {
       if (task.folder?.path === path && task.folder.name && task.folder.name !== folderName(path)) return task.folder.name;
       record ||= worktree;
     }
-    return record ? `${record.mainName} (${record.branch.replace(/^scalemax\//, '')})` : '';
+    return record ? worktreeName(record) : '';
   },
 
   // The open folder as a task folder ({ name, path }), or null. A task worktree is named after

@@ -295,7 +295,9 @@ export function transcriptFileName(task) {
 }
 
 const lastSegment = (path) => String(path || '').split(/[\\/]/).filter(Boolean).pop() || String(path || '');
-const worktreeName = (worktree) => `${worktree.mainName} · branch ${worktree.branch}`;
+// The same name the sidebar and the crumb give it (src/app.js worktreeLabel): "api (feat/health)",
+// the branch without ScaleMax's own scalemax/ prefix.
+export const worktreeName = (worktree) => `${worktree.mainName} (${worktree.branch.replace(/^scalemax\//, '')})`;
 /** The task worktree (removed or not) at `path` that one of `tasks` remembers, or null. */
 function worktreeAtPath(tasks, path) {
   for (const task of Array.isArray(tasks) ? tasks : []) {
@@ -308,7 +310,7 @@ function worktreeAtPath(tasks, path) {
 /**
  * The name a folder goes by in prompts and notices. A task worktree lives in a folder with a
  * generated name ("api-task-1792746527836-6goj6v"), so it is named by its project and branch
- * instead: "api · branch feat/health". Any other folder goes by its own name.
+ * instead: "api (feat/health)". Any other folder goes by its own name.
  * `target`: a task, a worktree (normalizeWorktree) or a folder path; `tasks` (src/app.js
  * app.tasks) tells which task worktree a path or a task's folder is, when the task does not
  * remember it itself.

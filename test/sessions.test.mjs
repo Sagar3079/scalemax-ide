@@ -212,10 +212,10 @@ test('a task worktree is named by its project and branch, never by its generated
   // A task that started in the worktree's folder without remembering the worktree itself.
   const visitor = { id: 't3', title: 'Visitor', folder: { name: 'api-task-1792746527836-6goj6v', path: worktree.path }, messages: [] };
   const tasks = [own, plain, visitor];
-  assert.equal(friendlyFolderName(own), 'api · branch feat/health');
-  assert.equal(friendlyFolderName(worktree), 'api · branch feat/health');
-  assert.equal(friendlyFolderName(worktree.path, tasks), 'api · branch feat/health');
-  assert.equal(friendlyFolderName(visitor, tasks), 'api · branch feat/health');
+  assert.equal(friendlyFolderName(own), 'api (feat/health)');
+  assert.equal(friendlyFolderName(worktree), 'api (feat/health)');
+  assert.equal(friendlyFolderName(worktree.path, tasks), 'api (feat/health)');
+  assert.equal(friendlyFolderName(visitor, tasks), 'api (feat/health)');
   assert.equal(friendlyFolderName(plain, tasks), 'web');
   assert.equal(friendlyFolderName('/Users/you/web', tasks), 'web');
   assert.equal(friendlyFolderName(worktree.path), 'api-task-1792746527836-6goj6v', 'without the tasks, a path is only a path');
@@ -240,7 +240,7 @@ test('the Delete task prompt names the task and says what happens to its files',
   assert.equal(running.note, 'Its reply that is still running is stopped.');
   const own = { id: 't2', title: 'Add health', folder: { name: 'api (x)', path: worktree.path }, worktree, messages: [] };
   const question = deleteTaskQuestion(own, { tasks: [plain, own] });
-  assert.equal(question.message, 'Its conversation is removed. Files in api · branch feat/health are not touched.');
+  assert.equal(question.message, 'Its conversation is removed. Files in api (feat/health) are not touched.');
   assert.match(question.note, /separate worktree stays on disk with its branch/);
   assert.equal(question.message.includes('api-task-1'), false);
   // Another task works there too: the worktree is not left behind.

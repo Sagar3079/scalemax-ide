@@ -16,7 +16,7 @@
  * settings and hooks; the model never reaches any of it. DOM is built with createElement and
  * textContent only (no HTML).
  */
-import { slugify, normalizeWorktree, friendlyFolderName, fullTaskTitle } from './sessions.mjs';
+import { slugify, normalizeWorktree, friendlyFolderName, fullTaskTitle, worktreeName } from './sessions.mjs';
 import { reloadTabs } from './workspace-ui.js';
 import { askConfirm } from './confirm-dialog.js';
 
@@ -454,10 +454,10 @@ function renderSubtitle() {
   const state = commit.state;
   const node = $('#commit-subtitle');
   if (!node || !state) return;
-  // A task worktree goes by its project and branch ("api · branch feat/health"), never by its
-  // generated folder name; any other folder by its name and branch.
+  // A task worktree goes by its project and branch ("api (feat/health)", as in the sidebar),
+  // never by its generated folder name; any other folder by its name and branch.
   const own = commit.app ? worktreeAt(commit.app, state.root) : null;
-  const where = own ? `${own.mainName} · branch ${state.branch || own.branch}`
+  const where = own ? worktreeName({ ...own, branch: state.branch || own.branch })
     : `${friendlyFolderName(state.root, commit.app?.tasks)} · ${state.branch ? `On ${state.branch}` : 'Not on a branch'}`;
   const who = state.identity?.email ? `committing as ${state.identity.name || state.identity.email} <${state.identity.email}>` : 'Git has no user.email set: run git config --global user.email … first';
   node.textContent = `${where} · ${who}`;

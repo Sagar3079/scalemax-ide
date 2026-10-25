@@ -1127,6 +1127,16 @@ function setText(selector, text) {
   if (node) node.textContent = text;
 }
 
+// The folder a prompt works in, as the sidebar names it: a task worktree is "api (feat/health)",
+// not the generated folder name main reports ("api-task-1792746527836-6goj6v").
+function shownFolderName(app, request) {
+  const raw = typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '';
+  const reply = app?.replyFor?.(request.requestId);
+  const task = reply ? app.tasks?.find?.((item) => item.id === reply.taskId) : null;
+  const shown = task && typeof app.taskFolderShown === 'function' ? app.taskFolderShown(task)?.name : '';
+  return typeof shown === 'string' && shown ? shown.slice(0, 255) : raw;
+}
+
 // The task a prompt comes from, when it is not the one on screen.
 function backgroundTask(app, request) {
   const reply = app?.replyFor?.(request.requestId);
@@ -1304,7 +1314,7 @@ export function bindApprovals(app) {
       toolName: String(request.toolName || 'tool'),
       readOnly: request.readOnly === true,
       arguments: String(request.arguments || '{}'),
-      folderName: typeof request.folderName === 'string' ? request.folderName.slice(0, 255) : '',
+      folderName: shownFolderName(app, request),
       // Why it always asks ('unsandboxed', 'egress', or another reason main gives), and how a command runs.
       reason: typeof request.reason === 'string' && request.reason
         ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private', 'hooks-config'].includes(request.reason) ? request.reason : 'required') : '',
@@ -1395,7 +1405,9 @@ export function renderFolderMenu(app) {
   const root = app.workspace?.root || '';
   const task = typeof app.currentTask === 'function' ? app.currentTask() : null;
   const locked = isTaskLocked(task);
-  const folder = task?.folder || (root ? { name: folderName(root), path: root } : null);
+  // As the sidebar names it: a task worktree goes by its project and branch.
+  const folder = (task?.folder && typeof app.taskFolderShown === 'function' ? app.taskFolderShown(task) : task?.folder)
+    || (root ? { name: folderName(root), path: root } : null);
   const title = locked ? 'Task folder' : 'Folder for this task';
   menu.setAttribute('aria-label', title);
   const nodes = [element('p', 'composer-menu-title', title)];

@@ -48,12 +48,12 @@ test('the confirmation names what it is about, focuses Cancel and answers true o
   const opener = new FakeNode('delete-task-btn', { doc });
   opener.focus();
   const asked = askConfirm({
-    title: 'Delete “Fix the parser”?', context: 'api · branch feat/health', message: 'Its conversation is removed.',
+    title: 'Delete “Fix the parser”?', context: 'api (feat/health)', message: 'Its conversation is removed.',
     details: ['src/a.js'], confirmLabel: 'Delete task', danger: true,
   });
   assert.equal(dialog.open, true);
   assert.equal(parts['confirm-title'].textContent, 'Delete “Fix the parser”?');
-  assert.equal(parts['confirm-context'].textContent, 'api · branch feat/health');
+  assert.equal(parts['confirm-context'].textContent, 'api (feat/health)');
   assert.equal(parts['confirm-message'].textContent, 'Its conversation is removed.');
   assert.equal(parts['confirm-details'].hidden, false);
   assert.equal(parts['confirm-details'].children[0].textContent, 'src/a.js');

@@ -95,7 +95,7 @@ test('Merge and Remove prompts name the worktree by project and branch and say w
   const worktree = { path: '/Users/you/Library/Application Support/ScaleMax/worktrees/api-task-1792746527836-6goj6v', branch: 'feat/health', base: 'main', mainRoot: '/Users/you/api', mainName: 'api', createdAt: 1 };
   const clean = removeQuestion(worktree, { changed: 0, unmerged: 0, notes: false });
   assert.equal(clean.title, 'Remove this task\'s worktree?');
-  assert.equal(clean.context, 'api · branch feat/health');
+  assert.equal(clean.context, 'api (feat/health)');
   assert.equal(clean.message, 'Its folder is deleted. The branch feat/health and its commits are kept.');
   assert.equal(clean.confirmLabel, 'Remove worktree');
   assert.equal(clean.danger, true);
@@ -109,7 +109,7 @@ test('Merge and Remove prompts name the worktree by project and branch and say w
   assert.equal(busy.confirmLabel, 'Remove and lose changes');
   const merge = mergeQuestion(worktree, { unmerged: 2 });
   assert.equal(merge.title, 'Merge 2 commits into main?');
-  assert.equal(merge.context, 'api · branch feat/health');
+  assert.equal(merge.context, 'api (feat/health)');
   assert.equal(merge.confirmLabel, 'Merge into main');
   assert.equal(merge.danger, undefined, 'a merge is not destructive: it is undone if it conflicts');
   assert.match(mergeQuestion(worktree, { unmerged: 0 }).note, /main already has everything from feat\/health/);
