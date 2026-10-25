@@ -358,21 +358,218 @@ function renderFileList() {
   }));
   if (hadFocus) host.querySelector('.changes-dialog-file.is-selected')?.focus();
 }
-function diffLine(line) {
-  const row = element('div', `diff-line is-${line.type === '+' ? 'add' : line.type === '-' ? 'del' : 'same'}`);
+// ---- The diff in the review dialog: word-level marks and syntax colours ---------------------
+// Like the editor's inline review: the words that changed inside a changed line are marked, and
+// the code is coloured by its language (src/editor.js highlightLines, the editor's own parser
+// and tags). Both are bounded, so a very large change still opens quickly.
+
+const WORD = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+// Word marks: a table of at most this many cells per line pair, and this many for the whole diff
+// (past it, only the changed middle of a line is marked).
+const WORD_CELLS = 160_000;
+const WORD_BUDGET = 4_000_000;
+// Lines sharing less than this share of their (non-space) characters are simply replaced.
+const WORD_SHARED = 0.3;
+// Syntax colours only for diffs up to this many characters.
+export const SYNTAX_LIMIT = 200_000;
+
+function addRange(list, from, to) {
+  const last = list[list.length - 1];
+  if (last && last[1] === from) last[1] = to;
+  else if (to > from) list.push([from, to]);
+}
+// Ranges with only spaces between them read as one change.
+function joinRanges(list, text) {
+  const joined = [];
+  for (const range of list) {
+    const last = joined[joined.length - 1];
+    if (last && !text.slice(last[1], range[0]).trim()) last[1] = range[1];
+    else joined.push([...range]);
+  }
+  return joined;
+}
+const visible = (text) => text.replace(/\s+/g, '').length;
+
+/**
+ * Which parts of a removed line and the added line that took its place differ, word by word:
+ * { removed: [[from, to]], added: [[from, to]], cells } (character offsets; cells is the work
+ * it took). Null when the lines share too little for marks to help. `budget` caps the work: past
+ * it only the changed middle (between the common start and end) is marked.
+ */
+export function wordDiff(before, after, { budget = WORD_CELLS } = {}) {
+  const a = String(before ?? '');
+  const b = String(after ?? '');
+  const wordsA = a.match(WORD) || [];
+  const wordsB = b.match(WORD) || [];
+  const n = wordsA.length;
+  const m = wordsB.length;
+  const cells = (n + 1) * (m + 1);
+  const removed = [];
+  const added = [];
+  let shared = 0;
+  let work = a.length + b.length;
+  if (cells <= Math.min(WORD_CELLS, budget)) {
+    work = cells;
+    // Longest common subsequence of the words, then a walk that marks the rest.
+    const width = m + 1;
+    const table = new Uint32Array(cells);
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        table[i * width + j] = wordsA[i] === wordsB[j]
+          ? table[(i + 1) * width + j + 1] + 1
+          : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    let atA = 0;
+    let atB = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && wordsA[i] === wordsB[j]) {
+        shared += visible(wordsA[i]);
+        atA += wordsA[i].length;
+        atB += wordsB[j].length;
+        i += 1;
+        j += 1;
+      } else if (j < m && (i >= n || table[i * width + j + 1] >= table[(i + 1) * width + j])) {
+        addRange(added, atB, atB + wordsB[j].length);
+        atB += wordsB[j].length;
+        j += 1;
+      } else {
+        addRange(removed, atA, atA + wordsA[i].length);
+        atA += wordsA[i].length;
+        i += 1;
+      }
+    }
+  } else {
+    const shortest = Math.min(a.length, b.length);
+    let start = 0;
+    while (start < shortest && a[start] === b[start]) start += 1;
+    let end = 0;
+    while (end < shortest - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1;
+    shared = visible(a.slice(0, start)) + visible(a.slice(a.length - end));
+    addRange(removed, start, a.length - end);
+    addRange(added, start, b.length - end);
+  }
+  const size = Math.max(visible(a), visible(b));
+  if (!size || shared / size < WORD_SHARED) return null;
+  return { removed: joinRanges(removed, a), added: joinRanges(added, b), cells: work };
+}
+
+// Pieces of a line: syntax ranges and changed ranges (each sorted, not overlapping) merged into
+// [{ text, token, changed }].
+function segments(text, syntax = [], changes = []) {
+  const cuts = new Set([0, text.length]);
+  for (const [from, to] of syntax) { cuts.add(Math.min(from, text.length)); cuts.add(Math.min(to, text.length)); }
+  for (const [from, to] of changes) { cuts.add(from); cuts.add(to); }
+  const points = [...cuts].sort((x, y) => x - y);
+  const pieces = [];
+  let s = 0;
+  let c = 0;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (to <= from) continue;
+    while (s < syntax.length && syntax[s][1] <= from) s += 1;
+    while (c < changes.length && changes[c][1] <= from) c += 1;
+    const token = s < syntax.length && syntax[s][0] <= from ? syntax[s][2] : '';
+    const changed = c < changes.length && changes[c][0] <= from;
+    const last = pieces[pieces.length - 1];
+    if (last && last.token === token && last.changed === changed) last.text += text.slice(from, to);
+    else pieces.push({ text: text.slice(from, to), token, changed });
+  }
+  return pieces;
+}
+
+/**
+ * The review dialog's diff as plain data: hunk headings and lines, each line with its numbers
+ * and its text in pieces ({ text, token: 'tok-keyword' or '', changed }). `highlight` is
+ * src/editor.js highlightLines (null: no syntax colours), `path` picks the language.
+ */
+export function diffView(data, { highlight = null, path = '' } = {}) {
+  const hunks = Array.isArray(data?.hunks) ? data.hunks : [];
+  const total = hunks.reduce((sum, hunk) => sum + hunk.lines.reduce((size, line) => size + (line.text?.length || 0) + 1, 0), 0);
+  const colour = typeof highlight === 'function' && total <= SYNTAX_LIMIT;
+  let budget = WORD_BUDGET;
+  const items = [];
+  for (const hunk of hunks) {
+    const lines = hunk.lines;
+    const last = hunk.newLines ? hunk.newStart + hunk.newLines - 1 : hunk.newStart;
+    items.push({ kind: 'hunk', text: hunk.newLines > 1 ? `Lines ${hunk.newStart}–${last}` : `Line ${hunk.newStart || 1}` });
+    const syntax = lines.map(() => []);
+    const changes = lines.map(() => []);
+    if (colour) {
+      // Each side of the hunk is coloured as the text it was: context and removed lines as the
+      // file before, context and added lines as the file after.
+      for (const side of ['-', '+']) {
+        const rows = lines.map((line, index) => (!line.noNewline && (line.type === ' ' || line.type === side) ? index : -1)).filter((index) => index >= 0);
+        if (!rows.length) continue;
+        const colours = highlight(rows.map((index) => lines[index].text).join('\n'), path);
+        rows.forEach((index, row) => { if (side === '+' || lines[index].type === '-') syntax[index] = colours[row] || []; });
+      }
+    }
+    if (!data.approximate) {
+      // In each run of changed lines, the n-th removed line is compared with the n-th added one.
+      for (let start = 0; start < lines.length;) {
+        if (lines[start].type === ' ') { start += 1; continue; }
+        let end = start;
+        while (end < lines.length && lines[end].type !== ' ') end += 1;
+        const gone = [];
+        const come = [];
+        for (let index = start; index < end; index += 1) {
+          if (lines[index].noNewline) continue;
+          (lines[index].type === '-' ? gone : come).push(index);
+        }
+        for (let pair = 0; pair < Math.min(gone.length, come.length); pair += 1) {
+          const words = wordDiff(lines[gone[pair]].text, lines[come[pair]].text, { budget });
+          if (!words) continue;
+          budget -= words.cells;
+          changes[gone[pair]] = words.removed;
+          changes[come[pair]] = words.added;
+        }
+        start = end;
+      }
+    }
+    lines.forEach((line, index) => {
+      items.push({
+        kind: 'line',
+        type: line.type === '+' ? 'add' : line.type === '-' ? 'del' : 'same',
+        oldLine: line.oldLine || 0,
+        newLine: line.newLine || 0,
+        noNewline: Boolean(line.noNewline),
+        pieces: line.noNewline ? [] : segments(line.text, syntax[index], changes[index]),
+      });
+    });
+  }
+  return items;
+}
+
+function diffLine(item) {
+  const row = element('div', `diff-line is-${item.type}`);
   row.append(
-    element('span', 'diff-num', line.oldLine ? String(line.oldLine) : ''),
-    element('span', 'diff-num', line.newLine ? String(line.newLine) : ''),
-    element('span', 'diff-sign', line.type === ' ' ? '' : line.type === '-' ? '\u2212' : '+'),
+    element('span', 'diff-num', item.oldLine ? String(item.oldLine) : ''),
+    element('span', 'diff-num', item.newLine ? String(item.newLine) : ''),
+    element('span', 'diff-sign', item.type === 'same' ? '' : item.type === 'del' ? '−' : '+'),
   );
   const text = element('span', 'diff-text');
-  if (line.type !== ' ') text.append(element('span', 'sr-only', line.type === '+' ? 'Added: ' : 'Removed: '));
-  if (line.noNewline) text.append(element('span', 'diff-meta', 'No line break at the end of the file'));
-  else text.append(document.createTextNode(line.text));
+  if (item.type !== 'same') text.append(element('span', 'sr-only', item.type === 'add' ? 'Added: ' : 'Removed: '));
+  if (item.noNewline) text.append(element('span', 'diff-meta', 'No line break at the end of the file'));
+  for (const piece of item.pieces) {
+    const className = [piece.token, piece.changed ? 'diff-word' : ''].filter(Boolean).join(' ');
+    text.append(className ? element('span', className, piece.text) : document.createTextNode(piece.text));
+  }
   row.append(text);
   return row;
 }
-function renderDiff(data) {
+
+// src/editor.js's highlighter, loaded once (null when CodeMirror cannot load: plain text then).
+let highlighter = null;
+function loadHighlighter() {
+  highlighter ||= import('./editor.js').then((module) => module.highlightLines).catch(() => null);
+  return highlighter;
+}
+
+function renderDiff(data, highlight = null) {
   const host = $('#changes-diff');
   if (!host) return;
   if (data.untracked) {
@@ -387,12 +584,7 @@ function renderDiff(data) {
     host.replaceChildren(element('p', 'changes-empty', data.kind === 'created' ? 'The reply created this file empty.' : 'No lines differ.'));
     return;
   }
-  const nodes = [];
-  for (const hunk of data.hunks) {
-    const last = hunk.newLines ? hunk.newStart + hunk.newLines - 1 : hunk.newStart;
-    nodes.push(element('div', 'diff-hunk', hunk.newLines > 1 ? `Lines ${hunk.newStart}\u2013${last}` : `Line ${hunk.newStart || 1}`));
-    for (const line of hunk.lines) nodes.push(diffLine(line));
-  }
+  const nodes = diffView(data, { highlight, path: review.path }).map((item) => (item.kind === 'hunk' ? element('div', 'diff-hunk', item.text) : diffLine(item)));
   if (data.truncated) nodes.push(element('p', 'changes-empty', 'The rest of this change is too long to show here.'));
   if (data.approximate) nodes.unshift(element('p', 'changes-note', 'Most of this file changed; it is shown as replaced.'));
   host.replaceChildren(...nodes);
@@ -436,8 +628,9 @@ async function showFile(path) {
   review.current = 'unknown';
   renderReviewActions(file);
   let result;
+  let highlight = null;
   try {
-    result = await bridge()?.diff({ id: review.id, path });
+    [result, highlight] = await Promise.all([bridge()?.diff({ id: review.id, path }), loadHighlighter()]);
   } catch (error) {
     result = { ok: false, error: { message: error?.message } };
   }
@@ -455,7 +648,7 @@ async function showFile(path) {
       : file?.partly && review.current === 'same' ? `${partlyText(file)} What is left is shown here and can still be undone.`
         : CURRENT_TEXT[review.current] ?? '';
   if (stateNode) stateNode.textContent = status;
-  renderDiff(result.data);
+  renderDiff(result.data, highlight);
   renderReviewActions(file);
 }
 

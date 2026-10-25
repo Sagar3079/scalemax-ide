@@ -404,6 +404,31 @@
   font-style: italic;
   color: var(--riso-ink-3, #6B6F78);
 }
+/* The words that changed inside a changed line, marked as in the editor's inline review. */
+.changes-diff .diff-line.is-add .diff-word {
+  background: var(--ws-diff-add-text, color-mix(in srgb, #0A7A46 22%, transparent));
+}
+.changes-diff .diff-line.is-del .diff-word {
+  background: var(--ws-diff-del-text, color-mix(in srgb, #F15060 28%, transparent));
+}
+/* Syntax colours: the editor's inks (--tok-*, src/workspace.css), class names from
+   src/editor.js highlightLines. */
+.changes-diff .tok-keyword { color: var(--tok-keyword); }
+.changes-diff .tok-string { color: var(--tok-string); }
+.changes-diff .tok-regexp { color: var(--tok-regexp); }
+.changes-diff .tok-comment { color: var(--tok-comment); font-style: italic; }
+.changes-diff .tok-number { color: var(--tok-number); }
+.changes-diff .tok-tag { color: var(--tok-tag); }
+.changes-diff .tok-attr { color: var(--tok-attr); }
+.changes-diff .tok-function { color: var(--tok-function); font-weight: 600; }
+.changes-diff .tok-type { color: var(--tok-type); }
+.changes-diff .tok-meta { color: var(--tok-meta); }
+.changes-diff .tok-heading { color: var(--tok-heading); font-weight: 600; }
+.changes-diff .tok-emphasis { font-style: italic; }
+.changes-diff .tok-strong { font-weight: 600; }
+.changes-diff .tok-strikethrough { text-decoration: line-through; }
+.changes-diff .tok-link { text-decoration: underline; }
+.changes-diff .tok-invalid { color: var(--tok-invalid); }
 .changes-dialog-actions {
   display: flex;
   align-items: center;
