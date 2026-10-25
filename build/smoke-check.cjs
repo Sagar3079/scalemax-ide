@@ -757,10 +757,11 @@ async function run(win) {
       await send('hold stream please');
       await until(() => app.replies.has(uiTaskB), 2000);
       const deletedRequest = app.replies.get(uiTaskB) ? app.replies.get(uiTaskB).requestId : 'none';
-      const confirmBefore = window.confirm;
-      window.confirm = () => true;
+      // Delete asks in the app's own confirm sheet (src/confirm-dialog.js), not window.confirm.
       document.querySelector('#delete-task-btn').click();
-      window.confirm = confirmBefore;
+      await until(() => Boolean(document.querySelector('#confirm-dialog')?.open), 3000);
+      document.querySelector('#confirm-accept')?.click();
+      await until(() => app.tasks.every((item) => item.id !== uiTaskB) && !app.replies.has(uiTaskB), 3000);
       const deletedGone = app.tasks.every((item) => item.id !== uiTaskB) && !app.replies.has(uiTaskB);
       // Main ends the request (a Stop during preparation waits for it, Git included); left alone
       // the held stream would run for 15 s more.
