@@ -876,7 +876,8 @@ function renderWorktreeChip(app) {
   if (label) label.textContent = on ? 'Separate worktree: on' : 'Separate worktree';
   chip.title = on
     ? `The first message makes a branch scalemax/… from ${data.branch || 'HEAD'} and a folder of its own for this task (outside the project). Click to work here instead.`
-    : 'Work in a separate worktree: a branch and a folder of its own for this task, so the project stays as it is';
+    : 'Separate worktree: this task works on its own copy of the project, in a folder and Git branch of its own, so your files stay as they are until you merge it back';
+  chip.setAttribute('aria-description', 'Work on a separate copy of the project, in its own folder and Git branch, so your files stay as they are until you merge it back');
 }
 
 /** True when the task's first message should make its worktree first (prepareWorktree). */

@@ -2252,6 +2252,109 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* The model button, the meter and Send keep to the chips' line on a basis narrower than their
+   full width: on a crowded line the model's name gives way (the status bar names it too) before
+   they move to a line of their own, right-aligned. */
+#chat-toolbar > .send-actions {
+  flex: 1 1 152px;
+  justify-content: flex-end;
+}
+
+#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) > .send-actions {
+  flex-basis: 224px;
+}
+
+/* Send and Stop share one slot (app.js renderReplyState shows one at a time) at the same width,
+   so the toolbar never moves or wraps when a reply starts or ends. */
+.send-actions .send-slot {
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+/* /cost (app.js renderCostPanel): this task's usage, above the message box until closed. A
+   printed ledger: label over figure in the mono face, 1px rules, no fill. */
+.cost-panel {
+  display: grid;
+  gap: 4px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--riso-rule);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--riso-ink-2);
+}
+
+.cost-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.cost-panel-title {
+  color: var(--riso-ink);
+  font-weight: 600;
+}
+
+.cost-panel-aside {
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
+.cost-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--riso-ink-2);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.cost-panel-close:hover {
+  background: var(--riso-ink-tint);
+  color: var(--riso-ink);
+}
+
+.cost-panel-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+}
+
+.cost-panel-item {
+  display: grid;
+  min-width: 0;
+}
+
+.cost-panel-item dt {
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
+.cost-panel-item dd {
+  max-width: 280px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--riso-ink);
+  font-family: var(--sm-font-mono);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-panel-foot {
+  margin: 0;
+  color: var(--riso-ink-3);
+  font-size: 11px;
+}
+
 /* ---- Composer controls: attach, permissions, model menu (src/composer-ui.js) ---- */
 .composer-icon-button {
   display: inline-flex;
@@ -2387,17 +2490,11 @@ input[type="range"] {
   background: var(--riso-red);
 }
 
-/* With the meter showing, the folder chip gives way first (its name is also in the chat crumb
-   and the sidebar) so the toolbar keeps one line: lines are filled counting the chip at its
-   narrowest, then it grows back towards its full name in the room left. */
-#chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip {
-  flex: 1 1 0;
-  min-width: 88px;
-  max-width: max-content;
-}
-
+/* With the meter showing, a long folder name gives way (it is also in the chat crumb and the
+   sidebar), but never below about a dozen letters: "project" stays whole, and the model button
+   shrinks first (.send-actions above). */
 #chat-toolbar:has(> .send-actions > .context-meter:not([hidden])) .folder-chip-label {
-  max-width: 146px;
+  max-width: 96px;
 }
 
 /* Popovers sit in the top layer; composer-ui.js places them above their button. */

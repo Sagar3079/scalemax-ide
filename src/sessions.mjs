@@ -234,7 +234,7 @@ export function transcriptMarkdown(task, { now = Date.now() } = {}) {
     const pictures = message.role === 'user' ? normalizeMessageImages(message.images).length : 0;
     if (pictures) lines.push(`*${pictures === 1 ? 'A picture was' : `${pictures} pictures were`} attached.*`, '');
     if (message.role === 'assistant') {
-      const notes = [changesSummary(message.changes), typeof message.notice === 'string' ? message.notice : '', metricsLabel(message.metrics)].filter(Boolean);
+      const notes = [changesSummary(message.changes), typeof message.notice === 'string' ? message.notice : '', metricsLabel(message.metrics, { interrupted: message.interrupted })].filter(Boolean);
       for (const note of notes) lines.push(`*${note}*`, '');
     }
   }

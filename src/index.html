@@ -199,9 +199,11 @@
                   <span id="jobs-bar-text" class="jobs-bar-text"></span>
                   <button id="jobs-bar-show" class="button secondary compact jobs-bar-show" type="button" aria-haspopup="dialog" aria-describedby="jobs-bar-text">Show</button>
                 </div>
+                <!-- /cost: this task's usage so far, until closed (src/app.js renderCostPanel). Not a message: never sent or saved. -->
+                <section id="cost-panel" class="cost-panel" aria-label="Cost of this task" hidden></section>
                 <textarea id="chat-input" rows="3" placeholder="Describe an idea, ask a question, or plan your next step… (@ names a file, and you can paste a picture)" aria-label="Message"></textarea>
                 <!-- Files of the open folder while typing "@name" (src/context-ui.js). -->
-                <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files in this folder" hidden></div>
+                <div id="mention-menu" class="mention-menu" role="listbox" aria-label="Files and background commands in this folder" hidden></div>
                 <!-- Commands while typing "/" at the start of a message (src/slash-ui.js). -->
                 <div id="slash-menu" class="mention-menu slash-menu" role="listbox" aria-label="Commands" hidden></div>
                 <!-- Pictures that go with the next message (src/context-ui.js). -->
@@ -213,7 +215,7 @@
                 <!-- Image / video generation options for the selected model (src/media-ui.js). -->
                 <div id="media-bar" class="media-bar" role="group" aria-label="Generation options" hidden></div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
-                  <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older conversation context (or type /compact)">Compact</button>
+                  <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older messages so long chats fit the model's memory (or type /compact)">Compact</button>
                   <!-- Feature specs of this folder (src/specs-ui.js). -->
                   <button id="specs-open" class="composer-chip specs-chip" type="button" aria-haspopup="dialog" aria-controls="specs-dialog" hidden>
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path d="M14 3v4h4" /><path d="M9 12h6M9 16h4" /></svg>
@@ -262,8 +264,12 @@
                       <span id="model-button-reasoning" class="model-button-reasoning" hidden></span>
                       <svg class="composer-chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button id="cancel-btn" class="button secondary" type="button" hidden>Stop</button>
-                    <button id="send-btn" class="button primary" type="button" aria-label="Send message">
+                    <!-- Stop takes Send's place while a reply runs (app.js renderReplyState); Escape does the same. -->
+                    <button id="cancel-btn" class="button secondary send-slot" type="button" title="Stop (Esc)" aria-label="Stop the reply" aria-keyshortcuts="Escape" hidden>
+                      <span>Stop</span>
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+                    </button>
+                    <button id="send-btn" class="button primary send-slot" type="button" aria-label="Send message">
                       <span id="send-label">Send</span>
                       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                     </button>

@@ -666,6 +666,29 @@ details.reply-agent > summary .reply-step-title {
   font-size: 12px;
   color: var(--riso-ink-3, #6B6F78);
 }
+/* The @ menu prints in the top layer as a manual popover, placed by src/context-ui.js
+   placeMentionMenu (top or bottom, left, width and max-height in px), so it is never covered by
+   the empty task's starter chips and never runs off the window. The UA popover box (inset 0,
+   margin auto, Canvas colours) gives way to the sheet above. */
+.mention-menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  color: inherit;
+}
+/* A running background command ("job:j1 · npm run dev"), with the jobs bar's pink dot. */
+.mention-option.is-job {
+  align-items: center;
+}
+.mention-job-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--riso-pink, #FF48B0);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .msg-steps-summary::after,

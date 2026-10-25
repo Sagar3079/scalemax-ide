@@ -1444,3 +1444,61 @@ test('a slash command chooses the model for every round of its reply', async () 
   await createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT, requestId: 'r2' }, { ...BYPASS });
   assert.deepEqual(seen, ['everyday-model'], 'without a command the active model answers');
 });
+
+test('Stop while the model is answering keeps the usage of earlier rounds and marks the stopped call unknown', async () => {
+  const provider = fakeProvider([]);
+  let round = 0;
+  let reached;
+  const answering = new Promise((resolve) => { reached = resolve; });
+  provider.complete = async (request, { onDelta } = {}) => {
+    provider.calls.complete.push(structuredClone(request));
+    round += 1;
+    if (round === 1) {
+      return toolReply([toolCall('c1', 'mcp_fake_echo', '{}')], {
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 }, pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 2 },
+      });
+    }
+    // The second answer streams, and is stopped before its usage (sent at the end) arrives.
+    onDelta?.({ type: 'text', text: 'Here is a walk through' });
+    reached();
+    return new Promise(() => {});
+  };
+  const loop = createToolLoop({ provider, mcp: fakeMcp() });
+  const pending = loop.send({ ...INPUT, requestId: 'r-stop-usage' }, { ...BYPASS, onProgress: () => {} });
+  await answering;
+  assert.equal(loop.cancel('r-stop-usage'), true);
+  await assert.rejects(() => pending, (error) => {
+    assert.equal(error.code, 'CANCELLED');
+    assert.deepEqual(error.usageSnapshot.usage, { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
+    assert.equal(error.usageSnapshot.unreportedCalls, 1);
+    assert.equal(error.usageSnapshot.incomplete, true);
+    return true;
+  });
+});
+
+test('Stop in the first answer, before anything was reported, still says a call went unreported', async () => {
+  const provider = fakeProvider([]);
+  let reached;
+  const answering = new Promise((resolve) => { reached = resolve; });
+  provider.complete = async (request, { onDelta } = {}) => {
+    onDelta?.({ type: 'text', text: 'How the date' });
+    reached();
+    return new Promise(() => {});
+  };
+  const loop = createToolLoop({ provider, mcp: fakeMcp() });
+  const pending = loop.send({ ...INPUT, requestId: 'r-stop-first' }, { ...BYPASS, onProgress: () => {} });
+  await answering;
+  loop.cancel('r-stop-first');
+  await assert.rejects(() => pending, (error) => {
+    assert.deepEqual(error.usageSnapshot, { unreportedCalls: 1, incomplete: true });
+    return true;
+  });
+});
+
+test('a provider that refuses before answering leaves no unknown usage behind', async () => {
+  const provider = fakeProvider([() => { throw Object.assign(new Error('Connection refused'), { code: 'PROVIDER_UNREACHABLE' }); }]);
+  await assert.rejects(
+    () => createToolLoop({ provider, mcp: fakeMcp() }).send({ ...INPUT, requestId: 'r-down' }, { ...BYPASS, onProgress: () => {} }),
+    (error) => error.usageSnapshot === undefined,
+  );
+});

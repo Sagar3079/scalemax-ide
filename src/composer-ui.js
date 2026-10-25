@@ -12,6 +12,13 @@ import {
 
 const $ = (selector) => document.querySelector(selector);
 const PERMISSION_LABELS = { plan: 'Plan', manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
+// What each permission means, in plain words, for the chip's tooltip and description.
+export const PERMISSION_HINTS = Object.freeze({
+  plan: 'The assistant only reads and proposes a plan; nothing changes until you run it',
+  manual: 'The assistant asks before everything it does, reading included',
+  basic: 'Reads run on their own; changes and commands ask first',
+  bypass: 'Everything runs without asking, changes and commands included',
+});
 const EFFORT_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
 const bound = new WeakSet();
 
@@ -543,6 +550,8 @@ export function renderPermission(app) {
     button.classList.toggle('is-bypass', mode === 'bypass');
     button.classList.toggle('is-plan', mode === 'plan');
     button.setAttribute('aria-label', `Tool permissions: ${PERMISSION_LABELS[mode]}. Change permissions`);
+    button.title = `${PERMISSION_LABELS[mode]}: ${PERMISSION_HINTS[mode]}. Click to change.`;
+    button.setAttribute('aria-description', PERMISSION_HINTS[mode]);
   }
   for (const option of document.querySelectorAll('#permission-menu [data-permission]')) {
     option.setAttribute('aria-checked', String(option.dataset.permission === mode));

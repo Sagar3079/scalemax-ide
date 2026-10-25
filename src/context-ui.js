@@ -2,9 +2,10 @@
  * What goes with a message besides its text:
  *   - pictures: pasted, dropped or picked, kept in the app's media folder by id (main reads them
  *     and gives the model image parts, main.js withImages);
- *   - files named with @: typing "@" opens a menu of the open folder's files (workspace:find);
- *     on send, each file still named in the text goes along as its contents (read through the
- *     workspace service, so secret files and links are refused there);
+ *   - files named with @: typing "@" opens a menu of the open folder's files (workspace:find)
+ *     and its running background commands ("job:j1 · npm run dev"); on send, each file still
+ *     named in the text goes along as its contents (read through the workspace service, so
+ *     secret files and links are refused there);
  *   - "@folder/" goes along as what is in that folder (two levels), "@https://…" as the page's
  *     text (fetched by main with web_open's guards) and "@job:j2" as a background command's
  *     recent output (only one of this folder): main resolves them (mention:resolve).
@@ -30,8 +31,10 @@ const MENTION_AT_CARET = /(^|\s)@([^\s@]*)$/;
 const MENTION_IN_TEXT = /(^|\s)@(?:(https?:\/\/[^\s<>"'`]+)|job:(j\d{1,9})(?![\w\-/])|([\w.\-/]+[\w\-/]))/g;
 // Folders offered in the menu besides the files.
 const MAX_FOLDER_SUGGESTIONS = 5;
+// Running background commands offered in the menu besides the files.
+const MAX_JOB_SUGGESTIONS = 5;
 
-const state = { app: null, images: [], busy: 0, menu: null, results: [], details: new Map(), active: 0, token: 0, timer: null };
+const state = { app: null, images: [], busy: 0, menu: null, results: [], details: new Map(), running: new Set(), active: 0, token: 0, timer: null };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -164,11 +167,60 @@ export function composerBusy() {
 
 // ---- @-mentions -------------------------------------------------------------------------
 
+// The menu is a manual popover (bindComposerContext), like the "/" menu (src/slash-ui.js): it
+// prints in the top layer, over the empty task's starter chips and everything else, and never
+// takes the focus from the message box. It opens below the box when it fits there (or there is
+// more room below), otherwise above it, and scrolls instead of leaving the window.
+const MENU_CAP = 240;
+const MENU_MIN = 96;
+const MENU_MARGIN = 8;
+const MENU_GAP = 4;
+const MENU_INSET = 12;
+
+function isPopover(menu) {
+  return typeof menu?.showPopover === 'function' && Boolean(menu.hasAttribute?.('popover'));
+}
+
+function popoverOpen(menu) {
+  try {
+    return Boolean(menu?.matches?.(':popover-open'));
+  } catch {
+    return false;
+  }
+}
+
+/** Places the open @ menu by the message box, inside the window. */
+export function placeMentionMenu(menu, input) {
+  if (!isPopover(menu) || typeof input?.getBoundingClientRect !== 'function') return;
+  const rect = input.getBoundingClientRect();
+  // As wide as the composer card, inset like the old in-card menu.
+  const card = $('#chat-card');
+  const frame = typeof card?.getBoundingClientRect === 'function' ? card.getBoundingClientRect() : rect;
+  const height = window.innerHeight;
+  const spaceBelow = height - rect.bottom - MENU_GAP - MENU_MARGIN;
+  const spaceAbove = rect.top - MENU_GAP - MENU_MARGIN;
+  for (const property of ['max-height', 'top', 'bottom']) menu.style.removeProperty(property);
+  const natural = Math.min(menu.scrollHeight || 0, MENU_CAP);
+  const below = natural <= spaceBelow || spaceBelow >= spaceAbove;
+  const room = Math.max(MENU_MIN, Math.min(MENU_CAP, below ? spaceBelow : spaceAbove));
+  menu.dataset.side = below ? 'below' : 'above';
+  menu.style.setProperty('max-height', `${Math.round(room)}px`);
+  if (below) menu.style.setProperty('top', `${Math.round(rect.bottom + MENU_GAP)}px`);
+  else menu.style.setProperty('bottom', `${Math.round(height - rect.top + MENU_GAP)}px`);
+  const width = Math.max(160, frame.width - MENU_INSET * 2);
+  const left = Math.max(MENU_MARGIN, Math.min(frame.left + MENU_INSET, window.innerWidth - width - MENU_MARGIN));
+  menu.style.setProperty('left', `${Math.round(left)}px`);
+  menu.style.setProperty('width', `${Math.round(Math.min(width, window.innerWidth - MENU_MARGIN * 2))}px`);
+}
+
 function closeMenu() {
   state.menu = null;
   state.results = [];
   const menu = $('#mention-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (isPopover(menu) && popoverOpen(menu)) menu.hidePopover();
+  }
   $('#chat-input')?.removeAttribute('aria-activedescendant');
 }
 
@@ -177,26 +229,39 @@ function renderMenu() {
   const input = $('#chat-input');
   if (!menu || !input) return;
   if (!state.menu) { closeMenu(); return; }
+  // `hidden` goes first: the app's [hidden] rule would keep even an open popover out of sight.
   menu.hidden = false;
+  if (isPopover(menu) && !popoverOpen(menu)) menu.showPopover();
   if (!state.results.length) {
     const jobs = /^job:/i.test(state.menu.query);
     menu.replaceChildren(element('div', 'mention-empty', state.menu.loading ? 'Looking for files…'
-      : jobs ? 'No background command in this folder' : 'No file with that name in this folder'));
+      : jobs ? 'No background command in this folder' : 'No file or background command by that name in this folder'));
     input.removeAttribute('aria-activedescendant');
+    placeMentionMenu(menu, input);
     return;
   }
   menu.replaceChildren(...state.results.map((path, index) => {
-    const option = element('div', `mention-option${index === state.active ? ' is-active' : ''}`);
+    const job = path.startsWith('job:');
+    const option = element('div', `mention-option${job ? ' is-job' : ''}${index === state.active ? ' is-active' : ''}`);
     option.id = `mention-option-${index}`;
     option.setAttribute('role', 'option');
     option.setAttribute('aria-selected', String(index === state.active));
     option.dataset.path = path;
     const label = mentionLabel(path);
-    option.append(element('span', 'mention-name', label.name), element('span', 'mention-dir', label.dir));
+    // A running background command: "job:j1 · npm run dev", with the jobs bar's dot.
+    if (job && state.running.has(path)) {
+      const dot = element('span', 'mention-job-dot');
+      dot.setAttribute('aria-hidden', 'true');
+      option.append(dot);
+    }
+    option.append(element('span', 'mention-name', label.name), element('span', 'mention-dir', job && label.dir ? ` · ${label.dir}` : label.dir));
+    if (job) option.title = `Background command ${label.name}${label.dir ? `: ${label.dir}` : ''}. Its recent output goes with the message.`;
     return option;
   }));
   input.setAttribute('aria-activedescendant', `mention-option-${state.active}`);
-  menu.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+  // Placed before the active row scrolls into view: the height it gets decides the scrolling.
+  placeMentionMenu(menu, input);
+  menu.querySelector('.is-active')?.scrollIntoView?.({ block: 'nearest' });
 }
 
 // How a suggestion shows in the menu: a file or folder by its name and where it is, a background
@@ -230,27 +295,61 @@ export function folderSuggestions(files, query) {
   return folders;
 }
 
-// What the menu offers for `query`: background commands of this folder after "job:", otherwise
-// folders and files of the open folder.
+/**
+ * Background commands of the folder at `root` to offer for `query`, as
+ * [{ path: 'job:j1', detail: 'npm run dev', running }]. After "job:" every command of the folder
+ * whose id starts with the rest, or whose command line has it (up to 20). Otherwise the running
+ * ones (at most MAX_JOB_SUGGESTIONS), so "@" shows them beside the files: all of them with
+ * nothing typed, else those whose "job:<id>" starts with the query ("@j", "@job"), whose id does,
+ * or whose command line has it ("@dev"; two letters at least).
+ */
+export function jobSuggestions(jobs, query, root) {
+  const list = (Array.isArray(jobs) ? jobs : []).filter((job) => job && typeof job.id === 'string' && job.id && job.root === root);
+  const text = String(query ?? '').toLowerCase();
+  const entry = (job) => ({ path: `job:${job.id}`, detail: String(job.command || ''), running: job.status === 'running' });
+  if (text.startsWith('job:')) {
+    const wanted = text.slice(4);
+    return list.filter((job) => !wanted || job.id.toLowerCase().startsWith(wanted) || String(job.command || '').toLowerCase().includes(wanted))
+      .slice(0, 20).map(entry);
+  }
+  return list.filter((job) => job.status === 'running' && (!text || `job:${job.id}`.toLowerCase().startsWith(text)
+    || job.id.toLowerCase().startsWith(text) || (text.length >= 2 && String(job.command || '').toLowerCase().includes(text))))
+    .slice(0, MAX_JOB_SUGGESTIONS).map(entry);
+}
+
+// The background commands main runs ([] when it cannot say).
+async function listJobs() {
+  try {
+    const listed = await window.scalemaxAPI?.jobs?.list?.();
+    return listed?.ok && Array.isArray(listed.data) ? listed.data : [];
+  } catch {
+    return [];
+  }
+}
+
+// What the menu offers for `query`: background commands of this folder only after "job:";
+// otherwise its running commands that fit, then folders and files of the open folder.
 async function mentionSuggestions(query, root) {
   const details = new Map();
-  let found = [];
-  if (/^job:/i.test(query)) {
-    const listed = await window.scalemaxAPI?.jobs?.list?.();
-    const wanted = query.slice(4).toLowerCase();
-    const jobs = listed?.ok && Array.isArray(listed.data) ? listed.data : [];
-    found = jobs.filter((job) => job && job.root === root && typeof job.id === 'string'
-      && (!wanted || job.id.startsWith(wanted) || String(job.command || '').toLowerCase().includes(wanted)))
-      .slice(0, 20).map((job) => {
-        details.set(`job:${job.id}`, String(job.command || ''));
-        return `job:${job.id}`;
-      });
-  } else {
-    const result = await window.scalemaxAPI?.workspace?.find?.(query);
-    const files = result?.ok && Array.isArray(result.data?.files) ? result.data.files : [];
-    found = [...folderSuggestions(files, query), ...files];
+  const running = new Set();
+  const jobsOnly = /^job:/i.test(query);
+  const findFiles = async () => {
+    if (jobsOnly) return [];
+    try {
+      const result = await window.scalemaxAPI?.workspace?.find?.(query);
+      return result?.ok && Array.isArray(result.data?.files) ? result.data.files : [];
+    } catch {
+      return [];
+    }
+  };
+  const [jobs, files] = await Promise.all([listJobs(), findFiles()]);
+  const commands = jobSuggestions(jobs, query, root);
+  for (const job of commands) {
+    details.set(job.path, job.detail);
+    if (job.running) running.add(job.path);
   }
-  return { found, details };
+  const found = [...commands.map((job) => job.path), ...(jobsOnly ? [] : [...folderSuggestions(files, query), ...files])];
+  return { found, details, running };
 }
 
 function updateMention() {
@@ -266,13 +365,14 @@ function updateMention() {
   const token = (state.token += 1);
   clearTimeout(state.timer);
   state.timer = setTimeout(async () => {
-    let suggestions = { found: [], details: new Map() };
+    let suggestions = { found: [], details: new Map(), running: new Set() };
     try {
       suggestions = await mentionSuggestions(query, app.workspace.root);
     } catch { /* shown as no results */ }
     if (token !== state.token || !state.menu) return;
     state.results = suggestions.found;
     state.details = suggestions.details;
+    state.running = suggestions.running;
     state.active = 0;
     state.menu.loading = false;
     renderMenu();
@@ -456,6 +556,10 @@ export function bindComposerContext(app) {
   input.addEventListener('blur', () => window.setTimeout(closeMenu, 150));
   input.parentElement?.addEventListener('keydown', onKeydown, true);
   const menu = $('#mention-menu');
+  // In the top layer, so the starter chips and headings of an empty task never print over it.
+  // Manual: it neither takes the focus nor closes on its own; the message box drives it.
+  if (menu && typeof menu.showPopover === 'function' && !menu.hasAttribute?.('popover')) menu.setAttribute('popover', 'manual');
+  window.addEventListener?.('resize', () => { if (state.menu && menu && !menu.hidden) placeMentionMenu(menu, input); });
   // A click on the menu must not take the focus (and close it) before it picks the file.
   menu?.addEventListener('mousedown', (event) => event.preventDefault());
   menu?.addEventListener('click', (event) => {
