@@ -164,7 +164,7 @@ test('a transcript as Markdown: who wrote what and when, what replies did, chang
   assert.ok(lines.includes('*2 files changed · +2 · 1 kept*'));
   assert.ok(lines.includes('*3 files changed · +3 · 1 undone*'));
   assert.ok(lines.includes('*Stopped before the reply was finished.*'));
-  assert.ok(lines.includes('*3.5k in · 109 out · $0.00072*'));
+  assert.ok(lines.includes('*3.5k in · 109 out · <$0.01*'));
   assert.equal(/\n{3,}/.test(markdown), false);
   assert.ok(markdown.endsWith('\n'));
   assert.match(transcriptMarkdown({ title: '', messages: [] }), /^# Task\n/);

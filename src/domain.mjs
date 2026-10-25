@@ -614,6 +614,9 @@ export function normalizeMetrics(value) {
   if (Number.isSafeInteger(nano) && nano >= 0 && nano <= MAX_COST_NANO_USD) entry.costNanoUsd = nano;
   const status = own(value, 'costStatus');
   if (['priced', 'unpriced', 'incomplete', 'unreported'].includes(status)) entry.costStatus = status;
+  // Model calls whose usage never arrived (stopped or cut off while answering; lib/metrics.cjs).
+  const unreported = own(value, 'unreportedCalls');
+  if (Number.isSafeInteger(unreported) && unreported > 0) entry.unreportedCalls = Math.min(unreported, MAX_USAGE_ROUNDS);
   return Object.keys(entry).length ? entry : null;
 }
 function compactSummary(value) {
@@ -783,16 +786,40 @@ function compactNumber(value) {
   if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`;
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`;
 }
-function usd(micro) {
-  if (!Number.isSafeInteger(micro) || micro < 0) return '';
-  return `$${(micro / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`;
+const NANO_PER_USD = 1_000_000_000;
+/**
+ * The one way an amount spent shows (reply footers, the chat header, /cost), from nano-USD:
+ * a cent or more with two to four decimals ("$0.1357", "$0.32", "$1.24" from a dollar up), less
+ * than a cent as "<$0.01", nothing as "$0.00". `exact` is the amount in full ("$0.003237"), for a
+ * title. Null for anything that is not an amount.
+ * @returns {{text: string, exact: string} | null}
+ */
+export function formatUsd(nano) {
+  if (!Number.isSafeInteger(nano) || nano < 0) return null;
+  const whole = Math.floor(nano / NANO_PER_USD);
+  const fraction = String(nano % NANO_PER_USD).padStart(9, '0').replace(/0+$/, '');
+  const exact = `$${whole.toLocaleString('en-US')}.${fraction.padEnd(2, '0')}`;
+  if (nano === 0) return { text: '$0.00', exact };
+  if (nano < NANO_PER_USD / 100) return { text: '<$0.01', exact };
+  // Rounded to 1/10,000 of a dollar below one dollar, to the cent from one dollar up.
+  const places = nano < NANO_PER_USD ? 4 : 2;
+  const units = Math.round(nano / (NANO_PER_USD / 10 ** places));
+  const dollars = Math.floor(units / 10 ** places);
+  const cents = String(units % 10 ** places).padStart(places, '0').replace(/0+$/, '').padEnd(2, '0');
+  return { text: `$${dollars.toLocaleString('en-US')}.${cents}`, exact };
 }
-function usdNano(nano) {
-  if (!Number.isSafeInteger(nano) || nano < 0) return '';
-  return `$${(nano / 1_000_000_000).toFixed(9).replace(/0+$/, '').replace(/\.$/, '')}`;
+// A metric's own cost in nano-USD (older records kept micro-USD only), or null.
+function metricNano(metrics) {
+  return Number.isInteger(metrics?.costNanoUsd) ? metrics.costNanoUsd
+    : Number.isInteger(metrics?.costMicroUsd) ? metrics.costMicroUsd * 1000 : null;
 }
-/** Short footer label for one assistant reply/compaction; empty when no provider data arrived. */
-export function metricsLabel(value) {
+const UNKNOWN_PART = { stopped: 'usage of the stopped part unknown' };
+/**
+ * Short footer label for one assistant reply/compaction; empty when no provider data arrived.
+ * `exact`: amounts in full (for a title). `interrupted`: how the reply ended ('stopped',
+ * 'failed'), which names the part whose usage never arrived (metrics.unreportedCalls).
+ */
+export function metricsLabel(value, { exact = false, interrupted = '' } = {}) {
   const metrics = normalizeMetrics(value);
   if (!metrics) return '';
   const usage = metrics.usage || {};
@@ -800,13 +827,31 @@ export function metricsLabel(value) {
   const tokens = Number.isInteger(usage.inputTokens) && Number.isInteger(usage.outputTokens)
     ? `${compactNumber(usage.inputTokens)} in${cached} · ${compactNumber(usage.outputTokens)} out`
     : Number.isInteger(usage.totalTokens) ? `${compactNumber(usage.totalTokens)} tokens` : '';
-  const price = metrics.costStatus === 'priced' ? (Number.isInteger(metrics.costNanoUsd) ? usdNano(metrics.costNanoUsd) : usd(metrics.costMicroUsd))
-    : metrics.costStatus === 'incomplete' && (Number.isInteger(metrics.costNanoUsd) || Number.isInteger(metrics.costMicroUsd))
-      ? `${Number.isInteger(metrics.costNanoUsd) ? usdNano(metrics.costNanoUsd) : usd(metrics.costMicroUsd)} + incomplete`
-      : metrics.costStatus === 'unpriced' || metrics.costStatus === 'incomplete' ? 'Price unavailable' : '';
-  return [tokens, price].filter(Boolean).join(' · ');
+  const amount = formatUsd(metricNano(metrics));
+  const shown = amount ? (exact ? amount.exact : amount.text) : '';
+  // A part whose usage never arrived explains itself; "+ incomplete" is for other gaps.
+  const unknown = metrics.unreportedCalls ? (UNKNOWN_PART[interrupted] || 'usage of the unfinished part unknown') : '';
+  const price = metrics.costStatus === 'priced' ? shown
+    : metrics.costStatus === 'incomplete' && shown ? (unknown ? shown : `${shown} + incomplete`)
+      : unknown ? ''
+        : metrics.costStatus === 'unpriced' || metrics.costStatus === 'incomplete' ? 'Price unavailable' : '';
+  return [tokens, price, unknown].filter(Boolean).join(' · ');
 }
-/** Derived task totals, avoiding a persisted counter that can drift after undo/delete/reload. */
+// The tokens one reply used: input plus output when both are known (what its footer shows),
+// else the total it reported, else the one side known.
+function replyTokens(usage) {
+  if (Number.isInteger(usage.inputTokens) && Number.isInteger(usage.outputTokens)) return usage.inputTokens + usage.outputTokens;
+  if (Number.isInteger(usage.totalTokens)) return usage.totalTokens;
+  if (Number.isInteger(usage.inputTokens)) return usage.inputTokens;
+  return Number.isInteger(usage.outputTokens) ? usage.outputTokens : null;
+}
+/**
+ * Derived task totals, avoiding a persisted counter that can drift after undo/delete/reload.
+ * `totalTokens` sums each reply's tokens (replyTokens), so a reply that reported only input and
+ * output counts as much as one that also reported a total. `unknownUsage`: replies with a part
+ * whose usage or cost is not known (stopped mid-answer, incomplete); `unavailablePrice`: replies
+ * the provider published no price for.
+ */
 export function taskMetrics(task) {
   const values = [];
   for (const message of Array.isArray(task?.messages) ? task.messages : []) {
@@ -815,31 +860,42 @@ export function taskMetrics(task) {
   const compact = normalizeCompaction(task?.compaction);
   if (compact?.metrics) values.push(compact.metrics);
   if (Array.isArray(compact?.priorMetrics)) values.push(...compact.priorMetrics);
-  const result = { replies: 0, compactions: compact ? 1 + (compact.priorMetrics?.length || 0) : 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, knownInput: false, knownOutput: false, knownTotal: false, costNanoUsd: 0, priced: false, unavailablePrice: false };
+  const result = {
+    replies: 0, compactions: compact ? 1 + (compact.priorMetrics?.length || 0) : 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    knownInput: false, knownOutput: false, knownTotal: false, costNanoUsd: 0, priced: false, unavailablePrice: false, unknownUsage: 0,
+  };
   for (const metrics of values) {
     if (!metrics) continue;
     result.replies += 1;
     const usage = metrics.usage || {};
-    for (const [key, known] of [['inputTokens', 'knownInput'], ['outputTokens', 'knownOutput'], ['totalTokens', 'knownTotal']]) {
+    for (const [key, known] of [['inputTokens', 'knownInput'], ['outputTokens', 'knownOutput']]) {
       if (Number.isInteger(usage[key])) { result[key] += usage[key]; result[known] = true; }
     }
+    const tokens = replyTokens(usage);
+    if (tokens !== null) { result.totalTokens += tokens; result.knownTotal = true; }
+    // Part of what it spent is not known: usage that never arrived, or a cost known only in part.
+    if (metrics.unreportedCalls || metrics.costStatus === 'incomplete') result.unknownUsage += 1;
     if (metrics.costStatus === 'priced' || metrics.costStatus === 'incomplete') {
-      const cost = Number.isInteger(metrics.costNanoUsd) ? metrics.costNanoUsd
-        : Number.isInteger(metrics.costMicroUsd) ? metrics.costMicroUsd * 1000 : null;
+      const cost = metricNano(metrics);
       if (cost !== null) { result.costNanoUsd += cost; result.priced = true; }
     }
-    if (metrics.costStatus === 'unpriced' || metrics.costStatus === 'incomplete') result.unavailablePrice = true;
+    if (metrics.costStatus === 'unpriced') result.unavailablePrice = true;
   }
   return result;
 }
-/** Compact summary for the task header, including a clear unknown-price state. */
-export function taskMetricsLabel(task) {
+/**
+ * Compact summary for the task header, including a clear unknown-price state and parts whose
+ * usage is unknown. `exact`: amounts in full (for a title).
+ */
+export function taskMetricsLabel(task, { exact = false } = {}) {
   const totals = taskMetrics(task);
-  const tokens = totals.knownTotal ? `${compactNumber(totals.totalTokens)} tokens`
-    : totals.knownInput || totals.knownOutput ? `${compactNumber(totals.inputTokens + totals.outputTokens)} tokens` : '';
-  const price = totals.priced ? `${usdNano(totals.costNanoUsd)}${totals.unavailablePrice ? ' + unpriced' : ''}`
-    : totals.unavailablePrice ? 'Price unavailable' : '';
-  return [tokens, price].filter(Boolean).join(' · ');
+  const tokens = totals.knownTotal ? `${compactNumber(totals.totalTokens)} tokens` : '';
+  const amount = totals.priced ? formatUsd(totals.costNanoUsd) : null;
+  const gaps = [totals.unavailablePrice ? 'unpriced' : '', totals.unknownUsage ? 'unknown' : ''].filter(Boolean);
+  const price = amount ? `${exact ? amount.exact : amount.text}${gaps.map((gap) => ` + ${gap}`).join('')}`
+    : totals.unavailablePrice || (totals.unknownUsage && tokens) ? 'Price unavailable' : '';
+  const unknown = !tokens && !amount && totals.unknownUsage ? 'Usage unknown' : '';
+  return [tokens, price, unknown].filter(Boolean).join(' · ');
 }
 /** A reply's running time as kept with it, or null (src/app.js and the task state). */
 export function normalizeElapsed(value) {
@@ -914,7 +970,8 @@ export function taskContextShare(task, windowOf, fallbackModel = '') {
     const message = messages[index];
     if (!isRecord(message) || message.role !== 'assistant') continue;
     const metrics = normalizeMetrics(message.metrics);
-    if (metrics) measured.push({ message, index, metrics, model: metrics.model || fallbackModel });
+    // A reply stopped before any usage arrived says nothing about how full the window is.
+    if (metrics && (metrics.usage || metrics.rounds?.length)) measured.push({ message, index, metrics, model: metrics.model || fallbackModel });
   }
   const [newest, before] = measured;
   if (!newest || stale(newest.message, newest.index)) return null;
@@ -1145,6 +1202,7 @@ export function normalizeTasks(value, now = Date.now()) {
         // A reply written under Plan permission: it could look but not change anything, so the
         // "Run this plan" card belongs under it after a reload too.
         if (message.role === 'assistant' && own(message, 'plan') === true) entry.plan = true;
+        if (entry.plan && own(message, 'planRun') === true) entry.planRun = true;
         const todos = message.role === 'assistant' ? normalizeTodos(own(message, 'todos')) : [];
         if (todos.length) entry.todos = todos;
         const images = message.role === 'user' ? normalizeMessageImages(own(message, 'images')) : [];

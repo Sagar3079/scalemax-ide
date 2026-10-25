@@ -299,6 +299,9 @@ export function bindSpecsUi(app) {
   });
 }
 
+// What a spec is, in plain words (the chip's tooltip and description).
+const SPECS_HINT = 'Specs are written plans for a feature (what it should do, how, and a task list) that the assistant builds from, one task at a time';
+
 // One list at a time: renderFolder runs on every message, and a second request would only race
 // the first for the same answer.
 let chipPending = null;
@@ -326,8 +329,9 @@ export async function renderSpecsChip(app = view.app) {
   const open = specs.reduce((total, spec) => total + Math.max(0, (spec.progress?.total || 0) - (spec.progress?.done || 0)), 0);
   if (label) label.textContent = specs.length ? `Specs · ${specs.length}${open ? ` · ${open} open` : ''}` : 'Specs';
   chip.title = specs.length
-    ? `${specs.length} spec${specs.length === 1 ? '' : 's'} in this folder${open ? `, ${open} task${open === 1 ? '' : 's'} still open` : ''}`
-    : 'Write down a feature before building it: requirements, design, tasks';
+    ? `${specs.length} spec${specs.length === 1 ? '' : 's'} in this folder${open ? `, ${open} task${open === 1 ? '' : 's'} still open` : ''}. ${SPECS_HINT}.`
+    : `${SPECS_HINT}.`;
+  chip.setAttribute('aria-description', SPECS_HINT);
 }
 
 /**
@@ -342,10 +346,27 @@ export function renderPlanCard(app, message, taskId) {
   const head = element('div', 'plan-head');
   head.append(element('span', 'plan-title', 'Plan only · this reply changed nothing'));
   card.append(head);
+  // A plan is run once: afterwards the card says so (message.planRun is saved with the task, so
+  // a reload does not offer it again); the reply that carried it out follows below.
+  if (message.planRun === true) {
+    card.classList.add('is-run');
+    card.append(element('p', 'plan-note', 'This plan was run; the reply that carried it out follows. To run it again, ask for it in a message.'));
+    const actions = element('div', 'plan-actions');
+    const done = element('button', 'button secondary compact', 'Plan run');
+    done.disabled = true;
+    actions.append(done);
+    card.append(actions);
+    return card;
+  }
   card.append(element('p', 'plan-note', 'Plan permission refuses every tool that changes anything, so this reply could only look and propose. Run it when you agree, or keep planning.'));
   const actions = element('div', 'plan-actions');
   const run = element('button', 'button primary compact', 'Run this plan');
-  run.addEventListener('click', () => void runPlan(app, taskId));
+  run.addEventListener('click', () => {
+    // One click runs it once: the button waits while the run gets going.
+    if (run.disabled) return;
+    run.disabled = true;
+    void runPlan(app, taskId, message).finally(() => { if (run.isConnected && message.planRun !== true) run.disabled = false; });
+  });
   const keep = element('button', 'button secondary compact', 'Keep planning');
   keep.addEventListener('click', () => {
     $('#chat-input')?.focus();
@@ -365,7 +386,7 @@ function chatBusy(app) {
   return Boolean(app.activeRequestId || app.demoBusy || app.compactingTasks?.has(app.currentTaskId));
 }
 
-async function runPlan(app, taskId) {
+async function runPlan(app, taskId, message = null) {
   if (app.currentTaskId !== taskId) app.selectTask?.(taskId);
   // Nothing is changed until the request can actually go out: a click while another reply is
   // running, or while the task's folder is not open, must not drop the user out of Plan or throw
@@ -406,9 +427,22 @@ async function runPlan(app, taskId) {
   const draft = input ? input.value : '';
   if (input) input.value = RUN_PLAN;
   app.updateSendEnabled?.();
+  // Used from now on: the card says "Plan run" (also after a reload) instead of offering it again.
+  // Taken back below if the send is refused after all.
+  if (message) {
+    message.planRun = true;
+    const task = app.tasks?.find?.((item) => item.id === taskId);
+    if (task) app.updateTask?.(task, task.updatedAt);
+  }
   // An app-written message: the pictures and attachment in the message box are not taken.
   const sent = await app.handleSend?.({ internal: true });
   if (sent) return;
+  if (message) {
+    delete message.planRun;
+    const task = app.tasks?.find?.((item) => item.id === taskId);
+    if (task) app.updateTask?.(task, task.updatedAt);
+    if (app.currentTaskId === taskId) app.renderChat?.();
+  }
   // Refused after all (compaction failed, the task was deleted…): give the draft back, and put
   // the permission back to Plan quietly (the send already said why), unless it was changed since.
   if (input && input.value === RUN_PLAN) {

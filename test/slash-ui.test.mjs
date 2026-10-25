@@ -58,7 +58,7 @@ test('/cost: the task\'s totals from its stored replies', () => {
     { role: 'user', text: 'c' },
     { role: 'assistant', text: 'd', metrics: metrics(3000, 500, 1_000_000) },
   ] };
-  assert.match(costSummary(task), /^This task so far: .*\$0\.003.* \(4,200 in · 800 out\) over 2 replies\.$/);
+  assert.equal(costSummary(task), 'This task so far: 5k tokens · <$0.01 (4,200 in · 800 out) over 2 replies.');
 });
 
 test('@-mentions: files, folders, web pages and background commands, in order and once each', () => {

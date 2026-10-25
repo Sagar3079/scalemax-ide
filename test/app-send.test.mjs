@@ -40,6 +40,8 @@ const { applyProgress } = await import('../src/reply-ui.js');
 const { openFileInTab, saveActiveTab, resetTabs } = await import('../src/workspace-ui.js');
 // setup() quiets these; the tests of the Send button use the real one.
 const realUpdateSendEnabled = app.updateSendEnabled;
+const realRenderReplyState = app.renderReplyState;
+const { renderPlanCard } = await import('../src/specs-ui.js');
 
 const input = nodes['#chat-input'];
 const ROOT = '/Users/you/project';
@@ -258,10 +260,16 @@ test('slash commands: the app\'s own act and send nothing; a custom command send
     },
   };
   input.value = '/cost';
+  const toastsBefore = toasts.length;
   assert.equal(await app.handleSend(), false);
   assert.equal(sent.length, 0);
   assert.equal(input.value, '', 'an app command empties the box like a sent message');
-  assert.match(toasts.at(-1), /No usage recorded for this task yet/);
+  // A summary above the message box, not a toast that goes away (renderCostPanel), and no turn.
+  assert.equal(app.costPanelTaskId, task.id);
+  assert.equal(toasts.length, toastsBefore);
+  assert.equal(task.messages.length, 0);
+  app.closeCostPanel();
+  assert.equal(app.costPanelTaskId, '');
 
   const created = [];
   const newTask = app.newTask;
@@ -626,5 +634,116 @@ test('without a model the desktop app sends nothing: the draft stays, the task i
   } finally {
     delete nodes['#connect-model-notice'];
     delete nodes['#send-btn'];
+  }
+});
+
+test('a reply stopped while the model answered keeps the usage main reported and says the rest is unknown', async () => {
+  const { task } = setup({
+    send: (payload) => {
+      app.replies.get(task.id).items.push({ type: 'text', text: 'How the date helpers fit' });
+      return { ok: false, error: { code: 'CANCELLED', message: 'Provider request was cancelled.', metrics: { unreportedCalls: 1, costStatus: 'incomplete' } } };
+    },
+  });
+  window.scalemaxAPI.checkpoints = { get: async () => ({ ok: true, data: null }) };
+  input.value = 'Walk me through the date module';
+  assert.equal(await app.handleSend(), true);
+  const reply = task.messages.at(-1);
+  assert.equal(reply.interrupted, 'stopped');
+  assert.deepEqual(reply.metrics, { unreportedCalls: 1, costStatus: 'incomplete' });
+  const { metricsLabel, taskMetricsLabel } = await import('../src/domain.mjs');
+  assert.equal(metricsLabel(reply.metrics, { interrupted: reply.interrupted }), 'usage of the stopped part unknown');
+  assert.equal(taskMetricsLabel(task), 'Usage unknown');
+});
+
+test('Stop takes Send\'s place while a reply runs, and Escape in the composer stops it', async () => {
+  let finish;
+  const { task } = setup({ send: () => new Promise((resolve) => { finish = resolve; }) });
+  const cancelled = [];
+  window.scalemaxAPI.provider.cancel = async (id) => { cancelled.push(id); return { ok: true, data: true }; };
+  window.scalemaxAPI.checkpoints = { get: async () => ({ ok: true, data: null }) };
+  const send = fakeElement();
+  const cancel = fakeElement({ hidden: true });
+  nodes['#send-btn'] = send;
+  nodes['#cancel-btn'] = cancel;
+  app.renderReplyState = realRenderReplyState;
+  try {
+    realRenderReplyState.call(app);
+    assert.equal(send.hidden, false);
+    assert.equal(cancel.hidden, true);
+    input.value = 'Explain the date module';
+    const sending = app.handleSend();
+    await new Promise((resolve) => setImmediate(resolve));
+    const reply = app.replies.get(task.id);
+    assert.ok(reply?.sent, 'the reply is running');
+    // One slot: Stop shows, Send goes.
+    assert.equal(cancel.hidden, false);
+    assert.equal(send.hidden, true);
+    const key = (name, extra = {}) => ({ key: name, isComposing: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra });
+    // Escape while typing an IME composition, or with a composer menu open, does nothing.
+    assert.equal(app.composerEscape(key('Escape', { isComposing: true })), false);
+    nodes['.composer-menu:popover-open'] = fakeElement();
+    assert.equal(app.composerEscape(key('Escape')), false);
+    delete nodes['.composer-menu:popover-open'];
+    assert.equal(app.composerEscape(key('Enter')), false);
+    assert.deepEqual(cancelled, []);
+    // Escape stops the task's reply, even with a draft in the box.
+    input.value = 'next question';
+    const escape = key('Escape');
+    assert.equal(app.composerEscape(escape), true);
+    assert.equal(escape.defaultPrevented, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(cancelled, [reply.requestId]);
+    assert.equal(reply.stopping, true);
+    finish({ ok: false, error: { code: 'CANCELLED', message: 'Provider request was cancelled.' } });
+    assert.equal(await sending, true);
+    assert.equal(cancel.hidden, true, 'Send is back once the reply ended');
+    assert.equal(send.hidden, false);
+    // No reply: Escape in an empty box closes the /cost summary, and otherwise leaves the key alone.
+    input.value = '';
+    app.showCostPanel();
+    assert.equal(app.costPanelTaskId, task.id);
+    assert.equal(app.composerEscape(key('Escape')), true);
+    assert.equal(app.costPanelTaskId, '');
+    assert.equal(app.composerEscape(key('Escape')), false);
+  } finally {
+    delete nodes['#send-btn'];
+    delete nodes['#cancel-btn'];
+  }
+});
+
+test('"Run this plan" runs a plan once: the card then says "Plan run", also after it is drawn again', async () => {
+  const { task, sent } = setup();
+  app.settings.permission = 'plan';
+  app.settings.prePlanPermission = 'basic';
+  const plan = { role: 'assistant', text: '1. Add the helper\n2. Test it', time: 1, plan: true };
+  task.messages.push({ role: 'user', text: 'Plan the helper', time: 0 }, plan);
+  // A stand-in DOM that keeps what the card is built from.
+  const createElement = document.createElement;
+  document.createElement = (tag) => {
+    const node = fakeElement({ tag, children: [], textContent: '', className: '', classList: { add() {}, toggle() {}, remove() {}, contains() { return false; } } });
+    node.append = (...children) => { node.children.push(...children); };
+    node.isConnected = true;
+    return node;
+  };
+  const buttons = (card) => card.children.find((child) => child.className === 'plan-actions').children;
+  try {
+    const card = renderPlanCard(app, plan, task.id);
+    const [run] = buttons(card);
+    assert.equal(run.textContent, 'Run this plan');
+    for (const listener of run.listeners.click) listener();
+    assert.equal(run.disabled, true, 'a second click while it starts does nothing');
+    for (const listener of run.listeners.click) listener();
+    while (sent.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sent.length, 1, 'the plan went out once');
+    assert.equal(plan.planRun, true, 'kept with the reply (and saved with the task)');
+    assert.equal(app.settings.permission, 'basic');
+    const again = renderPlanCard(app, plan, task.id);
+    const [done, ...rest] = buttons(again);
+    assert.equal(done.textContent, 'Plan run');
+    assert.equal(done.disabled, true);
+    assert.equal(rest.length, 0, 'no "Keep planning" for a plan that ran');
+  } finally {
+    document.createElement = createElement;
   }
 });

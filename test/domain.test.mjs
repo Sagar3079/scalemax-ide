@@ -6,7 +6,7 @@ import {
   folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime, toolCallGroups, toolActivity,
   MODE_IDS, MODE_TOOLS, modeInfo, modeSummary, normalizeMode,
   normalizeMetrics, normalizeCompaction, taskHistoryMessages, compactionMessages, compactionBoundary, compactionInput,
-  automaticCompactionPlan, estimateTokens, metricsLabel, taskMetrics, taskMetricsLabel, COMPACTION_TAIL_MESSAGES,
+  automaticCompactionPlan, estimateTokens, metricsLabel, taskMetrics, taskMetricsLabel, formatUsd, COMPACTION_TAIL_MESSAGES,
 } from '../src/domain.mjs';
 import { EXPERTS, SKILLS, CONNECTORS, COMMUNITY_SKILLS } from '../src/data.js';
 
@@ -566,7 +566,8 @@ test('settings preserve automatic compaction and metrics retain unknown prices i
     costMicroUsd: 1800, costStatus: 'priced',
     rounds: [{ model: 'demo', usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 }, costMicroUsd: 1800 }],
   });
-  assert.equal(metricsLabel(metric), '1.2k in · 300 out · $0.0018');
+  assert.equal(metricsLabel(metric), '1.2k in · 300 out · <$0.01');
+  assert.equal(metricsLabel(metric, { exact: true }), '1.2k in · 300 out · $0.0018');
   assert.equal(normalizeMetrics({ usage: { totalTokens: 12 }, costStatus: 'unpriced' }).costStatus, 'unpriced');
   assert.equal(normalizeMetrics({ usage: { totalTokens: -1 } }), null);
 });
@@ -608,7 +609,8 @@ test('task totals include compacting cost but report unknown provider prices hon
   assert.equal(totals.totalTokens, 25);
   assert.equal(totals.costNanoUsd, 20000);
   assert.equal(totals.unavailablePrice, true);
-  assert.equal(taskMetricsLabel(task), '25 tokens · $0.00002 + unpriced');
+  assert.equal(taskMetricsLabel(task), '25 tokens · <$0.01 + unpriced');
+  assert.equal(taskMetricsLabel(task, { exact: true }), '25 tokens · $0.00002 + unpriced');
 });
 
 
@@ -625,9 +627,77 @@ test('task totals retain every prior compaction cost after a newer summary repla
   assert.equal(totals.compactions, 2);
   assert.equal(totals.totalTokens, 5);
   assert.equal(totals.costNanoUsd, 500);
-  assert.equal(taskMetricsLabel(task), '5 tokens · $0.0000005');
+  assert.equal(taskMetricsLabel(task), '5 tokens · <$0.01');
+  assert.equal(taskMetricsLabel(task, { exact: true }), '5 tokens · $0.0000005');
 });
 
+
+test('amounts spent show one way: a cent or more with 2 to 4 decimals, less as "<$0.01", the full amount for a title', () => {
+  const usd = (dollars) => formatUsd(Math.round(dollars * 1e9));
+  assert.deepEqual(usd(0.135738), { text: '$0.1357', exact: '$0.135738' });
+  assert.deepEqual(usd(0.3219), { text: '$0.3219', exact: '$0.3219' });
+  assert.deepEqual(usd(0.3), { text: '$0.30', exact: '$0.30' });
+  assert.deepEqual(usd(0.01), { text: '$0.01', exact: '$0.01' });
+  assert.deepEqual(usd(0.003237), { text: '<$0.01', exact: '$0.003237' });
+  assert.deepEqual(usd(0.0000005), { text: '<$0.01', exact: '$0.0000005' });
+  assert.deepEqual(formatUsd(0), { text: '$0.00', exact: '$0.00' }, 'a real zero price stays zero');
+  assert.deepEqual(usd(1.23456), { text: '$1.23', exact: '$1.23456' });
+  assert.deepEqual(usd(1234.5), { text: '$1,234.50', exact: '$1,234.50' });
+  assert.equal(usd(0.99996).text, '$1.00');
+  for (const bad of [null, undefined, -1, 1.5, '12', Number.NaN]) assert.equal(formatUsd(bad), null);
+});
+
+test('the header counts every reply\'s tokens: input plus output when the provider reported no (or a zero) total', () => {
+  const reply = (usage, extra = {}) => ({ role: 'assistant', text: 'a', metrics: { usage, ...extra } });
+  // A provider that sends total_tokens: 0 next to real counts (the footer said "14k in · 369 out").
+  const task = { messages: [
+    { role: 'user', text: 'q' },
+    reply({ inputTokens: 14000, outputTokens: 369, totalTokens: 0 }, { costStatus: 'priced', costNanoUsd: 15_397_000 }),
+  ] };
+  assert.equal(taskMetrics(task).totalTokens, 14369);
+  assert.equal(taskMetricsLabel(task), '14k tokens · $0.0154');
+  // One reply with only a total, one with only input and output: both count.
+  const mixed = { messages: [reply({ totalTokens: 1000 }), reply({ inputTokens: 500, outputTokens: 20 }), reply({ outputTokens: 7 })] };
+  assert.equal(taskMetrics(mixed).totalTokens, 1527);
+  assert.equal(taskMetricsLabel(mixed), '1.5k tokens');
+});
+
+test('a reply stopped while the model answered says its usage is unknown, in its footer and in the header', () => {
+  // Stopped in its first round: nothing reported at all.
+  const bare = { unreportedCalls: 1, costStatus: 'incomplete' };
+  assert.equal(normalizeMetrics(bare).unreportedCalls, 1);
+  assert.equal(metricsLabel(bare, { interrupted: 'stopped' }), 'usage of the stopped part unknown');
+  assert.equal(metricsLabel(bare, { interrupted: 'failed' }), 'usage of the unfinished part unknown');
+  // Earlier rounds were reported: they stay, with what they cost.
+  const partial = {
+    usage: { inputTokens: 10000, outputTokens: 135 }, costNanoUsd: 33_237_000, costStatus: 'incomplete', unreportedCalls: 1,
+  };
+  assert.equal(metricsLabel(partial, { interrupted: 'stopped' }), '10k in · 135 out · $0.0332 · usage of the stopped part unknown');
+  assert.equal(metricsLabel(partial, { interrupted: 'stopped', exact: true }), '10k in · 135 out · $0.033237 · usage of the stopped part unknown');
+  // Without a lost call an incomplete cost still says so.
+  assert.equal(metricsLabel({ ...partial, unreportedCalls: undefined }), '10k in · 135 out · $0.0332 + incomplete');
+  const task = { messages: [
+    { role: 'assistant', text: 'a', metrics: { usage: { inputTokens: 100000, outputTokens: 2000 }, costNanoUsd: 355_000_000, costStatus: 'priced' } },
+    { role: 'assistant', text: 'b', interrupted: 'stopped', metrics: partial },
+    { role: 'assistant', text: 'c', interrupted: 'stopped', metrics: bare },
+  ] };
+  const totals = taskMetrics(task);
+  assert.equal(totals.unknownUsage, 2);
+  assert.equal(totals.unavailablePrice, false, 'a stopped reply is not an unpriced one');
+  assert.equal(taskMetricsLabel(task), '112k tokens · $0.3882 + unknown');
+  assert.equal(taskMetricsLabel({ messages: [{ role: 'assistant', text: '', metrics: bare }] }), 'Usage unknown');
+});
+
+test('"Run this plan" is used once: the mark is kept with a plan reply only', () => {
+  const [task] = normalizeTasks([{ id: 'task-1', title: 'T', messages: [
+    { role: 'assistant', text: 'The plan', plan: true, planRun: true },
+    { role: 'assistant', text: 'Not a plan', planRun: true },
+    { role: 'assistant', text: 'Another plan', plan: true, planRun: 'yes' },
+  ] }]);
+  assert.equal(task.messages[0].planRun, true);
+  assert.equal(task.messages[1].planRun, undefined);
+  assert.equal(task.messages[2].planRun, undefined);
+});
 
 test('long conversations compact in bounded prefixes and retain indices beyond five hundred', () => {
   const task = { messages: Array.from({ length: 510 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', text: `turn ${index}` })) };

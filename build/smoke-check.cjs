@@ -1592,7 +1592,7 @@ async function run(win) {
     usageAndCompaction: Boolean(e2e && e2e.manualCompacted && e2e.slashNotSaved && /^Stub summary:/.test(e2e.manualSummary)
       && e2e.manualMetric && e2e.manualMetric.costStatus === 'priced' && e2e.automaticCompacted
       && e2e.automaticText === 'compact context: true:false' && e2e.replyMetric && e2e.replyMetric.costStatus === 'priced'
-      && /12 in · 6 out · \$0\.000024/.test(e2e.metricsUi) && /tokens · \$/.test(e2e.crumbMetrics)
+      && /12 in · 6 out · <\$0\.01/.test(e2e.metricsUi) && /tokens · <?\$/.test(e2e.crumbMetrics)
       && e2e.compactContextPill === 'Context compacted' && e2e.failedAutoDraftKept === true),
     specApi: probe.specMethods.length === 3 && probe.specsControls === true,
     gitFlowApi: probe.gitMethods.length === 8 && probe.worktreeMethods.length === 5 && probe.sessionMethods.length === 1 && probe.gitFlowControls === true,

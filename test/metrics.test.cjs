@@ -58,3 +58,25 @@ test('retains nano-USD precision so a task can sum small independently rounded r
   assert.equal(one.costNanoUsd, 190);
   assert.equal(Array.from({ length: 10 }, () => one.costNanoUsd).reduce((sum, item) => sum + item, 0), 1900, 'the task can display two micro-USD after summing');
 });
+
+test('a total smaller than input plus output (a provider sending total_tokens: 0) becomes their sum', () => {
+  assert.deepEqual(normalizeUsage({ prompt_tokens: 14000, completion_tokens: 369, total_tokens: 0 }), {
+    inputTokens: 14000, outputTokens: 369, totalTokens: 14369,
+  });
+  // A larger total (reasoning counted apart, say) is kept as reported.
+  assert.equal(normalizeUsage({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 20 }).totalTokens, 20);
+  assert.equal(normalizeUsage({ total_tokens: 0 }).totalTokens, 0);
+});
+
+test('model calls whose usage never arrived are kept, even when nothing else was reported', () => {
+  assert.deepEqual(createMetrics({ unreportedCalls: 1, incomplete: true }), { unreportedCalls: 1, costStatus: 'incomplete' });
+  const metrics = createMetrics({
+    model: 'demo', usage: { prompt_tokens: 5, completion_tokens: 2 }, pricing: { inputPerMillion: 1, outputPerMillion: 2, currency: 'USD' },
+    unreportedCalls: 1, incomplete: true,
+  });
+  assert.equal(metrics.unreportedCalls, 1);
+  assert.equal(metrics.costStatus, 'incomplete');
+  assert.equal(metrics.costNanoUsd, 9000);
+  assert.equal(createMetrics({ unreportedCalls: 0 }), null);
+  assert.equal('unreportedCalls' in createMetrics({ model: 'x', unreportedCalls: -2 }), false);
+});

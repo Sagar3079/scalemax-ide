@@ -5,7 +5,7 @@ import {
   toTemperature, searchItems, folderName, normalizeTaskFolder, isTaskLocked, taskFolderStatus, taskGroups, taskTime,
   toolCallGroups, normalizeSteps, taskHistoryMessages, normalizeMetrics, normalizeCompaction, effectivePermission,
   normalizeTodos, normalizeMessageImages, openTodos,
-  automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetricsLabel, metricsLabel, COMPACTION_TAIL_MESSAGES,
+  automaticCompactionPlan, compactionBoundary, compactionMessages, compactionInput, taskMetrics, taskMetricsLabel, metricsLabel, formatUsd, COMPACTION_TAIL_MESSAGES,
   INTERRUPTIONS, normalizeChanges, DEFAULT_SETTINGS, normalizeElapsed, durationText, contextShareLabel, taskContextShare,
   retryableReply,
 } from './domain.mjs';
@@ -105,6 +105,9 @@ function hostOf(baseUrl) {
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// What the composer's Compact button does, in plain words (its tooltip and description).
+const COMPACT_HINT = "Summarize older messages so long chats fit the model's memory";
 
 // All dynamic content is inserted as text, never interpreted as HTML.
 function element(tag, className, text) {
@@ -254,6 +257,8 @@ const app = {
   collapsedFolders: new Set(),
   // Replies in progress, by task id (src/reply-ui.js): each task can work while others do.
   replies: new Map(),
+  // The task whose /cost summary shows above the message box ('' while none does).
+  costPanelTaskId: '',
   // A no-tools compaction is pending before the next regular completion for this task.
   compactingTasks: new Set(),
   // Tasks whose reply finished while another task was on screen (a dot in the sidebar).
@@ -447,6 +452,8 @@ const app = {
         // Written under Plan permission: nothing was changed, and the card offering to run it
         // stays under the reply across restarts.
         if (message.role === 'assistant' && message.plan === true) normalized.plan = true;
+        // …unless it was run already: the card then says so instead of offering it again.
+        if (message.role === 'assistant' && message.plan === true && message.planRun === true) normalized.planRun = true;
         // The model's to-do list and the pictures the user attached stay with their messages.
         const todos = message.role === 'assistant' ? normalizeTodos(message.todos) : [];
         if (todos.length) normalized.todos = todos;
@@ -814,12 +821,106 @@ const app = {
     const cost = taskMetricsLabel(task);
     const compacted = normalizeCompaction(task?.compaction);
     const metrics = cost ? element('span', 'chat-crumb-metrics', cost) : null;
-    if (metrics) metrics.title = compacted ? `${cost} · Earlier context is summarized` : cost;
+    if (metrics) {
+      // The title has the amounts in full, and says why part of the total is unknown.
+      const totals = taskMetrics(task);
+      metrics.title = [
+        `This task: ${taskMetricsLabel(task, { exact: true })}`,
+        totals.knownInput || totals.knownOutput ? `${totals.inputTokens.toLocaleString('en-US')} in · ${totals.outputTokens.toLocaleString('en-US')} out` : '',
+        totals.unknownUsage ? `Usage of ${totals.unknownUsage === 1 ? 'one reply' : `${totals.unknownUsage} replies`} is not fully known: a provider reports it when an answer ends, and a stopped or cut-off answer never did` : '',
+        compacted ? 'Earlier context is summarized' : '',
+      ].filter(Boolean).join(' · ');
+    }
     const context = compacted ? element('span', 'chat-crumb-context', 'Context compacted') : null;
     crumb.replaceChildren(element('span', folder ? 'chat-crumb-folder' : '', folder?.name || 'Workspace'), ' ', separator, ' Chat',
       ...(metrics ? [metrics] : []), ...(context ? [context] : []));
     if (folder) crumb.title = folder.path;
     else crumb.removeAttribute('title');
+    // The /cost summary follows the same totals.
+    this.renderCostPanel();
+  },
+
+  /** "/cost": shows the summary of the task on screen above the message box (renderCostPanel). */
+  showCostPanel() {
+    this.costPanelTaskId = this.currentTaskId || '';
+    this.renderCostPanel();
+  },
+
+  closeCostPanel() {
+    const panel = $('#cost-panel');
+    const inside = Boolean(panel?.contains?.(document.activeElement));
+    this.costPanelTaskId = '';
+    this.renderCostPanel();
+    if (inside) $('#chat-input')?.focus?.();
+  },
+
+  /**
+   * The /cost summary: this task's tokens in and out, what they cost, the model and how full its
+   * context window is, kept up to date while it shows (renderChatCrumb draws it with the header
+   * total) and closed with its button, Escape in an empty message box, or by opening another task.
+   * It is not a message: nothing of it is sent to the model or saved with the task.
+   */
+  renderCostPanel() {
+    const panel = $('#cost-panel');
+    if (!panel) return;
+    const task = this.currentTask();
+    if (!this.costPanelTaskId || !task || task.id !== this.costPanelTaskId) {
+      this.costPanelTaskId = '';
+      panel.hidden = true;
+      panel.replaceChildren();
+      return;
+    }
+    const totals = taskMetrics(task);
+    const head = element('div', 'cost-panel-head');
+    head.append(element('span', 'cost-panel-title', 'Cost of this task'), element('span', 'cost-panel-aside', 'Not sent to the model'));
+    const close = element('button', 'cost-panel-close');
+    close.setAttribute('aria-label', 'Close the cost summary');
+    close.title = 'Close (Esc)';
+    close.append(element('span', '', '×'));
+    close.addEventListener('click', () => this.closeCostPanel());
+    head.append(close);
+    if (!totals.replies) {
+      panel.replaceChildren(head, element('p', 'cost-panel-foot', 'No usage recorded for this task yet.'));
+      panel.hidden = false;
+      return;
+    }
+    const count = (value) => value.toLocaleString('en-US');
+    const rows = [];
+    if (totals.knownInput || totals.knownOutput || !totals.knownTotal) {
+      rows.push(['Tokens in', totals.knownInput ? count(totals.inputTokens) : 'unknown']);
+      rows.push(['Tokens out', totals.knownOutput ? count(totals.outputTokens) : 'unknown']);
+    } else {
+      rows.push(['Tokens', count(totals.totalTokens)]);
+    }
+    const amount = totals.priced ? formatUsd(totals.costNanoUsd) : null;
+    const gaps = [totals.unavailablePrice ? 'unpriced' : '', totals.unknownUsage ? 'unknown' : ''].filter(Boolean);
+    rows.push(['Cost', amount ? `${amount.text}${gaps.map((gap) => ` + ${gap}`).join('')}`
+      : totals.unavailablePrice ? 'Price unavailable' : 'unknown', amount ? `${amount.exact}${gaps.map((gap) => ` + ${gap}`).join('')}` : '']);
+    const newest = [...task.messages].reverse().find((message) => message?.role === 'assistant' && normalizeMetrics(message.metrics)?.model);
+    const model = normalizeMetrics(newest?.metrics)?.model || this.provider?.model || '';
+    rows.push(['Model', model || 'none']);
+    const share = taskContextShare(task, (id) => this.contextWindowOf(id), this.provider?.model || '');
+    const size = this.contextWindowOf(model);
+    rows.push(['Context', share
+      ? `${share.label.replace(/ of context$/, '')}${size ? ` of ${size >= 1_000_000 ? `${Math.round(size / 100_000) / 10}m` : `${Math.round(size / 1000)}k`}` : ''}`
+      : 'unknown']);
+    const list = element('dl', 'cost-panel-list');
+    for (const [label, value, title] of rows) {
+      const row = element('div', 'cost-panel-item');
+      const term = element('dt', '', label);
+      const detail = element('dd', '', value);
+      if (title) detail.title = title;
+      row.append(term, detail);
+      list.append(row);
+    }
+    const replies = totals.replies - totals.compactions;
+    const over = [replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'}` : '',
+      totals.compactions ? `${totals.compactions} ${totals.compactions === 1 ? 'compaction' : 'compactions'}` : ''].filter(Boolean).join(' and ');
+    const notes = [over ? `Over ${over}.` : '',
+      totals.unknownUsage ? `Usage of ${totals.unknownUsage === 1 ? 'one reply' : `${totals.unknownUsage} replies`} is not fully known: a provider reports it when an answer ends, and a stopped or cut-off answer never did.` : '',
+      totals.unavailablePrice ? 'The provider published no price for some of it.' : ''].filter(Boolean);
+    panel.replaceChildren(head, list, ...(notes.length ? [element('p', 'cost-panel-foot', notes.join(' '))] : []));
+    panel.hidden = false;
   },
 
   renderSidebarFolder() {
@@ -1730,6 +1831,8 @@ const app = {
       if (retry && !retry.disabled) void this.retryReply(retry.dataset.taskId);
     });
     this.bindComposerHint();
+    // Escape stops the running reply (composerEscape); the "/" and "@" menus see it first.
+    $('#chat-card')?.addEventListener('keydown', (event) => this.composerEscape(event));
     $('#chat-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
@@ -1740,6 +1843,9 @@ const app = {
     $('#compact-btn')?.addEventListener('click', () => void this.compactCurrentTask());
     $('#send-btn')?.addEventListener('click', (event) => {
       event.preventDefault();
+      // The keyboard goes back to the message box (Send is disabled, then Stop takes its place):
+      // the next message can be typed, and Escape stops the reply.
+      $('#chat-input')?.focus();
       this.handleSend();
     });
     // The pills and the composer's mode chip share one place that switches the mode.
@@ -2210,12 +2316,15 @@ const app = {
       if (index === companionAt) bubble.append(this.renderCompanionMoment(task, message));
       // A reply that was stopped or failed can still carry billed usage, so the footer shows for
       // any assistant message with text or metrics.
-      const usage = message.role === 'assistant' ? metricsLabel(message.metrics) : '';
+      // A reply stopped while the model was answering says that part's usage is unknown.
+      const usage = message.role === 'assistant' ? metricsLabel(message.metrics, { interrupted: message.interrupted }) : '';
       if (message.role === 'assistant' && (message.text || usage)) {
         const footer = element('div', 'msg-footer');
         if (usage) {
           const metric = element('span', 'msg-metrics', usage);
-          metric.title = message.metrics?.rounds?.length > 1 ? `${usage} across ${message.metrics.rounds.length} model calls` : usage;
+          // The title has the amounts in full ("<$0.01" is $0.003237 there).
+          const exact = metricsLabel(message.metrics, { interrupted: message.interrupted, exact: true });
+          metric.title = message.metrics?.rounds?.length > 1 ? `${exact} across ${message.metrics.rounds.length} model calls` : exact;
           // How much of the model's context window the reply filled, when the model publishes one.
           const share = contextShareLabel(message.metrics, this.contextWindowOf(message.metrics?.model));
           if (share) {
@@ -2385,15 +2494,49 @@ const app = {
     if (!quiet && taskId === this.currentTaskId) this.renderChat();
     return reply;
   },
-  // Stop, Send and the sidebar spinners follow the replies that are running.
+  // Stop, Send and the sidebar spinners follow the replies that are running. Stop takes Send's
+  // place while the task on screen has a reply running (same slot, same width: the toolbar does
+  // not move), and the keyboard focus moves with it.
   renderReplyState() {
     const cancel = $('#cancel-btn');
+    const send = $('#send-btn');
+    const reply = this.currentReply();
+    const focused = document.activeElement;
     if (cancel) {
-      cancel.hidden = !this.currentReply();
-      cancel.disabled = Boolean(this.currentReply()?.stopping);
+      cancel.hidden = !reply;
+      cancel.disabled = Boolean(reply?.stopping);
     }
+    if (send) send.hidden = Boolean(reply);
+    if (reply && focused && focused === send) cancel?.focus?.();
+    else if (!reply && focused && focused === cancel) $('#chat-input')?.focus?.();
     this.updateSendEnabled();
     this.renderTasks();
+  },
+
+  /**
+   * Escape in the message box (or on the composer's own buttons) stops the task's running reply,
+   * like Stop. Menus that are open take the key first: the "/" and "@" menus close on it (they
+   * stop it before it gets here) and an open composer popover closes itself. Without a reply, an
+   * empty message box closes the /cost summary. Returns true when it acted.
+   */
+  composerEscape(event) {
+    if (event?.key !== 'Escape' || event.isComposing || event.defaultPrevented) return false;
+    try {
+      if (document.querySelector?.('.composer-menu:popover-open')) return false;
+    } catch { /* an engine without :popover-open has no open popover */ }
+    const reply = this.currentReply();
+    if (reply) {
+      event.preventDefault?.();
+      if (!reply.stopping) void this.cancelResponse();
+      return true;
+    }
+    const input = $('#chat-input');
+    if (this.costPanelTaskId && !input?.value?.trim()) {
+      event.preventDefault?.();
+      this.closeCostPanel();
+      return true;
+    }
+    return false;
   },
   bindReplyProgress() {
     this.getProviderBridge()?.onProgress?.((event) => {
@@ -2929,6 +3072,8 @@ const app = {
     if (!reply || reply.stopping) return;
     reply.stopping = true;
     const cancel = $('#cancel-btn');
+    // A disabled button drops the keyboard focus: it goes back to the message box instead.
+    if (cancel && document.activeElement === cancel) $('#chat-input')?.focus?.();
     if (cancel) cancel.disabled = true;
     // Not sent yet (handleSend is still gathering the request): it will not be sent at all.
     if (reply.kind === 'chat' && !reply.sent) return;
@@ -3044,8 +3189,10 @@ const app = {
     const compact = $('#compact-btn');
     if (compact) {
       compact.disabled = busy || !ready || !this.provider?.configured || !compactionBoundary(this.currentTask());
+      // What Compact does, in plain words; while it cannot, why not.
       compact.title = compact.disabled && !compactionBoundary(this.currentTask())
-        ? 'There is not enough older conversation to compact yet.' : 'Summarize older conversation context (or type /compact)';
+        ? `Nothing to compact yet. ${COMPACT_HINT}.` : `${COMPACT_HINT} (or type /compact)`;
+      compact.setAttribute('aria-description', COMPACT_HINT);
     }
     // The mode cannot change while a reply runs, so the pills and the menu follow the busy state.
     renderMode(this);
