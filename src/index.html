@@ -621,7 +621,7 @@
             <header class="page-header"><div><h1 id="more-title" class="page-title">Simple by design. Yours by default.</h1><p class="page-sub">Appearance, local data, and a little about ScaleMax.</p></div></header>
             <section class="settings-card" aria-labelledby="appearance-title">
               <h2 id="appearance-title">Appearance</h2>
-              <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light" selected>Light</option><option value="dark">Dark</option><option value="system">System</option></select></div>
+              <div class="preference-row"><div class="form-group"><label for="theme-select">Theme</label></div><select id="theme-select"><option value="light">Light</option><option value="dark">Dark</option><option value="system" selected>System</option></select></div>
               <!-- The companion character beside a running reply and in the task rows (src/mascot.js). -->
               <div class="preference-row">
                 <div class="form-group preference-text">
@@ -688,6 +688,11 @@
               <div id="hooks-panel" class="hooks-panel"></div>
               <div class="button-row"><button id="hooks-refresh" class="button secondary" type="button">Refresh</button></div>
             </section>
+            <!-- Filled from src/shortcuts.mjs (src/app.js renderShortcutList). -->
+            <section id="shortcuts-card" class="settings-card" aria-labelledby="shortcuts-title">
+              <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+              <dl id="shortcuts-list" class="shortcuts-list"></dl>
+            </section>
             <section class="settings-card" aria-labelledby="data-title">
               <h2 id="data-title">Your data stays yours</h2>
               <p class="body-copy">There is no cloud sign-in. Task history and settings are stored as plain local data on this device, not as encrypted records. Keep exports somewhere you trust.</p>
@@ -712,8 +717,9 @@
 
   <dialog id="search-dialog" aria-labelledby="search-title">
     <div class="dialog-header"><div><h2 id="search-title">Search workspace</h2></div><button id="search-close" class="button secondary" type="button">Close</button></div>
-    <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus /></div>
-    <div id="search-results" aria-label="Search results" aria-live="polite"></div>
+    <div class="dialog-search"><label for="search-input">Search tasks and resources</label><input id="search-input" type="search" placeholder="Search by name or keyword" autocomplete="off" spellcheck="false" autofocus role="combobox" aria-controls="search-results" aria-expanded="false" aria-autocomplete="list" /></div>
+    <div id="search-results" role="listbox" aria-label="Search results"></div>
+    <p id="search-count" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   </dialog>
 
   <dialog id="connector-dialog" aria-labelledby="connector-dialog-title">

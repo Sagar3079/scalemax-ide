@@ -14,7 +14,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   temperatureEnabled: false,
   expertId: null,
   skillId: null,
-  theme: 'light',
+  // Follows the Mac's appearance until the user picks Light or Dark (Preferences > Appearance).
+  theme: 'system',
   // manual | basic | bypass (see lib/tool-loop.cjs). bypass also needs bypassConsent.
   permission: 'basic',
   bypassConsent: false,
@@ -307,6 +308,17 @@ export function taskGroups(tasks, currentTaskId) {
   }
   groups.sort((left, right) => right.updatedAt - left.updatedAt);
   return { groups, legacy: legacy.sort(newestFirst) };
+}
+
+/**
+ * A task title for a narrow row: a fork's "(fork)" (src/sessions.mjs forkedTask, once per fork of
+ * a fork) comes off the end, where an ellipsis would cut it, and is shown as a tag before the title.
+ * @returns {{ title: string, fork: boolean }}
+ */
+export function taskTitleParts(title) {
+  const text = typeof title === 'string' ? title : '';
+  const bare = text.replace(/(?:\s*\(fork\))+\s*$/, '');
+  return bare && bare !== text ? { title: bare, fork: true } : { title: text, fork: false };
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1423,6 +1435,47 @@ export function buildSystemPrompt(settings, { experts = [], skills = [] } = {}) 
   parts.push(permissionLines[effectivePermission(normalized)]);
   parts.push('Expert roles, skill templates, and connector listings do not grant tools, credentials, or account access. Never pretend tools executed, files changed, messages were sent, or integrations ran. Claim an action or result only when actual execution evidence is available.');
   return parts.join('\n\n');
+}
+
+/**
+ * A reply's Markdown as the text it reads as, for one-line previews (Recent sessions, Search
+ * workspace): no heading marks, list bullets, quote marks, emphasis, code ticks, fences, rules or
+ * link targets. Lines stay lines; a heading ends with ":" so "## Done" then "- Added x" reads
+ * "Done: Added x" once the preview joins them.
+ */
+export function plainPreview(text) {
+  if (typeof text !== 'string' || !text) return '';
+  const lines = [];
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    let line = raw;
+    if (/^\s{0,3}(`{3,}|~{3,})/.test(line)) continue;
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) continue;
+    if (/^\s{0,3}=+\s*$/.test(line)) continue;
+    if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(line)) continue;
+    line = line.replace(/^(\s{0,3}>\s?)+/, '');
+    const heading = /^\s{0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
+    if (heading) line = heading[1] && !/[.:!?…]$/.test(heading[1]) ? `${heading[1]}:` : heading[1];
+    line = line.replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?/, '');
+    if (/^\s*\|.*\|\s*$/.test(line)) line = line.trim().slice(1, -1).split('|').map((cell) => cell.trim()).filter(Boolean).join(' · ');
+    lines.push(line);
+  }
+  // Escaped marks stay as written: they are parked on private-use characters while the marks
+  // are taken out. Every pattern is bounded to a line and a few hundred characters, so a long
+  // reply full of stray marks costs linear time.
+  const park = !/[\uE000-\uE07F]/.test(text);
+  return lines.join('\n')
+    .replace(/\\([\\`*_{}[\]()#+\-.!|>~<])/g, (match, mark) => (park ? String.fromCharCode(0xE000 + mark.charCodeAt(0)) : match))
+    .replace(/!\[([^\]\n]{0,300})\]\([^)\n]{0,500}\)/g, '$1')
+    .replace(/\[([^\]\n]{1,300})\]\([^)\n]{0,500}\)/g, '$1')
+    .replace(/\[([^\]\n]{1,300})\]\[[^\]\n]{0,100}\]/g, '$1')
+    .replace(/<((?:https?|mailto):[^>\s]{1,500})>/g, '$1')
+    .replace(/(`{1,8})([^`\n]|[^`\n][^\n]{0,500}?[^`\n])\1(?!`)/g, (match, ticks, code) => code.trim())
+    .replace(/(\*\*|__)(?=\S)([^\n]{0,300}?\S)\1/g, '$2')
+    .replace(/~~(?=\S)([^\n]{0,300}?\S)~~/g, '$1')
+    .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]{0,300}?[^\s*])\*(?![\w*])/g, '$1$2')
+    .replace(/(^|[^\w_])_(?=[^\s_])([^_\n]{0,300}?[^\s_])_(?![\w_])/g, '$1$2')
+    .replace(/<\/?[A-Za-z][^>\n]{0,200}>/g, '')
+    .replace(/[\uE000-\uE07F]/g, (mark) => (park ? String.fromCharCode(mark.charCodeAt(0) - 0xE000) : mark));
 }
 
 // Custom experts and skills are optional; invalid records are skipped.
