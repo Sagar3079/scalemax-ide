@@ -192,6 +192,46 @@ test('the review of a real reply diff: rebuilt earlier text, marked, undone', as
   assert.equal(textOf(state.update(undoAllSpec(state)).state), before);
 });
 
+test('find and replace speak in sentence case', () => {
+  const state = createTabState('x', { path: 'a.js' });
+  assert.equal(state.phrase('next'), 'Next');
+  assert.equal(state.phrase('previous'), 'Previous');
+  assert.equal(state.phrase('all'), 'Select all');
+  assert.equal(state.phrase('replace'), 'Replace');
+  assert.equal(state.phrase('replace all'), 'Replace all');
+  assert.equal(state.phrase('match case'), 'Match case');
+  assert.equal(state.phrase('by word'), 'Whole word');
+  assert.equal(state.phrase('regexp'), 'Regular expression');
+});
+
+test('Find starts from the selection, or else from the word at the cursor', () => {
+  const state = createTabState('let total = a  + 1;', { path: 'a.js' });
+  const at = (anchor, head = anchor) => state.update({ selection: { anchor, head } }).state;
+  const word = editor.wordSelection(at(6));
+  assert.deepEqual([word.main.from, word.main.to], [4, 9], 'the word around the cursor');
+  assert.deepEqual([editor.wordSelection(at(9)).main.from, editor.wordSelection(at(9)).main.to], [4, 9], 'also just after it');
+  assert.equal(editor.wordSelection(at(4, 9)), null, 'a selection is used as it is');
+  assert.equal(editor.wordSelection(at(14)), null, 'no word at the cursor: the last search stays');
+  const cursors = state.update({ selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(6)]) }).state;
+  assert.equal(editor.wordSelection(cursors), null, 'several cursors are left alone');
+});
+
+test('the review dialog colours code with the editor\'s parser and tags, line by line', () => {
+  const text = "const month = pad(date.getMonth() + 1); // fix\n/* a\n b */ let s = 'x';";
+  const rows = text.split('\n');
+  const lines = editor.highlightLines(text, 'src/format-date.js');
+  const pick = (row) => lines[row].map(([from, to, name]) => [rows[row].slice(from, to), name]);
+  assert.deepEqual(pick(0), [['const', 'tok-keyword'], ['pad', 'tok-function'], ['getMonth', 'tok-function'], ['1', 'tok-number'], ['// fix', 'tok-comment']]);
+  assert.deepEqual(pick(1), [['/* a', 'tok-comment']], 'a block comment runs across lines');
+  assert.deepEqual(pick(2), [[' b */', 'tok-comment'], ['let', 'tok-keyword'], ["'x'", 'tok-string']]);
+  const python = editor.highlightLines("def f(x):\n    return 'a'", 'tool.py');
+  assert.deepEqual(python.map((row) => row.map(([, , name]) => name)), [['tok-keyword', 'tok-function'], ['tok-keyword', 'tok-string']]);
+  const shell = editor.highlightLines('echo "hi" # note', 'run.sh')[0].map(([, , name]) => name);
+  assert.deepEqual(shell, ['tok-string', 'tok-comment'], 'legacy modes too');
+  assert.deepEqual(editor.highlightLines('plain\ntext', 'LICENSE'), [[], []], 'no language: no colours');
+  assert.deepEqual(editor.highlightLines('const a = 1;', 'a.js', { limit: 5 }), [[]], 'past the limit: no colours');
+});
+
 // ---- The Workspace editor with CodeMirror states --------------------------------------------
 // src/workspace-ui.js against a stand-in page and a stand-in view that holds real editor states
 // (createEditor needs a browser; everything it does with states is the same).

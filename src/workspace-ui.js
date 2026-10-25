@@ -14,6 +14,7 @@
  * is bound, and until it has loaded (or when it cannot) the plain #editor-input textarea is the
  * editor. The pure helpers are unit-tested in Node.
  */
+import { showTerminalFolder } from './terminal.js';
 
 const LAYOUT_KEY = 'scalemax-workspace-layout';
 const MAX_TABS = 12;
@@ -347,6 +348,8 @@ export function activeTabContent() {
 
 /** Toolbar breadcrumb: folder name first, parent path dimmed (ellipsized at the start). */
 export function renderCrumb(root, label = '') {
+  // The Terminal shows the runs and ↑ / ↓ history of the folder now open.
+  showTerminalFolder(root || '');
   const node = $('#workspace-path');
   if (!node) return;
   node.title = root || '';
