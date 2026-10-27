@@ -46,7 +46,8 @@
 }
 
 .ws {
-  --ws-explorer-width: 260px;
+  /* The tree takes 22% of the window between 200px and 260px, until its splitter sets a width. */
+  --ws-explorer-width: clamp(200px, 22vw, 260px);
   --ws-panel-height: 220px;
   --ws-code-font: var(--sm-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   --ws-code-size: 12px;
@@ -1391,6 +1392,8 @@
   border-radius: 6px;
   font-family: var(--ws-code-font);
   font-size: 12px;
+  /* A narrow panel ends the long placeholder with an ellipsis, not mid-letter. */
+  text-overflow: ellipsis;
 }
 
 .ws-terminal-form .button.compact {
@@ -1574,10 +1577,6 @@
 }
 
 @media (max-width: 900px) {
-  .ws {
-    --ws-explorer-width: 200px;
-  }
-
   .ws-toolbar-status {
     display: none;
   }

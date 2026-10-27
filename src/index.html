@@ -215,7 +215,10 @@
                 <!-- Image / video generation options for the selected model (src/media-ui.js). -->
                 <div id="media-bar" class="media-bar" role="group" aria-label="Generation options" hidden></div>
                 <div id="chat-toolbar" class="sm-home-composer__toolbar">
-                  <button id="compact-btn" class="composer-chip compact-context-button" type="button" title="Summarize older messages so long chats fit the model's memory (or type /compact)">Compact</button>
+                  <button id="compact-btn" class="composer-icon-button compact-context-button" type="button" title="Summarize older messages so long chats fit the model's memory (or type /compact)">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v6m-3-3 3 3 3-3M12 21v-6m-3 3 3-3 3 3M4 12h16" /></svg>
+                    <span class="sr-only">Compact</span>
+                  </button>
                   <!-- Feature specs of this folder (src/specs-ui.js). -->
                   <button id="specs-open" class="composer-chip specs-chip" type="button" aria-haspopup="dialog" aria-controls="specs-dialog" hidden>
                     <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path d="M14 3v4h4" /><path d="M9 12h6M9 16h4" /></svg>

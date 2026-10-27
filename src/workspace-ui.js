@@ -1290,7 +1290,8 @@ function bindSplitters() {
   panelSplitter?.setAttribute('aria-valuemin', String(PANEL_MIN));
   if (Number.isFinite(layout.explorer)) root.style.setProperty('--ws-explorer-width', `${Math.round(clamp(layout.explorer, EXPLORER_MIN, EXPLORER_MAX))}px`);
   if (Number.isFinite(layout.panel)) root.style.setProperty('--ws-panel-height', `${Math.round(Math.max(PANEL_MIN, layout.panel))}px`);
-  explorerSplitter?.setAttribute('aria-valuenow', String(parseInt(getComputedStyle(root).getPropertyValue('--ws-explorer-width'), 10) || 260));
+  explorerSplitter?.setAttribute('aria-valuenow', String(Math.round(explorer()?.getBoundingClientRect().width || 0)
+    || parseInt(getComputedStyle(root).getPropertyValue('--ws-explorer-width'), 10) || 260));
   panelSplitter?.setAttribute('aria-valuenow', String(parseInt(getComputedStyle(root).getPropertyValue('--ws-panel-height'), 10) || 220));
 
   const drag = (splitter, onMove, onDone) => {
