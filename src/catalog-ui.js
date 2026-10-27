@@ -298,7 +298,7 @@ function bindDetails(app) {
 }
 
 // ---- Connectors ----------------------------------------------------------
-// Credentials live in the main process (encrypted with safeStorage); the
+// Credentials live in the main process (encrypted at rest); the
 // renderer only ever sees sanitized metadata, never a token or client secret.
 // OAuth provider URLs and rules are owned by main (lib/oauth-catalog.cjs); the
 // renderer passes a connector id and reads display details via getOAuthConfig.

@@ -9,8 +9,8 @@
 // is an APFS clone, so it costs no extra disk space. Only Info.plist and the
 // bundle icon change. The Electron executable is not touched or re-signed: its
 // ad-hoc signature is linker-made and binds neither Info.plist nor resources,
-// so the copy keeps the same code identity (cdhash) and the macOS keychain
-// keeps trusting it for the "scalemax-ide Safe Storage" item (no new prompt).
+// so the copy keeps the same code identity (cdhash) and the macOS privacy
+// permissions granted to it (folders, automation) carry over between rebuilds.
 //
 //   node build/dev-app.cjs --run [args]  start the app (npm start)
 //   node build/dev-app.cjs --path        print the executable to launch
@@ -102,7 +102,7 @@ function ensureDevApp({ root = ROOT, log = console.log } = {}) {
   const actual = cdhash(partial);
   if (!expected || expected !== actual) {
     removeInside(partial, root);
-    throw new Error(`The branded copy changed the Electron code identity (${expected} -> ${actual}); the keychain would ask again. Using the plain runtime.`);
+    throw new Error(`The branded copy changed the Electron code identity (${expected} -> ${actual}); macOS would ask for its permissions again. Using the plain runtime.`);
   }
   removeInside(paths.app, root);
   for (const name of OLD_NAMES) removeInside(path.join(paths.dir, `${name}.app`), root);

@@ -2,7 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createProvider } = require('../lib/provider.cjs');
+const { createLocalSecrets } = require('../lib/local-secrets.cjs');
 
 function assertNoSharedObjects(root) {
   const seen = new Set();
@@ -108,6 +112,28 @@ test('encrypts the key when safeStorage is available', async () => {
   assert.equal(meta.keyStorage, 'encrypted');
   assert.equal(store.snapshot().provider.keyStorage, 'encrypted');
   assert.match(store.snapshot().provider.encryptedKey, /^[A-Za-z0-9+/]+={0,2}$/);
+});
+
+test('a key beta 4 kept with the keychain keeps the settings and is entered again', async () => {
+  const keyFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'scalemax-provider-')), 'secrets.key');
+  const keychainValue = Buffer.concat([Buffer.from('v10'), Buffer.alloc(32, 7)]).toString('base64');
+  const store = memoryStore({ provider: {
+    kind: 'custom', baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini', keyStorage: 'encrypted', encryptedKey: keychainValue,
+  } });
+  const { provider } = makeProvider({ store, safeStorage: createLocalSecrets({ keyFile }) });
+  const before = provider.get();
+  assert.equal(before.baseUrl, 'https://api.example.com/v1');
+  assert.equal(before.model, 'gpt-4o-mini');
+  assert.equal(before.hasKey, false);
+  assert.equal(before.keyStorage, 'keychain');
+  assert.equal(before.configured, false);
+  // No Clear provider first: saving the key again replaces the keychain value.
+  const meta = await provider.save({ baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini', apiKey: 'sk-test-local-123456' });
+  assert.equal(meta.keyStorage, 'encrypted');
+  assert.equal(Buffer.from(store.snapshot().provider.encryptedKey, 'base64').subarray(0, 4).toString(), 'SMK1');
+  const restarted = makeProvider({ store, safeStorage: createLocalSecrets({ keyFile }) }).provider;
+  assert.equal(restarted.get().hasKey, true);
+  fs.rmSync(path.dirname(keyFile), { recursive: true, force: true });
 });
 
 test('send posts the conversation and returns assistant text', async () => {
