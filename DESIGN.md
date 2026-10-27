@@ -184,7 +184,7 @@ The world refuses both the category's grey chat app with a single indigo accent 
 A two-ink riso palette on paper: one structural ink, one fluorescent activity ink, a highlighter, and a failure red, all printed over ink-black text.
 
 ### Primary
-- **Riso Blue** (riso-blue; dark: riso-blue-dark): the structural ink. Active navigation, selection, primary buttons, focus rings (2px outline, 2px offset), links (as blue-text with a 1px underline at 55% strength), the context meter fill, the DONE tag outline, keywords in the editor. In dark mode the primary fill carries dark ink (on-blue-dark) because white on the lighter blue fails contrast.
+- **Riso Blue** (riso-blue; dark: riso-blue-dark): the structural ink. Active navigation, selection, primary buttons, focus rings (2px; 2px out on controls, printed over the border on text fields), links (as blue-text with a 1px underline at 55% strength), the context meter fill, the DONE tag outline, keywords in the editor. In dark mode the primary fill carries dark ink (on-blue-dark) because white on the lighter blue fails contrast.
 - **Deep Blue Text** (blue-text, rail-active-text): blue at text weight, for links, done tags and the selected rail item's words.
 
 ### Secondary
@@ -218,7 +218,7 @@ A two-ink riso palette on paper: one structural ink, one fluorescent activity in
 **Body Font:** the system UI face (-apple-system, BlinkMacSystemFont, SF Pro Text)
 **Label/Mono Font:** Bricolage Grotesque for printed labels and tags; ui-monospace / SF Mono / Menlo for code, paths and measurement
 
-**Character:** A printed grotesk with optical sizing sets the headings and the state tags, so 28px titles take the inky large-size drawing and 11px tags the open small-size cut. The system face carries everything you read and type, so the app stays a Mac app.
+**Character:** A printed grotesk with optical sizing sets the headings and the state tags, so 28px titles take the inky large-size drawing and 11px tags the open small-size cut. The system face carries everything you read and type, so the app stays a Mac app. Text renders with macOS's own smoothing (`-webkit-font-smoothing: auto`), never `antialiased`, which thins the 11 to 15px sizes the shell lives at.
 
 ### Hierarchy
 - **Display** (700, 28px / 36px, -0.01em): page titles and the home header. Drops to the headline size below 760px.
@@ -227,7 +227,7 @@ A two-ink riso palette on paper: one structural ink, one fluorescent activity in
 - **Body** (400, 13px / 1.5): the UI default: nav, buttons, inputs, list rows.
 - **Small** (400 to 500, 12px / 16px): field notes, dialog context lines, status text, paths.
 - **Label** (600, 11px / 12px, 0.04em, uppercase): printed state tags and change kinds (EDITED, NEW) only.
-- **Mono** (400, 11 to 13px, tabular figures): code, file paths, token counts, cost, timings, the status bar model.
+- **Mono** (400, 11 to 13px, tabular figures): code, file paths, token counts, cost, timings, the status bar model. Under a reply, usage, duration and time print as one mono line with dots between them ("33k in · 995 out · $0.113 · took 5.3s · 15:46"), Copy set apart.
 
 ### Named Rules
 **The Six Sizes Rule.** Type comes in 11, 12, 13, 15, 20 and 28px. Hierarchy is made from these steps and weight, never from a seventh size or a box.
@@ -238,7 +238,13 @@ A two-ink riso palette on paper: one structural ink, one fluorescent activity in
 
 ## Layout
 
-A fixed 240px sidebar rail (208px below 760px wide) beside a single working column; the chat column and the Workspace's tree / editor / terminal split fill the rest. Every gap and padding sits on one 4px module, mostly 4, 8, 12, 16 and 24px; page gutters are 24px, view toolbars are at least 48px tall with 8px / 24px padding. Controls are 32px tall. Dense where developers expect density (file tree, diffs, task rows), roomy where they read (replies at 15px). The shell tightens at 1080px (page gutters to 24px), 900px (the titlebar title hides) and 760px (narrower rail, smaller home title, stacked catalog filters); short windows (720px tall) pull the home header up. The minimum window is 900 x 700.
+A fixed 240px sidebar rail beside a single working column; the chat column and the Workspace's tree / editor / terminal split fill the rest. Every gap and padding sits on one 4px module, mostly 4, 8, 12, 16 and 24px; page gutters are 24px, view toolbars are at least 48px tall with 8px / 24px padding. Controls are 32px tall. Dense where developers expect density (file tree, diffs, task rows), roomy where they read (replies at 15px).
+
+- **Scrolling:** every view scrolls across its full width, so the wheel works over the margins and the scrollbar sits at the window's edge. Columns are centred inside it by inline padding, never by a narrower scroll box: the chat at 800px (transcript, message box, heading and starting points share its edges), settings pages at 680px, the catalog at up to 1240px (four columns from about 1400px wide; its search row and note keep to 640px).
+- **The composer's toolbar** is one line while the model's name shows at least eight letters; past that, the context meter, the model and Send move together to a line of their own, right-aligned. Compact is an icon button (its name stays for screen readers and the tooltip).
+- **An empty task** centres its heading, message box and starting points as one group in a tall window, and scrolls from the top in a short one (auto margins, so nothing is pushed out of reach).
+- **The Workspace file tree** takes 22% of the window between 200px and 260px until its splitter sets a width.
+- **Breakpoints:** the shell tightens at 1080px (page gutters to 24px) and 900px (the titlebar title hides); below 760px, which only the browser preview reaches, the rail narrows to 208px, the home title drops a size and the catalog filters stack. Short windows (720px tall) pull the home header up. The minimum window is 900 x 700.
 
 ### Named Rules
 **The 4px Module Rule.** Spacing, control heights and pane sizes are multiples of 4px.
@@ -281,11 +287,11 @@ The printed marks that make task state legible at a glance; used on task rows, s
 
 ### Inputs / Fields
 - **Style:** raised stock, 1px rule border, 6px corners, 32px minimum height, 4px / 12px padding, 13px text.
-- **Focus:** 2px riso blue outline at 2px offset; hover strengthens the border to 26% ink.
+- **Focus:** a 2px riso blue ring printed over the field's 1px border (outline-offset -1px), so a focused field shows one crisp line, not a second ring floating outside it; hover strengthens the border to 26% ink.
 - **Composer:** the exception: borderless 15px text on 24px lines, at least 72px tall, inside a sheet with its controls along the bottom.
 
 ### Navigation (the printed rail)
-- **Style:** the sidebar is a blue tint printed with a fine halftone screen (two offset dot layers on a 4px cell, a 45 degree lattice) and a blue 1px rule at its edge.
+- **Style:** the sidebar is a blue tint printed with a fine halftone screen (two offset dot layers on a 4px cell, a 45 degree lattice, dots at 10% blue so the screen reads as stock rather than noise behind the labels) and a blue 1px rule at its edge.
 - **Items:** 13px ink-2 words with 16px line icons; hover lays a 5% ink tint.
 - **Active:** an opaque solid blue patch that stops the screen at its edge, deep blue words at weight 500. Active task rows use the same patch with ink words.
 

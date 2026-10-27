@@ -1,6 +1,6 @@
 {
   "name": "scalemax-ide",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.4",
   "description": "ScaleMax IDE — your AI-powered development workspace",
   "main": "main.js",
   "author": "ScaleMax",
@@ -12,8 +12,8 @@
     "start": "node build/dev-app.cjs --run",
     "icons": "electron build/render-icons.cjs",
     "test": "node --test test/*.test.cjs test/*.test.mjs",
-    "build": "electron-builder --mac",
-    "build:dir": "electron-builder --mac --dir"
+    "build": "electron-builder --mac -c.buildVersion=$(git rev-list --count HEAD 2>/dev/null || echo 0)",
+    "build:dir": "electron-builder --mac --dir -c.buildVersion=$(git rev-list --count HEAD 2>/dev/null || echo 0)"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -21,7 +21,8 @@
   },
   "build": {
     "appId": "com.scalemax.ide",
-    "productName": "ScaleMax",
+    "productName": "ScaleMax IDE",
+    "afterPack": "build/after-pack.cjs",
     "mac": {
       "target": [
         "dmg",
@@ -29,11 +30,16 @@
       ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icons/icon.icns",
+      "identity": null,
+      "artifactName": "ScaleMax-IDE-${version}-${arch}-mac.${ext}",
       "extendInfo": {
-        "NSDesktopFolderUsageDescription": "ScaleMax opens the project folders you choose on your Desktop.",
-        "NSDocumentsFolderUsageDescription": "ScaleMax opens the project folders you choose in Documents.",
-        "NSDownloadsFolderUsageDescription": "ScaleMax opens the project folders you choose in Downloads."
+        "NSDesktopFolderUsageDescription": "ScaleMax IDE opens the project folders you choose on your Desktop.",
+        "NSDocumentsFolderUsageDescription": "ScaleMax IDE opens the project folders you choose in Documents.",
+        "NSDownloadsFolderUsageDescription": "ScaleMax IDE opens the project folders you choose in Downloads."
       }
+    },
+    "dmg": {
+      "artifactName": "ScaleMax-IDE-${version}-${arch}.${ext}"
     },
     "files": [
       "main.js",

@@ -29,13 +29,13 @@ ScaleMax IDE is a macOS desktop workspace where a developer hands work to an AI 
 - Electron 33, vanilla ES modules, no build step, no runtime npm dependencies; CodeMirror 6 is vendored as one bundle.
 - Strict CSP: `script-src 'self'; style-src 'self'`, no inline styles in HTML, no innerHTML; styling through CSS files and CSSOM. Fonts must be bundled locally (assets/fonts); no web font CDNs.
 - Design tokens live in `src/sm-tokens.css` (light and dark); component styles in `src/*.css`.
-- macOS-only build (dmg/zip, arm64), unsigned for now; current release v1.0.0-beta.1.
+- macOS-only build (dmg/zip, arm64), signed ad hoc but not notarized; the version in package.json is per release (1.0.0-beta.4 next).
 - Existing animated expert avatars are inline SVG built with createElementNS (`src/avatars.js`), CSS-only motion (`src/experts.css`).
 - Must keep every existing element id the app and `build/smoke-check.cjs` rely on (103 smoke checks, 677 unit tests).
 - Respect `prefers-reduced-motion` everywhere.
 
 ## Brand Commitments
-- Name: **ScaleMax** (product name in the Dock and menu bar), the robot-head mark in `assets/icons/scalemax-icon.svg` / `scalemax-mark.svg`.
+- Name: **ScaleMax IDE** in the Dock, the menu bar and Finder (so it never reads as ScaleMax Studio); **ScaleMax** is the company and the in-window wordmark. The robot-head mark in `assets/icons/scalemax-icon.svg` / `scalemax-mark.svg`.
 - Voice: plain, concrete, second person, no hype; UI copy explains what will happen and what changed.
 - Animated agents are part of the identity: one small companion character that reflects what the assistant is doing (idle, thinking, working, waiting for the user, done, error), subagents shown as small teammates, quiet when idle, can be turned off, respects Reduce Motion. The existing expert avatars (friendly 2D character busts) are a confirmed asset family.
 

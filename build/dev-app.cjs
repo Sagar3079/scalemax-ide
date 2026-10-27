@@ -2,10 +2,10 @@
 'use strict';
 
 // Development runs on macOS start a branded copy of the Electron runtime so the
-// Dock, the menu bar and Cmd-Tab say "ScaleMax" and show the ScaleMax icon
+// Dock, the menu bar and Cmd-Tab say "ScaleMax IDE" and show the ScaleMax icon
 // instead of "Electron" and its atom icon.
 //
-// The copy lives in node_modules/.scalemax-dev/ScaleMax.app (git-ignored) and
+// The copy lives in node_modules/.scalemax-dev/ScaleMax IDE.app (git-ignored) and
 // is an APFS clone, so it costs no extra disk space. Only Info.plist and the
 // bundle icon change. The Electron executable is not touched or re-signed: its
 // ad-hoc signature is linker-made and binds neither Info.plist nor resources,
@@ -21,16 +21,18 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const { inspectRuntime, requireComplete } = require('./electron-runtime.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const NAME = 'ScaleMax';
+const NAME = 'ScaleMax IDE';
 const BUNDLE_ID = 'com.scalemax.ide.dev';
 // Bump when the branding steps below change, so existing copies are rebuilt.
-const RECIPE = 2;
+const RECIPE = 3;
+// The copy's name before the rename to ScaleMax IDE; removed when the copy is rebuilt.
+const OLD_NAMES = ['ScaleMax'];
 // Shown by macOS when a folder on the Desktop, in Documents or in Downloads is opened (the same
 // text as build.mac.extendInfo in package.json).
 const FOLDER_USAGE = [
-  ['NSDesktopFolderUsageDescription', 'ScaleMax opens the project folders you choose on your Desktop.'],
-  ['NSDocumentsFolderUsageDescription', 'ScaleMax opens the project folders you choose in Documents.'],
-  ['NSDownloadsFolderUsageDescription', 'ScaleMax opens the project folders you choose in Downloads.'],
+  ['NSDesktopFolderUsageDescription', 'ScaleMax IDE opens the project folders you choose on your Desktop.'],
+  ['NSDocumentsFolderUsageDescription', 'ScaleMax IDE opens the project folders you choose in Documents.'],
+  ['NSDownloadsFolderUsageDescription', 'ScaleMax IDE opens the project folders you choose in Downloads.'],
 ];
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 
@@ -103,6 +105,7 @@ function ensureDevApp({ root = ROOT, log = console.log } = {}) {
     throw new Error(`The branded copy changed the Electron code identity (${expected} -> ${actual}); the keychain would ask again. Using the plain runtime.`);
   }
   removeInside(paths.app, root);
+  for (const name of OLD_NAMES) removeInside(path.join(paths.dir, `${name}.app`), root);
   fs.renameSync(partial, paths.app);
   // Let Finder and the Dock pick up the new name and icon right away.
   try { execFileSync(LSREGISTER, ['-f', paths.app], { stdio: 'ignore' }); } catch { /* best effort */ }
