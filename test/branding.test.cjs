@@ -10,14 +10,14 @@ const { devAppPaths } = require('../build/dev-app.cjs');
 const ROOT = path.join(__dirname, '..');
 const labels = (template) => JSON.stringify(template, (key, value) => (typeof value === 'function' ? undefined : value));
 
-test('macOS menu names ScaleMax and keeps the standard edit roles', () => {
+test('macOS menu names ScaleMax IDE and keeps the standard edit roles', () => {
   const template = buildMenuTemplate({ platform: 'darwin' });
   const [appMenu, ...rest] = template;
-  assert.equal(appMenu.label, 'ScaleMax');
+  assert.equal(appMenu.label, 'ScaleMax IDE');
   const byRole = Object.fromEntries(appMenu.submenu.filter((item) => item.role).map((item) => [item.role, item.label]));
-  assert.equal(byRole.about, 'About ScaleMax');
-  assert.equal(byRole.hide, 'Hide ScaleMax');
-  assert.equal(byRole.quit, 'Quit ScaleMax');
+  assert.equal(byRole.about, 'About ScaleMax IDE');
+  assert.equal(byRole.hide, 'Hide ScaleMax IDE');
+  assert.equal(byRole.quit, 'Quit ScaleMax IDE');
   assert.deepEqual(rest.map((menu) => menu.role), ['fileMenu', 'editMenu', 'viewMenu', 'windowMenu', 'help']);
   assert.doesNotMatch(labels(template), /Electron|scalemax-ide/);
 });
@@ -38,7 +38,7 @@ test('the menus list the window\'s commands with their shortcuts, and a click se
     return null;
   };
   const preferences = find('command:preferences');
-  assert.equal(preferences.menu, 'ScaleMax', 'Preferences sit in the app menu on a Mac');
+  assert.equal(preferences.menu, 'ScaleMax IDE', 'Preferences sit in the app menu on a Mac');
   assert.equal(preferences.item.accelerator, 'CmdOrCtrl+,');
   assert.equal(find('command:new-task').menu, 'File');
   assert.equal(find('command:new-task').item.accelerator, 'CmdOrCtrl+N');
@@ -82,15 +82,19 @@ test('help opens the ScaleMax website', () => {
   assert.deepEqual(opened, ['https://scalemax.pro']);
 });
 
-test('About panel shows ScaleMax and the app version', () => {
+test('About panel shows ScaleMax IDE and the app version', () => {
   assert.deepEqual(aboutPanelOptions({ version: '1.2.3', year: 2026 }), {
-    applicationName: 'ScaleMax',
+    applicationName: 'ScaleMax IDE',
     applicationVersion: '1.2.3',
     version: '1.2.3',
     copyright: 'Copyright © 2026 ScaleMax',
     website: 'https://scalemax.pro',
     iconPath: ICON_PATH,
   });
+  // The packaged app leaves the build number to macOS (CFBundleVersion, set per build).
+  const packaged = aboutPanelOptions({ version: '1.0.0-beta.4', packaged: true, year: 2026 });
+  assert.equal(packaged.applicationVersion, '1.0.0-beta.4');
+  assert.equal('version' in packaged, false);
 });
 
 function fakeElectron({ isPackaged }) {
@@ -115,6 +119,8 @@ test('applyBranding sets the menu, About panel and (unpackaged macOS only) the D
   const packaged = fakeElectron({ isPackaged: true });
   applyBranding({ ...packaged, platform: 'darwin' });
   assert.equal(packaged.calls.dockIcon, null);
+  assert.equal(dev.calls.about.version, '1.0.0');
+  assert.equal('version' in packaged.calls.about, false);
 
   const linux = fakeElectron({ isPackaged: false });
   applyBranding({ ...linux, platform: 'linux' });
@@ -150,6 +156,6 @@ test('the sidebar and About marks are the agent mark from scalemax-mark.svg', ()
 
 test('the branded development runtime stays inside node_modules', () => {
   const paths = devAppPaths(ROOT);
-  assert.equal(path.relative(ROOT, paths.app), path.join('node_modules', '.scalemax-dev', 'ScaleMax.app'));
+  assert.equal(path.relative(ROOT, paths.app), path.join('node_modules', '.scalemax-dev', 'ScaleMax IDE.app'));
   assert.equal(path.relative(paths.app, paths.executable), path.join('Contents', 'MacOS', 'Electron'));
 });

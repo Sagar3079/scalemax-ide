@@ -20,10 +20,10 @@ Complete context for an AI or engineer taking over this project. Everything belo
 git clone https://github.com/Sagar3079/scalemax-ide.git && cd scalemax-ide
 npm install                # devDeps only (electron, electron-builder)
 
-npm start                  # runtime check, then the branded dev runtime (build/dev-app.cjs; Dock/menu bar say ScaleMax)
+npm start                  # runtime check, then the branded dev runtime (build/dev-app.cjs; Dock/menu bar say ScaleMax IDE)
 npm test                   # node --test test/*.test.cjs test/*.test.mjs → 677 unit tests (~25 s)
 npm run icons              # re-render icon.png + icon.icns from assets/icons/*.svg
-npm run build              # electron-builder --mac → dist/ScaleMax-1.0.0-arm64.dmg + .zip
+npm run build              # electron-builder --mac → dist/ScaleMax-IDE-<version>-arm64.dmg + -mac.zip (ad-hoc signed, build number = commit count)
 node build/vendor-codemirror.cjs   # regenerate src/vendor/codemirror.js (only after changing a pinned version)
 
 # Hermetic end-to-end smoke check (boots the real app, isolated userData):
@@ -265,7 +265,7 @@ The sections below landed on `upgrade/codex-claude` (2026-10-16). Their unit tes
 
 The palette, tokens and shell metrics come from a shipped production renderer bundle: 38px titlebar, 220px sidebar, 22px statusbar, 8px control radius; brand `--sm-palette-brand-8: #00C29A` (light) / `#4cf0ce` (dark); Assistant typeface; near-black primary buttons. **Logo** = the ScaleMax agent, drawn for this app (2026-09-27): a friendly robot head with a dark display visor (mint eyes, smile, cheeks), a headset with microphone and an antenna tipped with the brand hexagon, on a brand-green macOS tile. Sources in `assets/icons/`: `scalemax-icon.svg` (1024 px app icon), `scalemax-icon-small.svg` (simplified drawing used for the 16 and 32 px icon sizes), `scalemax-mark.svg` (single-colour `currentColor` mark, inlined twice in `src/index.html`: sidebar brand tile and the About card; `test/branding.test.cjs` checks they match). `npm run icons` (`build/render-icons.cjs`, Electron's own Chromium + `iconutil`) renders `icon.png` (1024, Dock/window icon) and `icon.icns` (16–1024).
 
-**App name.** Everything the OS shows says ScaleMax: packaged bundle `CFBundleName`/`CFBundleDisplayName` (electron-builder `productName`), and `lib/app-branding.cjs` sets the app menu (About / Hide / Quit ScaleMax, Help → ScaleMax Website), the About panel and, for unpackaged runs, the Dock icon. `app.name` deliberately stays the package name `scalemax-ide`: Electron derives the userData folder and the keychain item protecting saved keys (`scalemax-ide Safe Storage`) from it, so renaming it would orphan existing keys and settings. In development `npm start` launches `node_modules/.scalemax-dev/ScaleMax.app` (`build/dev-app.cjs`), an APFS clone of Electron.app with only Info.plist (name ScaleMax, id `com.scalemax.ide.dev`) and the bundle icon changed. The Electron executable is not re-signed, so the copy keeps Electron's code identity (cdhash) and the keychain trusts it without a new prompt (verified: save + decrypt across two launches). The copy is rebuilt automatically when Electron or `icon.icns` changes; if the code identity ever differed it falls back to plain Electron.
+**App name.** Everything the OS shows says ScaleMax IDE (since 1.0.0-beta.4; before that "ScaleMax", which installed as `ScaleMax.app` over ScaleMax Studio's bundle of the same name): packaged bundle `ScaleMax IDE.app` with `CFBundleName`/`CFBundleDisplayName` from electron-builder `productName`, and `lib/app-branding.cjs` sets the app menu (About / Hide / Quit ScaleMax IDE, Help → ScaleMax Website), the About panel (copyright: ScaleMax, the company) and, for unpackaged runs, the Dock icon. The in-window wordmark stays ScaleMax. `app.name` deliberately stays the package name `scalemax-ide`: Electron derives the userData folder and the keychain item protecting saved keys (`scalemax-ide Safe Storage`) from it, so renaming it would orphan existing keys and settings. In development `npm start` launches `node_modules/.scalemax-dev/ScaleMax IDE.app` (`build/dev-app.cjs`; recipe 3 removes the old `ScaleMax.app` copy), an APFS clone of Electron.app with only Info.plist (name ScaleMax IDE, id `com.scalemax.ide.dev`) and the bundle icon changed. The Electron executable is not re-signed, so the copy keeps Electron's code identity (cdhash) and the keychain trusts it without a new prompt (verified: save + decrypt across two launches). The copy is rebuilt automatically when Electron or `icon.icns` changes; if the code identity ever differed it falls back to plain Electron.
 
 **Gotcha:** `--sm-bg-*` tokens are component-scoped. Use the shell aliases `--sm-app-page/surface/surface-hover/chrome/sidebar/border/muted` for shell surfaces.
 
@@ -390,7 +390,8 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 - **Worktrees**: a sandboxed command in a task worktree cannot commit (the main checkout's Git folder is write-denied); commits go through the Commit button or a `sandbox: false` command. Merge needs the main checkout clean and on the base branch.
 - **Editor**: no minimap, no language server (no go-to-definition or diagnostics), no split view; files over the workspace's 1 MiB read limit still don't open.
 - **Pictures are verified against the stub only.** Every ScaleMax chat model this key can use refuses pictures (HTTP 400 `image_input_unsupported`, checked 2026-10-01), so a real model reading a picture has not been observed; the refusal path is verified live.
-- **No code signing / notarization; no CI.**
+- **Ad-hoc signing only: no Developer ID, no notarization, no CI, no auto-update.** Since 1.0.0-beta.4, `build/after-pack.cjs` signs the packaged app ad hoc (`codesign --force --deep --sign -`; `build.mac.identity` is `null`, so electron-builder's own signing is skipped). Before, the bundle carried only Electron's linker signature, which `syspolicy_check distribution` rejects as "Code has no resources but signature indicates they must be present", so downloaded copies could be reported as damaged. Trade-off: each build now has its own code identity, so the first launch of a new build asks once for the `scalemax-ide Safe Storage` keychain item (Always Allow). A Developer ID would keep one identity across builds.
+- **Versions:** `package.json` `version` is per release (`1.0.0-beta.4` …), and `npm run build` sets `CFBundleVersion` to the commit count, which the packaged About panel shows. Betas 1–3 all reported 1.0.0.
 - The README screenshots in `assets/` predate sessions 2–3 (and the CodeMirror editor, Git flow and slash menu).
 
 ---
@@ -552,6 +553,41 @@ Installed the dev dependencies on the Mac (Electron 33.4.11 needed the repair un
 5. **A UI sweep** of every view and dialog at 900/1200/1440 px in both themes (an in-page audit for overflow, clipped or wrapping text and WCAG contrast, then screenshots): `cfcd0a8` (Switch branch marks branches checked out in another worktree; `switchBranch` refuses them with `BRANCH_IN_USE`), `cdec895` (step labels count what worked: "Edited a file · 1 failed", "Tried 2 edits · failed"), `b027755` (contrast tokens in 32 rules; a three-control chat toolbar with an Export menu; the transcript keeps its end when its box shrinks; worktree tasks named "repo (slug)" in the Workspace header and the Commit/Specs dialogs; a removed worktree's task opens quietly with a clear notice and its project's hooks; the Specs empty state; automation rows styled in CSS with line icons; small wraps). 677 unit tests, smoke 103/103, 0 console errors.
 
 Seen but left alone: the first Escape in Recent sessions clears the search field (standard for `type=search`) and the second closes it; after Remove worktree, Preferences → Hooks for that task names the removed folder as "not opened"; a reply whose hook blocked every edit still summarises its steps as "Made 2 edits · failed"; `npm install` (npm 11) drops two version-less `@types/*` stub entries from `package-lock.json` ("invalid or damaged lockfile"); not committed.
+
+### 2026-10-27 — release fixes and a sharper, responsive shell (`release/quick-fixes`)
+
+Merged into main before this: PR #3 (the critical and 12 major findings of five persona testers) and PR #4 (~30 minor ones); v1.0.0-beta.3 published from it.
+
+1. **Release fixes:**
+   - an MIT `LICENSE` file;
+   - the app is now **ScaleMax IDE** (`ScaleMax IDE.app`, menus and About; it no longer installs over ScaleMax Studio's `ScaleMax.app`);
+   - the version is per build (`1.0.0-beta.4`, plus `CFBundleVersion` = commit count, shown in About);
+   - the bundle is signed ad hoc (`build/after-pack.cjs`; `syspolicy_check` now reports only the missing notarization, where it rejected the old linker signature as broken);
+   - macOS 15 install steps in the README;
+   - the README screenshots retaken and moved to `docs/screenshots/` (out of the app bundle).
+2. **The UI pass** (impeccable polish / layout / adapt, before and after sweeps at 900×700, 1280×800, 1440×900 and 1920×1080 in both themes):
+   - text renders with macOS's own smoothing instead of `antialiased` (darker, crisper stems in both themes), and the rail's halftone prints at 10%;
+   - every view scrolls across its full width (the chat transcript and the pages used to scroll inside an 800/760px box, so the wheel did nothing over the margins and the scrollbar floated mid-window);
+   - the composer's model name never squeezes below eight letters (it went to "demo…", and with an image model to nothing, running into "Generate image"): the meter, model and Send move to a line of their own instead, and Compact became an icon button;
+   - the transcript and the message box share edges;
+   - an empty task centres as one group in a tall window;
+   - the catalog grows to 1240px (four columns);
+   - text fields' focus ring hugs the field;
+   - Recent sessions rows line up with its search field;
+   - schedule prompts show two lines;
+   - the reply's footer is one mono line with dots;
+   - the Workspace tree takes 22% of the window (200–260px).
+   - Tried and reverted: a 208px rail from 1080px down (it cut the tagline and task titles).
+3. **Checks:** 864 unit tests, smoke 103/103 (also right after the dev copy is rebuilt under its new name), the packaged signed app launched with `--use-mock-keychain` (version 1.0.0-beta.4, `app.name` still `scalemax-ide`).
+
+**Found by the screenshot run, not fixed here:**
+- the editor's inline review is not restored after a restart, while the chat's changes card still lists the edits as undecided;
+- Commit… stays on a changes card after Undo all;
+- a paused schedule reads "idle · Next: paused"; schedule times mix 12-hour and 24-hour formats and show seconds;
+- "Model for chat" looks like a text field once saved;
+- a finished reply shows its duration twice ("done · 5.3s" and "took 5.3s");
+- "main not pushed" on a repository without a remote;
+- the Workspace header prints the folder's full parent path.
 
 ### Suggested next session
 

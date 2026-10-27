@@ -1502,7 +1502,7 @@ async function run(win) {
     cancelOk: probe.cancelOk,
     // The seeded task is empty and has no folder yet, so the task list starts empty.
     taskListStartsEmpty: probe.taskCount === '0',
-    versionLoaded: probe.version === '1.0.0',
+    versionLoaded: probe.version === require('../package.json').version,
     chatInputEnabled: probe.chatInputDisabled === false,
     // No chat without a folder: Send stays off and the folder picker is shown.
     sendNeedsFolder: probe.sendDisabledAfterTyping === true && probe.folderPickerShown === true,

@@ -4,13 +4,33 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 
 ## Screenshots
 
-| Login | Dashboard | Chat |
+| Chat | Chat, dark | Workspace |
 | --- | --- | --- |
-| ![Sign-in overlay](assets/screenshot-login.png) | ![Logged-in dashboard](assets/screenshot-dashboard.png) | ![Chat interaction](assets/screenshot-chat.png) |
+| ![A finished reply with its steps, changes card and cost](docs/screenshots/chat-light.png) | ![A second task mid-reply in the dark theme, the companion and the sidebar tag showing it at work](docs/screenshots/chat-dark.png) | ![The editor with the reply's change under inline review](docs/screenshots/workspace.png) |
 
-| Assistant | Experts · Skills · Connectors | Automation |
+| Assistant | Experts & resources | Automation |
 | --- | --- | --- |
-| ![Assistant settings](assets/screenshot-assistant.png) | ![Experts catalog](assets/screenshot-experts.png) | ![Automation manager](assets/screenshot-automation.png) |
+| ![Provider connection and model](docs/screenshots/assistant.png) | ![Experts, skills and connectors](docs/screenshots/experts.png) | ![Scheduled automations](docs/screenshots/automation.png) |
+
+## Install the app
+
+Download the newest `.dmg` from [Releases](https://github.com/Sagar3079/scalemax-ide/releases). ScaleMax IDE runs on Macs with Apple silicon (M1 or later).
+
+1. Open the `.dmg` and drag **ScaleMax IDE** into Applications. It installs as `ScaleMax IDE.app`, so it sits next to ScaleMax Studio if you have that too.
+2. Open ScaleMax IDE. The app is signed ad hoc rather than by a registered Apple developer, so the first time you open a new version macOS stops it:
+   - **macOS 15 (Sequoia) and later:** macOS says it could not verify that ScaleMax IDE is free of malware. Click **Done**, open **System Settings → Privacy & Security**, scroll to the message about ScaleMax IDE and click **Open Anyway**, then confirm with your password or Touch ID. Right-click → Open no longer works on macOS 15.
+   - **macOS 14 and earlier:** in Applications, Control-click ScaleMax IDE, choose **Open**, then **Open** again.
+3. After an update, macOS may ask whether ScaleMax IDE may use **scalemax-ide Safe Storage** in your keychain. Click **Always Allow**: that is where ScaleMax IDE keeps your saved API keys encrypted. If you click Deny, it can't read the keys you saved and you have to enter them again.
+
+If you prefer Terminal, this clears the download flag so the app opens without step 2:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/ScaleMax IDE.app"
+```
+
+Versions up to **1.0.0 beta 3** were not signed, and macOS may call them "damaged". Download a newer version, or run the command above with that version's name, `ScaleMax.app`.
+
+ScaleMax IDE keeps its settings, tasks and encrypted keys in `~/Library/Application Support/scalemax-ide`.
 
 ## Features
 
@@ -56,7 +76,7 @@ ScaleMax IDE is a native macOS desktop IDE for AI-assisted software development.
 - macOS 11 (Big Sur) or later
 - Node.js 18 or later
 
-## Installation
+## Installing from source
 
 ```bash
 cd scalemax-ide
@@ -69,7 +89,7 @@ npm install
 npm start
 ```
 
-On macOS this starts a branded copy of the Electron runtime (`node_modules/.scalemax-dev/ScaleMax.app`, created on first run in about a second), so the Dock and the menu bar show ScaleMax and its icon instead of Electron.
+On macOS this starts a branded copy of the Electron runtime (`node_modules/.scalemax-dev/ScaleMax IDE.app`, created on first run in about a second), so the Dock and the menu bar show ScaleMax IDE and its icon instead of Electron.
 
 ### Electron runtime missing after installation
 
@@ -116,7 +136,11 @@ In browser preview, tasks, settings and automations persist to `localStorage` in
 npm run build
 ```
 
-The packaged application is written to `dist/`.
+The packaged application is written to `dist/`: `ScaleMax IDE.app`, plus `ScaleMax-IDE-<version>-arm64.dmg` and `ScaleMax-IDE-<version>-arm64-mac.zip`.
+
+- **Version:** the `version` in `package.json` (for example `1.0.0-beta.4`) is the version shown in Finder, the About panel and Preferences, and the one in the file names. Raise it for every build you hand out.
+- **Build number:** `npm run build` sets the bundle's build number (`CFBundleVersion`) to the number of commits on the checked-out branch. The About panel shows it after the version, so two builds of one version can still be told apart.
+- **Signing:** `build/after-pack.cjs` signs the app ad hoc, so a downloaded copy can be allowed in Privacy & Security (see [Install the app](#install-the-app)). The app is not notarized. Distributing it without the warning needs an Apple Developer ID certificate and notarization.
 
 ## Authentication
 
@@ -132,10 +156,11 @@ Keys are encrypted at rest with Electron `safeStorage` when the OS keychain is a
 
 ```
 scalemax-ide/
-├── assets/               # screenshots, icons, Assistant font files
-├── build/                # Electron runtime check, smoke test, icon rendering
+├── assets/               # icons and font files (shipped in the app)
+├── build/                # Electron runtime check, smoke test, icon rendering, ad-hoc signing (after-pack.cjs)
 │   └── vendor-codemirror.cjs # regenerates src/vendor/codemirror.js from pinned versions
 ├── dist/                 # build output (generated)
+├── docs/screenshots/     # the screenshots in this README (not shipped in the app)
 ├── lib/
 │   ├── provider.cjs      # OpenAI-compatible provider client (keys, models, chat, tool calls)
 │   ├── subagents.cjs     # agent_task: subagents with their own tool loop inside a reply
@@ -209,7 +234,7 @@ scalemax-ide/
 
 - **Theme** — switch between the light and dark token sets in **Preferences & about**, or edit the custom properties in `src/sm-tokens.css`
 - **Accent color** — edit `--sm-brand-primary` in `src/sm-tokens.css`; primary accents, badges and brand marks derive from it
-- **Brand name** — update the `ScaleMax` strings in `src/index.html` (title bar, sidebar, headings) and the `productName` field in `package.json`
+- **Brand name** — update the `ScaleMax` strings in `src/index.html` (title bar, sidebar, headings), `APP_NAME` in `lib/app-branding.cjs` (menus and About panel), `NAME` in `build/dev-app.cjs` and the `productName` field in `package.json`
 - **App icon** — edit the SVG sources in `assets/icons/` (`scalemax-icon.svg`, `scalemax-icon-small.svg` for 16/32 px, `scalemax-mark.svg` for the sidebar), run `npm run icons` to re-render `icon.png` and `icon.icns`, then `npm run build`
 - **Catalog content** — edit the arrays in `src/data.js` (`skill-catalog.js` and `connector-catalog.js` hold the full libraries)
 - **Your own slash commands** — put a Markdown file in `<project>/.scalemax/commands/` or `~/.scalemax/commands/` (`.claude/commands/` is read too); `review-api.md` becomes `/review-api`, and a subfolder becomes a namespace (`frontend/component.md` → `/frontend:component`). Optional front matter: `description`, `argument-hint`, `model`, `mode`, `allowed-tools` (only narrows the tools offered). `$ARGUMENTS` and `$1`…`$9` are filled in from what you type after the name, and `@path` attaches files. A project's command wins over one of yours with the same name, and the built-in commands win over both
@@ -224,4 +249,4 @@ scalemax-ide/
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
