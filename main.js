@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, safeStorage, dialog, shell, clipboard, protocol, nativeImage, session: electronSession } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, protocol, nativeImage, session: electronSession } = require('electron');
 const { pathToFileURL, fileURLToPath } = require('url');
 const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
@@ -10,6 +10,7 @@ const { createMetrics } = require('./lib/metrics.cjs');
 const { createConnectorStore } = require('./lib/connectors.cjs');
 const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
+const { createLocalSecrets } = require('./lib/local-secrets.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createProgressForwarder } = require('./lib/progress.cjs');
@@ -51,6 +52,12 @@ if (process.env.SCALEMAX_SMOKE === '1') {
   app.setPath('userData', path.resolve(process.env.SCALEMAX_USER_DATA));
 }
 
+// ScaleMax never uses the macOS keychain: an ad-hoc signed app looks new to the keychain after
+// every update, so macOS would ask for access each time. Saved secrets are encrypted with
+// lib/local-secrets.cjs, and Chromium, which encrypts its own cookie store with a keychain item
+// too, gets its mock keychain instead.
+app.commandLine.appendSwitch('use-mock-keychain');
+
 // ---------------------------------------------------------------------------
 // Persistent state (atomic, validated key/value store)
 // ---------------------------------------------------------------------------
@@ -58,6 +65,9 @@ const STATE_FILE = path.join(app.getPath('userData'), 'scalemax-state.json');
 
 // lib/state.cjs expects the state directory to already exist.
 fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+
+// Provider keys, connector tokens and MCP secrets in the state file are encrypted with this.
+const secrets = createLocalSecrets({ keyFile: path.join(app.getPath('userData'), 'secrets.key') });
 
 /**
  * Builds the atomic state store. An unreadable existing file is backed up
@@ -202,7 +212,7 @@ const stateAdapter = {
 
 const provider = createProvider({
   store: stateAdapter,
-  safeStorage,
+  safeStorage: secrets,
   // Approval is always granted: endpoint and key changes never prompt a native
   // dialog. The SCALEMAX_SMOKE run uses this same path.
   approve: async () => true
@@ -212,7 +222,7 @@ const provider = createProvider({
 // renderer only ever passes a connector id.
 const connectors = createConnectorStore({
   store: stateAdapter,
-  safeStorage,
+  safeStorage: secrets,
   oauth: require('./lib/oauth.cjs'),
   oauthConfigs: require('./lib/oauth-catalog.cjs').OAUTH_PROVIDERS
 });
@@ -221,10 +231,10 @@ const connectors = createConnectorStore({
 // MCP servers and the chat tool loop
 // ---------------------------------------------------------------------------
 // Server configs live under the reserved `mcpServers` state key; env and header
-// values are encrypted with safeStorage and never cross the bridge.
+// values are encrypted (lib/local-secrets.cjs) and never cross the bridge.
 const mcp = createMcpManager({
   store: stateAdapter,
-  safeStorage,
+  safeStorage: secrets,
   clientInfo: { name: 'ScaleMax', version: app.getVersion() }
 });
 
@@ -2036,13 +2046,6 @@ app.whenReady().then(() => {
   }, 5000).unref?.();
   protocol.handle('scalemax-media', serveMedia);
   guardPermissions();
-  // safeStorage is available for encrypting secrets at rest in future revisions.
-  if (typeof safeStorage?.isEncryptionAvailable === 'function') {
-    console.log(
-      '[ScaleMax] safeStorage encryption available:',
-      safeStorage.isEncryptionAvailable()
-    );
-  }
 
   createWindow();
 

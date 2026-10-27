@@ -143,7 +143,7 @@
       }
     },
 
-    // Provider calls need the desktop process for fetch + safeStorage, so the
+    // Provider calls need the desktop process for fetch + the saved key, so the
     // preview reports an unconfigured provider and declines to act.
     provider: (function () {
       var UNAVAILABLE = {

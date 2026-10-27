@@ -20,7 +20,7 @@ Download the newest `.dmg` from [Releases](https://github.com/Sagar3079/scalemax
 2. Open ScaleMax IDE. The app is signed ad hoc rather than by a registered Apple developer, so the first time you open a new version macOS stops it:
    - **macOS 15 (Sequoia) and later:** macOS says it could not verify that ScaleMax IDE is free of malware. Click **Done**, open **System Settings → Privacy & Security**, scroll to the message about ScaleMax IDE and click **Open Anyway**, then confirm with your password or Touch ID. Right-click → Open no longer works on macOS 15.
    - **macOS 14 and earlier:** in Applications, Control-click ScaleMax IDE, choose **Open**, then **Open** again.
-3. After an update, macOS may ask whether ScaleMax IDE may use **scalemax-ide Safe Storage** in your keychain. Click **Always Allow**: that is where ScaleMax IDE keeps your saved API keys encrypted. If you click Deny, it can't read the keys you saved and you have to enter them again.
+3. Coming from 1.0.0 beta 4 or earlier? Enter your API key again once in **Assistant**, and likewise connector tokens and MCP server secrets. Those versions kept them with the macOS keychain. ScaleMax IDE no longer uses the keychain, so it never asks for keychain access. Your settings and tasks carry over.
 
 If you prefer Terminal, this clears the download flag so the app opens without step 2:
 
@@ -30,11 +30,11 @@ xattr -dr com.apple.quarantine "/Applications/ScaleMax IDE.app"
 
 Versions up to **1.0.0 beta 3** were not signed, and macOS may call them "damaged". Download a newer version, or run the command above with that version's name, `ScaleMax.app`.
 
-ScaleMax IDE keeps its settings, tasks and encrypted keys in `~/Library/Application Support/scalemax-ide`.
+ScaleMax IDE keeps its settings, tasks and encrypted keys in `~/Library/Application Support/scalemax-ide`, together with `secrets.key`, which encrypts them and only your account can read.
 
 ## Features
 
-- **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest with `safeStorage` and never crosses the renderer bridge
+- **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest (without the macOS keychain) and never crosses the renderer bridge
 - **Real chat, streamed** — replies appear as they are written; every file the assistant reads or edits and every command it runs shows as a step (with the command's output while it runs), folded above the answer when it is done. Stop keeps what was written so far. Reloading or closing the window stops the replies it was showing and keeps what they had written, with a note so the assistant knows the window went away (a crashed window stops them too); automations keep running
 - **Review and undo what a reply changed** — under every reply that changed files, a card lists them with their added and removed lines; open one to see the diff, then keep it or undo it (file by file, or all at once). Undo never overwrites work done since, and the assistant is told what you undid. A file the reply changed that is open in the editor shows each change inline with Keep / Undo (see Workspace below)
 - **Commit, push and open a pull request** — **Commit…** on a reply's changes card, in the Git panel or in a worktree's header ticks the reply's files (secret-looking files are never ticked or sent), suggests a one-line conventional commit message from your provider, commits to the current branch or a new `scalemax/<name>` branch, runs your commit hooks unless you tick "Skip hooks", then pushes and opens a pull request through the GitHub CLI with a link to it. Git runs with your own identity, settings and credentials; these are your actions, never tools the assistant can call. The Workspace header shows the branch with commits ahead ↑ and behind ↓; the Git panel adds Pull (fast-forward only) and Switch branch (stashing your changes if you ask)
@@ -150,7 +150,12 @@ ScaleMax is local-first: there is no sign-in screen and no account server. Acces
 2. Press **Test connection** — the app verifies the key, discovers the model catalog and shows every model with an availability badge.
 3. Pick a model for chat (every model the key can use is available), then **Save provider**.
 
-Keys are encrypted at rest with Electron `safeStorage` when the OS keychain is available and kept only for the session otherwise. The renderer never receives the key — only a `hasKey` flag crosses the bridge. **Clear provider** removes the stored credential and settings.
+Keys are encrypted at rest with AES-256-GCM, under a random key in `secrets.key` in the app's data folder that only your macOS account can read (kept only for the session if that file can't be used).
+- **Why not the keychain:** it would ask for access again after every update of an ad-hoc signed app.
+- **What this protects:** keys never sit in the settings file in plain text, and the model's sandboxed commands can't read either file.
+- **What it doesn't:** any program you run yourself can read both files, so this is weaker than the keychain.
+
+The renderer never receives the key — only a `hasKey` flag crosses the bridge. **Clear provider** removes the stored credential and settings.
 
 ## Project structure
 

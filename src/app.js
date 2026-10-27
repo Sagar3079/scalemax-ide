@@ -644,7 +644,9 @@ const app = {
         ? `Connected via ${kindLabel} — ${modelName} at ${baseUrl}${count ? ` · ${count} model${count === 1 ? '' : 's'} available` : ''}.`
         : meta.keyStorage === 'session'
           ? 'The API key was session-only and expired after restart. Enter it again and save.'
-          : 'Provider not configured. Choose a provider, add your API key, and test the connection.';
+          : meta.keyStorage === 'keychain'
+            ? 'An earlier version kept your API key in the macOS keychain, which ScaleMax IDE no longer uses. Enter the key again and save.'
+            : 'Provider not configured. Choose a provider, add your API key, and test the connection.';
     }
     if ($('#provider-detected-base')) {
       $('#provider-detected-base').textContent = this.providerBase || 'Not connected';

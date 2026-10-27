@@ -15,7 +15,7 @@ ScaleMax IDE is a macOS desktop workspace where a developer hands work to an AI 
 ## Positioning
 - **Any model, your key:** it runs on the ScaleMax API or any OpenAI-compatible provider the user brings, several at once, instead of one vendor's subscription and models.
 - **All-in-one workspace:** chat-first tasks, a real code editor with inline review, terminal, git (commit, push, PR, worktrees), automations, experts, connectors and MCP in one app.
-- **Local and private:** no account or cloud sign-in; tasks and settings stay on the Mac, keys are encrypted with the OS keychain, and the agent's commands run in a macOS sandbox.
+- **Local and private:** no account or cloud sign-in; tasks and settings stay on the Mac, keys are encrypted at rest (with a key file only the user's account can read, never the keychain, so updates never ask for keychain access), and the agent's commands run in a macOS sandbox.
 - **Friendly, not intimidating:** a tool that feels warm and calm over a long day; animated agent characters are part of the identity (see Brand Commitments).
 
 ## Operating Context

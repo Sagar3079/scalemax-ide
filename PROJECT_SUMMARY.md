@@ -21,7 +21,7 @@ ScaleMax IDE is an Electron + vanilla-JS desktop prototype (no build step, no ru
 - Wired `lib/provider.cjs` into `main.js` with a native approval dialog, a state adapter, and 6 IPC channels returning `{ ok, data } / { ok, error }`.
 - Exposed `window.scalemaxAPI.provider.*` via `preload.js`; reserved the `provider` key from the generic store bridge so credentials never leak to the renderer.
 - The Assistant provider form is live: **save / test / clear**, real chat replaces the fake replies, plus a "Stop response" cancel and a temperature toggle. Send-enablement no longer depends on a (nonexistent) login.
-- API keys are encrypted on disk via `safeStorage` when available, never persist otherwise, and never cross the bridge (only a `hasKey` flag).
+- API keys are encrypted on disk (AES-256-GCM with `<userData>/secrets.key`, `lib/local-secrets.cjs`; no keychain since 1.0.0-beta.5), never persist when that key file can't be used, and never cross the bridge (only a `hasKey` flag).
 
 ### 2. ScaleMax preconfigured provider + model management
 - Added a **ScaleMax preset** that auto-detects the endpoint: `api.scalemax.pro/v1` is rejected by the key, `api.scalemax.pro/token/v1` authenticates — the code tries both and uses whichever works.
@@ -67,7 +67,7 @@ Updated 2026-10-16 (branch `upgrade/codex-claude`). This file is an early log; `
 | Provider connection (custom + ScaleMax preset, several saved providers) | ✅ Real, auto-detects endpoint |
 | Model list + active model | ✅ Working (every model the key can use is available; per-model enabling was removed) |
 | Chat → real AI provider | ✅ Streamed, with tool calls, several tasks at once (labelled demo reply when unconfigured) |
-| Key security (safeStorage, no renderer access) | ✅ Working |
+| Key security (encrypted at rest without the keychain, no renderer access) | ✅ Working |
 | Resize-safe layout + 900×700 minimum | ✅ Working |
 | Blue focus ring, helper text, approval popup removed | ✅ Done |
 | Unified composer (one container) | ✅ Done |
