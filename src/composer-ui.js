@@ -1087,7 +1087,8 @@ export function approvalSummary(request) {
     const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
     // No sandbox on this computer (Windows): every command asks, in every permission mode.
     if (request.reason === 'no-sandbox') {
-      return `The model wants to run a command in ${where}. This computer has no sandbox for the model's commands, so it can change any of your files, read your credentials and use the network. ScaleMax asks about every command here, whatever the permission mode.`;
+      const background = argumentReader(request).flag('background') === true;
+      return `${WORKSPACE_SUMMARIES.run_command(where, { background })} This computer has no sandbox for the model's commands, so it can change any of your files, read your credentials and use the network. ScaleMax asks about every command here, whatever the permission mode.`;
     }
     if (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input') {
       const action = request.reason === 'unsandboxed-input' ? 'type into a command' : 'run a command';

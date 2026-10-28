@@ -71,8 +71,14 @@ jobs:
         shell: pwsh
         run: |
           $installer = Get-ChildItem dist -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
-          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
-          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'ScaleMax IDE.exe' | Select-Object -First 1
+          $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Host "Installer exit code: $($run.ExitCode)"
+          # The one-click installer can hand the copying to a child process: wait for the app.
+          $app = $null
+          for ($i = 0; $i -lt 60 -and -not $app; $i++) {
+            $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'ScaleMax IDE.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $app) { Start-Sleep -Seconds 1 }
+          }
           if (-not $app) { throw 'The installer did not install ScaleMax IDE.exe' }
           Write-Host "Installed: $($app.FullName)"
           node build/ci-launch.cjs $app.FullName

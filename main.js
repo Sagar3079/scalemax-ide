@@ -577,11 +577,21 @@ function automationFolder(folder) {
     return false;
   }
 }
+// Windows spells one folder several ways (letter case, 8.3 short names such as RUNNER~1): there
+// folders are compared by what they name.
+function folderKey(folder) {
+  if (process.platform !== 'win32' || typeof folder !== 'string' || !folder) return folder;
+  try { return fs.realpathSync.native(folder).toLowerCase(); } catch { return folder.toLowerCase(); }
+}
 function requireOpenedFolder(folder, what = 'This task works in', { automation = false } = {}) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder) || folder.length > 4096) {
     throw bridgeError('INVALID_FOLDER', 'The task folder must be an absolute path.');
   }
   if (workspaceTools.folder()?.path === folder || readFolders().recent.includes(folder)) return;
+  if (process.platform === 'win32') {
+    const key = folderKey(folder);
+    if (folderKey(workspaceTools.folder()?.path) === key || readFolders().recent.some((item) => folderKey(item) === key)) return;
+  }
   // A worktree ScaleMax made for a task (the user started that task in it).
   if (isManagedWorktree(folder)) return;
   if (automation && automationFolder(folder)) return;
