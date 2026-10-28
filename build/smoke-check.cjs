@@ -481,9 +481,23 @@ async function run(win) {
   const specsDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-specs-'));
   const planDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-plan-'));
   try {
-    // Inside a try in the page, so a failure reports its stack: line N of it is line 482 + N here.
+    // Inside a try in the page, so a failure reports its stack: its line N is the Nth line from
+    // the next one.
     e2e = await win.webContents.executeJavaScript(`(async () => { try { return await (async () => {
       const api = window.scalemaxAPI;
+      // Without a sandbox (Windows) every command asks. A command prompt no flow answers itself
+      // (on a Mac it would not have asked) is answered after 1.5 s, as a user would, so each flow
+      // goes on as it does there; the flows that test a prompt answer it first.
+      if (${JSON.stringify(!SANDBOXED)}) {
+        let askedAt = 0;
+        setInterval(() => {
+          const asking = document.querySelector('#tool-approval-dialog')?.open
+            && /no sandbox for the model's commands/.test(document.querySelector('#approval-summary')?.textContent || '');
+          if (!asking) { askedAt = 0; return; }
+          if (!askedAt) askedAt = Date.now();
+          else if (Date.now() - askedAt > 1500) { document.querySelector('#approval-once')?.click(); askedAt = 0; }
+        }, 100);
+      }
       const setValue = (selector, value) => {
         const node = document.querySelector(selector);
         node.value = value;
@@ -910,8 +924,14 @@ async function run(win) {
       const specProgressBefore = document.querySelector('#specs-progress')?.textContent || '';
       const specRequirementsShown = (document.querySelector('#specs-doc .specs-markdown')?.textContent || '').includes('I can work offline');
       // The task list has real checkboxes, one already ticked by the model; the user ticks another.
-      Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).find((tab) => tab.dataset.doc === 'tasks')?.click();
-      const specTaskRows = await until(() => document.querySelectorAll('#specs-doc .specs-task').length === 3, 4000)
+      // The Tasks tab is chosen again until its list shows: the dialog may still be loading the
+      // documents when it is first clicked.
+      const tasksTab = () => Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).find((tab) => tab.dataset.doc === 'tasks');
+      const specTaskRows = await until(() => {
+        if (document.querySelectorAll('#specs-doc .specs-task').length === 3) return true;
+        if (tasksTab() && tasksTab().getAttribute('aria-selected') !== 'true') tasksTab().click();
+        return false;
+      }, 8000)
         ? Array.from(document.querySelectorAll('#specs-doc .specs-task')).map((row) =>
           (row.querySelector('input').checked ? 'x' : '-') + row.querySelector('.specs-task-text').textContent).join('|')
         : 'unexpected task rows';
