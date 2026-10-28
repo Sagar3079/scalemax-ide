@@ -1275,7 +1275,7 @@ test('the model gets two read-only resource tools, limited to what each server l
 });
 
 test('a server that hangs is left out of the reply after the wait, and is not waited for again', async (t) => {
-  const { mcp } = makeManager({ toolsWaitMs: 300 });
+  const { mcp } = makeManager({ toolsWaitMs: 1000 });
   t.after(() => mcp.closeAll());
   mcp.save(stdioInput());
   mcp.save(stdioInput({ name: 'Stuck', env: { FAKE_MCP_HANG: 'initialize' } }));

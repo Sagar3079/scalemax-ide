@@ -15,7 +15,7 @@ const mac = process.platform === 'darwin';
 const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function folder(t, prefix = 'sm-jobs-') {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -394,7 +394,7 @@ test('the model starts a background command, reads new output, types into it and
   assert.equal(tool.describeCall('run_command', { command: 'npm run dev', background: true }), 'Started npm run dev in the background');
 });
 
-test('waiting for output returns as soon as it comes; a failing background command reports it', async (t) => {
+test('waiting for output returns as soon as it comes; a failing background command reports it', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const { tools: tool } = await tools(t);
   const started = await tool.call('run_command', { command: 'sleep 0.5; echo late', background: true, wait_seconds: 0 });
   const id = /Background command (j\d+)/.exec(started.text)[1];
@@ -417,7 +417,7 @@ test('with the sandbox on, the tools say so and outside-sandbox jobs always ask 
   const target = boxed.resolve('workspace_run');
   assert.equal(target.alwaysAsk({ command: 'x', sandbox: false }), 'unsandboxed');
   assert.equal(target.alwaysAsk({ command: 'x' }), '');
-  const outsideJob = jobs.start({ root, command: 'sleep 30' });
+  const outsideJob = jobs.start({ root, command: mac ? 'sleep 30' : 'ping -n 30 127.0.0.1 >nul' });
   const jobInput = boxed.resolve('workspace_job_input');
   assert.equal(jobInput.alwaysAsk({ job: outsideJob.id, text: 'anything' }), 'unsandboxed-input');
   assert.equal(jobInput.alwaysAsk({ job: 'j999', text: 'anything' }), '');

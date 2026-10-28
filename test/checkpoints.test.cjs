@@ -55,8 +55,8 @@ test('a reply records the first version before and the last after, with line cou
   assert.deepEqual(checkpoints.summary('chat-task-1-100'), summary, 'the same summary is read back from disk');
   // Stored privately, never inside the project.
   const saved = path.join(store, 'chat-task-1-100');
-  assert.equal(fs.statSync(saved).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.join(saved, 'meta.json')).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(saved).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(saved, 'meta.json')).mode & 0o777, 0o600);
   assert.equal(JSON.stringify(summary).includes(root), false, 'the window never gets the absolute folder');
   assert.deepEqual(checkpoints.folderOf('chat-task-1-100'), { path: root, name: path.basename(root) });
 });

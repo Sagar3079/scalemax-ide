@@ -12,7 +12,7 @@ const { createProjectNotes, isInitCommand, NOTES_PATH, INIT_PROMPT, NO_CHANGE_IN
 const DAY = new Date('2026-09-27T10:00:00Z');
 
 async function folder(t, name, files = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-notes-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-notes-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const root = path.join(base, name);
   fs.mkdirSync(root);

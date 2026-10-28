@@ -243,7 +243,7 @@ test('PostToolUse notes, UserPromptSubmit context and blocks, Stop never blocks'
   assert.equal(withPromptContext(request, ''), request);
 });
 
-test('project hooks run only once approved as they are; a change asks again; any hook can be switched off', async (t) => {
+test('project hooks run only once approved as they are; a change asks again; any hook can be switched off', posixShell, async (t) => {
   const home = folder(t, 'sm-hooks-home-');
   const root = folder(t, 'sm-hooks-project-');
   settings(home, { Stop: [{ hooks: [{ command: 'echo mine' }] }] });
@@ -349,7 +349,7 @@ test('the model cannot quietly change the hooks settings: writing them always as
   assert.equal(fs.readFileSync(path.join(root, SETTINGS_PATH), 'utf8'), '{"hooks":{}}', 'allowed: written');
 });
 
-test('a PreToolUse hook script blocks a real workspace write in the tool loop', async (t) => {
+test('a PreToolUse hook script blocks a real workspace write in the tool loop', posixShell, async (t) => {
   const root = folder(t);
   fs.writeFileSync(path.join(root, 'guard.sh'), '#!/bin/sh\ninput=$(cat)\ncase "$input" in *secrets*) echo "secrets/ is off limits" >&2; exit 2;; esac\nexit 0\n');
   fs.chmodSync(path.join(root, 'guard.sh'), 0o755);

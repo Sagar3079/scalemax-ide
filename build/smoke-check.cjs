@@ -11,6 +11,12 @@ const path = require('node:path');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Windows keeps a folder busy while the app still has it open (EBUSY): cleanup tries a few times
+// and is best effort, so it never ends the check.
+function removeDir(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* best effort */ }
+}
+
 const FAKE_MCP_SERVER = path.join(__dirname, '..', 'test', 'fixtures', 'fake-mcp-server.cjs');
 // The smoke run's app data (main.js): the sandbox keeps the model's commands out of it.
 const SMOKE_DATA = path.join(os.tmpdir(), `scalemax-smoke-${process.pid}`);
@@ -146,7 +152,7 @@ function stubReply(body) {
     return {
       role: 'assistant',
       content: 'Running it now.',
-      tool_calls: [{ id: 'call_smoke_run', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: 'printf smoke-run-a; sleep 1.2; printf smoke-run-b' }) } }],
+      tool_calls: [{ id: 'call_smoke_run', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: process.platform === 'win32' ? 'echo smoke-run-a& ping -n 3 127.0.0.1 >nul& echo smoke-run-b' : 'printf smoke-run-a; sleep 1.2; printf smoke-run-b' }) } }],
     };
   }
   // Background commands and the sandbox: a command that keeps running and answers what is typed
@@ -1332,7 +1338,7 @@ async function run(win) {
     try { return fs.readdirSync(path.join(specsDir, '.scalemax', 'specs', 'offline-sync')).sort().join(','); } catch { return null; }
   })();
   const plannedOnDisk = fs.existsSync(path.join(planDir, 'planned.md'));
-  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir, specsDir, planDir]) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir, specsDir, planDir]) removeDir(dir);
   await new Promise((resolve) => server.close(resolve));
 
   // Automation creation must capture the weekday/month inputs and schedule a next run.
@@ -1385,7 +1391,7 @@ async function run(win) {
       const written = await api.workspace.write({ path: 'hello.txt', content: 'updated content', revision: read.data.revision });
       const after = await api.workspace.read('hello.txt');
       const git = await api.workspace.gitStatus();
-      const terminal = await api.workspace.run({ command: 'printf terminal-ok' });
+      const terminal = await api.workspace.run({ command: ${JSON.stringify(process.platform === 'win32' ? 'echo terminal-ok' : 'printf terminal-ok')} });
       const { default: app } = await import('./app.js');
       await app.openWorkspaceAt(${JSON.stringify(wsDir)});
       await app.openFile('hello.txt');
@@ -1407,7 +1413,7 @@ async function run(win) {
   } catch (error) {
     errors.push(`workspace check failed: ${error.message}`);
   }
-  fs.rmSync(wsDir, { recursive: true, force: true });
+  removeDir(wsDir);
 
   // Opt-in live check against the real ScaleMax API. The key is supplied by the
   // environment and never stored in the repository.

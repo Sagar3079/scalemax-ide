@@ -130,7 +130,7 @@ test('a tool call reaches the source it belongs to, even for another mode', asyn
   assert.match((await source.callTool({ id: 'Computer', name: 'write_clipboard', arguments: { text: 'new value' } })).text, /Put 9 characters on the clipboard/);
   assert.equal(clipboardText.value, 'new value');
   assert.match((await source.callTool({ id: 'Computer', name: 'open', arguments: { path: 'README.md' } })).text, /Opened README\.md/);
-  assert.match((await source.callTool({ id: 'Computer', name: 'reveal', arguments: { path: 'README.md' } })).text, /Finder/);
+  assert.match((await source.callTool({ id: 'Computer', name: 'reveal', arguments: { path: 'README.md' } })).text, /Finder|File Explorer/);
   assert.deepEqual(opened.map(([kind]) => kind), ['open', 'reveal']);
   assert.ok(opened.every(([, value]) => value.startsWith(root)), 'only project paths are handed to the system');
   assert.match((await source.callTool({ id: 'Computer', name: 'open', arguments: { url: 'https://example.com' } })).text, /browser/);
