@@ -72,6 +72,7 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `lib/mcp-directory.cjs` | ~45 | Official remote MCP servers behind one-click connector sign-in (13 listings, 14 connectors; Jira + Confluence share Atlassian), each verified live. Renderer mirror `src/mcp-directory.js`, kept in sync by `test/mcp-directory.test.mjs`. |
 | `lib/connectors.cjs` | ~1,160 | Connector credentials (encrypted), 24 validation endpoints, GitHub live fetch, **OAuth**: client configs (`connectorOAuthClients`), `startOAuth`, refresh, identity. |
 | `lib/local-secrets.cjs` | ~95 | Encryption for every saved secret without the keychain: AES-256-GCM with `<userData>/secrets.key` (0600), the same three methods as `safeStorage`; names keychain values from beta 4 and earlier (`SECRET_IN_KEYCHAIN`). See §6. |
+| `lib/updates.cjs` | ~290 | Update now: GitHub releases (`pickRelease`: newest later tag, prereleases only for prereleases, this platform's file with its `sha256:` digest and an exact github.com download URL), a download checked for size and SHA-256 from github.com hosts only into `<userData>/updates`, then the NSIS installer silently (Windows) or the .dmg opened (macOS). `SCALEMAX_UPDATE_FEED` / `SCALEMAX_UPDATE_CURRENT` work only unpackaged. |
 | `src/workspace-ui.js` | ~1,410 | Workspace tab and the editor's behaviour: per-tab model (one CodeMirror `EditorState` each: undo history, selection, scroll), `languageFor` / `LANGUAGES`, line-break and indentation detection, dirty = text differs from disk, one save at a time per tab, ARIA file tree + bounded filter crawl (open folders stay open across refreshes), splitters (persisted), panel tabs, Cmd/Ctrl+S; imports `src/editor.js` lazily and falls back to the plain `#editor-input` textarea when it cannot load; **inline review** of a reply's changes in clean tabs (`originalFromHunks` rebuilds the earlier text from `checkpoints.diff`), tabs reloaded after a reply edits them. Pure helpers are unit-tested. |
 | `src/editor.js` | ~510 | CodeMirror 6 setup only: `LANGUAGE_SUPPORT` (22 language ids), keymaps (Cmd+D, Alt+click, Cmd+F / Cmd+Alt+F, Ctrl+G, Cmd+/, Tab/Shift+Tab with Escape-then-Tab to leave), folding, completion, bracket closing, theme from CSS variables; `createTabState`, `reloadSpec`, `location`, and the review helpers `reviewSpec` / `reviewChanges` / `undoChangeSpec` / `undoAllSpec` / `keepChangeSpec` (unified merge view). Imports only `./vendor/codemirror.js`. |
 | `src/vendor/codemirror.js` + `codemirror.LICENSE.txt` | ~1 MB | **Generated** by `build/vendor-codemirror.cjs`: one minified ES module, no imports left, with style-mod patched (§11). Never edit by hand. |
@@ -134,9 +135,9 @@ src/ (renderer, isolated)  → contextIsolation:true, nodeIntegration:false, web
 | `src/oauth-catalog.js` | ~30 | Renderer-side `OAUTH_SUPPORT` (id → loopback support); a test keeps it in sync with `lib/oauth-catalog.cjs`. |
 | `src/terminal.js`, `src/web-shim.js`, `src/data.js` | small | Console binding, browser bridge stand-in, catalog re-exports + 8 experts. |
 
-### IPC surface (102 channels, all paired with preload; the polish pass added `git:fetch`, `git:stash-restore` and `mcp:oauth-status`)
+### IPC surface (106 channels, all paired with preload; the polish pass added `git:fetch`, `git:stash-restore` and `mcp:oauth-status`, beta 6 the 4 `updates:*`)
 
-Recounted 2026-10-16: 18 direct `ipcMain.handle('x:y'` calls plus the keys of 13 channel tables in `main.js` — `providerChannels` 15, `connectorChannels` 5, `oauthChannels` 10, `mcpChannels` 7, `mcpExtraChannels` 3, `checkpointChannels` 5, `jobChannels` 5, `specChannels` 3, `slashChannels` 2, `hookChannels` 3, `automationChannels` 3, `gitFlowChannels` 14, `mediaChannels` 6. That is the 73 from before this branch plus 26: `mention:resolve`, 2 `slash:*`, 3 `hooks:*`, 3 `automations:*`, 3 MCP resource/prompt channels, 8 `git:*`, 5 `worktree:*` and `session:export`. Main→renderer events: `provider:progress`, `media:progress`, `tool:approval-request`, `tool:approval-closed`, `jobs:changed`, `automations:changed`.
+Recounted 2026-10-16: 18 direct `ipcMain.handle('x:y'` calls plus the keys of 13 channel tables in `main.js` — `providerChannels` 15, `connectorChannels` 5, `oauthChannels` 10, `mcpChannels` 7, `mcpExtraChannels` 3, `checkpointChannels` 5, `jobChannels` 5, `specChannels` 3, `slashChannels` 2, `hookChannels` 3, `automationChannels` 3, `gitFlowChannels` 14, `mediaChannels` 6. That is the 73 from before this branch plus 26: `mention:resolve`, 2 `slash:*`, 3 `hooks:*`, 3 `automations:*`, 3 MCP resource/prompt channels, 8 `git:*`, 5 `worktree:*` and `session:export`. Main→renderer events: `provider:progress`, `media:progress`, `tool:approval-request`, `tool:approval-closed`, `jobs:changed`, `automations:changed`. Since 1.0.0-beta.6 also `updateChannels` 4 (`updates:get`, `updates:check`, `updates:install`, `updates:open-page`) and the event `updates:changed`.
 
 - `store:get` / `store:set` — PUBLIC_KEYS allowlist (`tasks, settings, automations, skillStates, connectorStates, currentTaskId, customExperts, customSkills`). `provider`, `providerProfiles`, `connectors`, `connectorOAuthClients`, `mcpServers`, `workspaceFolders`, `user` are reserved (also refused by `lib/state.cjs`); the main-only keys `automationContext` and `hookSettings` are outside the allowlist too.
 - `provider:get/save/test/discover/send/cancel/clear/set-model/refresh-models` — `set-model` switches the chat model from the composer (must be a chat-capable, available catalog model for ScaleMax); `refresh-models` reloads the catalog with capabilities using the stored key; `send` goes through the tool loop (MCP tools) when the provider is configured; `cancel` cancels the loop and the HTTP request. `provider:profiles/profile-add/-select/-rename/-remove` manage saved providers (keys never returned; `select` may also pick one of that provider's models).
@@ -284,7 +285,15 @@ The product is branded **ScaleMax everywhere** — no other brand names in sourc
   - **Old secrets:** values saved by beta 4 and earlier ("v10…", keychain-encrypted) can't be read.
     - A provider key shows as missing with the reason `keychain`, and the settings stay.
     - Connector tokens and MCP secrets report that they could not be decrypted, and saving them again works.
-- **OAuth**: main owns every provider URL; the renderer only passes a connector id. Only `https:` authorize pages are opened; the callback server binds loopback only, checks the Host header and a 32-byte state (timing-safe), ignores stray requests, and closes before the flow settles; one flow per callback port, shared by connector OAuth and MCP sign-in (a new flow cancels the one waiting on that port and listens only after its listener closed; a late finish of the old flow cannot overwrite the newer sign-in's tokens); PKCE where supported; token responses capped at 256 KB; provider error codes are sanitized to `[a-z0-9_]`.
+- **Updates** (`lib/updates.cjs`):
+  - Trust rests on this repository's GitHub releases. A file is used only if its size and the `sha256:` digest GitHub lists for it match, and it comes from github.com or `*.githubusercontent.com` over HTTPS.
+  - The release list is fetched with `redirect: 'error'` and capped at 2 MB. Only `https://github.com/Sagar3079/scalemax-ide/releases/` pages are opened.
+  - Anyone who can publish a release can ship code: it is the same trust as the download page.
+  - Downloads get no quarantine or Mark-of-the-Web, so the new version opens without Gatekeeper or SmartScreen.
+- **Windows:**
+  - No sandbox, so `run_command` always asks (`'no-sandbox'`, from `commandPolicy().available === false`).
+  - `computer_open` refuses Windows launchers by extension (`LAUNCHER_TYPES`), since no file has an execute bit there.
+  - cmd.exe lines are passed verbatim. `.cmd` and `.bat` programs (npx, uvx) go through `windowsProgram`, which quotes and ^-escapes each argument as cross-spawn does.$1 the renderer only passes a connector id. Only `https:` authorize pages are opened; the callback server binds loopback only, checks the Host header and a 32-byte state (timing-safe), ignores stray requests, and closes before the flow settles; one flow per callback port, shared by connector OAuth and MCP sign-in (a new flow cancels the one waiting on that port and listens only after its listener closed; a late finish of the old flow cannot overwrite the newer sign-in's tokens); PKCE where supported; token responses capped at 256 KB; provider error codes are sanitized to `[a-z0-9_]`.
 - **One-click sign-in (MCP authorization)**: the directory URLs live in main; discovery refuses redirects, non-https endpoints, metadata whose `issuer` does not match, servers without PKCE S256, and resource metadata pointing at another origin. ScaleMax registers as a public client (`token_endpoint_auth_method: none`) where allowed, otherwise keeps the issued client secret encrypted with the tokens. Access/refresh tokens and client secrets live only in the safeStorage-encrypted `encryptedAuth` blob (session-only without encryption), are redacted from server error text, and never reach the renderer. One sign-in at a time (shared loopback port 53682).
 - **GitHub CLI sign-in**: gh runs without a shell from a fixed executable path, with `GH_TOKEN`/`GITHUB_TOKEN`/`GH_HOST`/`GH_CONFIG_DIR`/browser variables stripped; a fresh login is a normal gh login (the user's gh config, keychain storage); a downloaded gh only runs after its checksum and GitHub's code signature pass; only `https://github.com/login/device` is opened; the token only goes to the connector store and the GitHub MCP header (both encrypted). The consent page names "GitHub CLI" because that is the OAuth app the token belongs to; scopes are gh's defaults (`repo`, `read:org`, `gist`).
 - **Media**: generation runs in main; the renderer passes a model id, a prompt, options and media ids, never URLs or paths. Options are validated against the model's advertised lists before sending. The key is only attached for the provider's own origin, redirects are followed by hand (≤ 3, https only), downloads are capped (40 MB image, 500 MB video) and typed by magic bytes; files are 0600 in `<userData>/media` and served only by id through `scalemax-media:` (`nosniff`, `no-store`).
@@ -397,8 +406,14 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 - **Worktrees**: a sandboxed command in a task worktree cannot commit (the main checkout's Git folder is write-denied); commits go through the Commit button or a `sandbox: false` command. Merge needs the main checkout clean and on the base branch.
 - **Editor**: no minimap, no language server (no go-to-definition or diagnostics), no split view; files over the workspace's 1 MiB read limit still don't open.
 - **Pictures are verified against the stub only.** Every ScaleMax chat model this key can use refuses pictures (HTTP 400 `image_input_unsupported`, checked 2026-10-01), so a real model reading a picture has not been observed; the refusal path is verified live.
-- **Ad-hoc signing only: no Developer ID, no notarization, no CI, no auto-update.** Since 1.0.0-beta.4, `build/after-pack.cjs` signs the packaged app ad hoc (`codesign --force --deep --sign -`; `build.mac.identity` is `null`, so electron-builder's own signing is skipped). Before, the bundle carried only Electron's linker signature, which `syspolicy_check distribution` rejects as "Code has no resources but signature indicates they must be present", so downloaded copies could be reported as damaged. Each build has its own code identity, which is why the app stopped using the keychain in beta 5 (§6): beta 4 asked for the `scalemax-ide Safe Storage` item on every new build. A Developer ID would keep one identity across builds.
-- **Versions:** `package.json` `version` is per release (`1.0.0-beta.4` …), and `npm run build` sets `CFBundleVersion` to the commit count, which the packaged About panel shows. Betas 1–3 all reported 1.0.0.
+- **Windows (since 1.0.0-beta.6) is checked by CI only.** No one has used it on a real PC yet.
+  - **What CI covers:** on `windows-latest` it runs the unit tests and the smoke check, builds the NSIS installer, installs it silently and starts the installed app.
+  - **Not tried on Windows:** a live provider, Git flows, MCP servers (the `.cmd` launching is unit-tested only), automations with the window closed, the uninstaller and an Update now install.
+  - **Security:** there is no sandbox there, so every command asks (`'no-sandbox'`). The installer is unsigned, so SmartScreen warns; a code-signing service (Azure Trusted Signing) would stop that.
+  - **Missing there:** the GitHub CLI auto-install is macOS-only, and there's no terminal (tty) mode.
+- **Update now on macOS only opens the .dmg** (`lib/updates.cjs`): Squirrel.Mac needs a Developer ID signature. With one, electron-updater's MacUpdater could install in place. The Windows path runs the NSIS installer with `/S --updated --force-run` and quits.
+- **Ad-hoc signing only: no Developer ID, no notarization.** CI and Update now exist since beta 6. Since 1.0.0-beta.4, `build/after-pack.cjs` signs the packaged app ad hoc (`codesign --force --deep --sign -`; `build.mac.identity` is `null`, so electron-builder's own signing is skipped). Before, the bundle carried only Electron's linker signature, which `syspolicy_check distribution` rejects as "Code has no resources but signature indicates they must be present", so downloaded copies could be reported as damaged. Each build has its own code identity, which is why the app stopped using the keychain in beta 5 (§6): beta 4 asked for the `scalemax-ide Safe Storage` item on every new build. A Developer ID would keep one identity across builds.
+- **Versions:** `package.json` `version` is per release (`1.0.0-beta.6` …) and must match the release tag (`v…`), which Update now compares (semver, prereleases only for prereleases). `build/build.cjs` sets the build number to the commit count: `CFBundleVersion` on macOS (the About panel shows it), the fourth part of the file version on Windows (via `BUILD_NUMBER`). Betas 1–3 all reported 1.0.0.
 - The README screenshots in `assets/` predate sessions 2–3 (and the CodeMirror editor, Git flow and slash menu).
 
 ---
@@ -609,6 +624,32 @@ Beta 4 (merged as PR #5, published 2026-10-27) asked for the `scalemax-ide Safe 
    - README install step 3 now says to enter keys once after beta 4, not to click Always Allow;
    - README, PRODUCT, PROJECT_SUMMARY and §5/§6 describe the key file and its trade-off;
    - the version is 1.0.0-beta.5.
+
+### 2026-10-28 — Windows, Update now and CI (1.0.0-beta.6, `release/windows-and-updates`)
+
+The user asked for a Mac `.dmg`, a PC `.exe` and an Update now button for later releases.
+
+1. **Update now:** `lib/updates.cjs` and `src/updates-ui.js`, with the Updates card in Preferences & about and a status-bar notice.
+   - Tested end to end on this Mac against the real v1.0.0-beta.5 release, with `SCALEMAX_UPDATE_CURRENT=1.0.0-beta.4`:
+     - the notice showed, and clicking it focused Update now;
+     - the 102.5 MB `.dmg` was checked against GitHub's SHA-256 and opened;
+     - the downloaded file had no quarantine flag.
+2. **Windows build:** an NSIS x64 installer through `npm run build:win`. `build/build.cjs` replaces the `$(git …)` scripts, which only a Unix shell reads.
+3. **Windows behaviour:**
+   - the system frame (a hidden title bar took the window buttons with it), and no traffic-light padding (`data-platform`);
+   - every command asks first (`'no-sandbox'`), and `computer_open` refuses Windows launchers;
+   - commands, jobs, hooks and MCP servers keep the Windows variables (`platformEnvironment`);
+   - cmd.exe lines are passed verbatim, and `.cmd` programs start through `windowsProgram`;
+   - MCP reads `Path` in any case;
+   - ⌘ hints become Ctrl+… (`otherKeys`), "File Explorer" replaces "Finder", and "this computer" replaces "your Mac".
+4. **CI:** `.github/workflows/ci.yml` runs on macOS and Windows.
+   - It runs the tests and the smoke check (`build/ci-smoke.cjs`).
+   - It builds both systems' files, installs and starts the Windows app (`build/ci-launch.cjs`), and starts the Mac app from `dist`.
+   - On a `v*` tag it attaches the files to a draft release.
+5. **Checks on this Mac:**
+   - unit tests: all pass, on Node 20 here and Node 22 in CI. 71 tests in oauth, provider and subagents used to be cancelled before Node 24: when an unref'd retry or timeout timer was all that was left, the test runner took the event loop as done. Each of those files now keeps a timer running until its tests end.
+   - smoke: 103/103.
+   - CI runs the whole suite on Node 22.
 
 ### Suggested next session
 

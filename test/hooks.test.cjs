@@ -20,6 +20,8 @@ const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Real folders for real hook scripts: /private/tmp (the canonical /tmp on macOS) when there is one.
 const TEMP = fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir();
+// Hook commands here are POSIX shell; on Windows hooks run through cmd.exe, so those tests skip.
+const posixShell = { skip: process.platform === 'win32' && 'hook commands written for a POSIX shell' };
 function folder(t, prefix = 'sm-hooks-') {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(TEMP, prefix)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -98,7 +100,7 @@ test('matchers: exact names, a regular expression for the whole name, or every t
   assert.equal(taskIdOf('automation-x'), '');
 });
 
-test('a hook reads the event on stdin and runs in the folder, with the PATH and none of ScaleMax\'s secrets', async (t) => {
+test('a hook reads the event on stdin and runs in the folder, with the PATH and none of ScaleMax\'s secrets', posixShell, async (t) => {
   const root = folder(t);
   const environment = hookEnvironment({ env: { PATH: process.env.PATH, HOME: '/Users/somebody', OPENAI_API_KEY: 'sk-secret', LANG: 'C' }, folder: root });
   assert.equal(environment.OPENAI_API_KEY, undefined);
@@ -134,7 +136,7 @@ test('a hook reads the event on stdin and runs in the folder, with the PATH and 
   assert.equal(events[1].title, outcome.steps[0].title, 'the live step ends with the final title');
 });
 
-test('PreToolUse: exit 2 blocks with stderr, JSON can block or allow, other exits block nothing', async (t) => {
+test('PreToolUse: exit 2 blocks with stderr, JSON can block or allow, other exits block nothing', posixShell, async (t) => {
   const root = folder(t);
   const hook = (command, matcher = '') => ({ event: 'PreToolUse', matcher, command, timeout: 10 });
   const exit2 = await hookSet(root, [hook('echo "no writes outside src/" >&2; exit 2')]).run('PreToolUse', WRITE);
@@ -166,7 +168,7 @@ test('PreToolUse: exit 2 blocks with stderr, JSON can block or allow, other exit
   assert.equal(fs.existsSync(path.join(root, 'ran.txt')), false);
 });
 
-test('a hook past its time limit is stopped with everything it started, and blocks nothing', async (t) => {
+test('a hook past its time limit is stopped with everything it started, and blocks nothing', posixShell, async (t) => {
   const root = folder(t);
   const started = Date.now();
   const outcome = await hookSet(root, [{ event: 'PreToolUse', matcher: '', command: 'sleep 37 & echo $! > child.pid; wait', timeout: 1 }]).run('PreToolUse', WRITE);
@@ -186,7 +188,7 @@ test('a hook past its time limit is stopped with everything it started, and bloc
   assert.equal(alive, false, 'the background child went with it');
 });
 
-test('a hook that leaves something running in the background does not hold the reply', async (t) => {
+test('a hook that leaves something running in the background does not hold the reply', posixShell, async (t) => {
   const root = folder(t);
   const started = Date.now();
   const outcome = await hookSet(root, [{ event: 'UserPromptSubmit', matcher: '', command: 'sleep 41 & echo $! > bg.pid; echo "context now"', timeout: 20 }])
@@ -211,7 +213,7 @@ test('Stop ends a running hook at once', async (t) => {
   assert.equal(fs.existsSync(path.join(root, 'never.txt')), false);
 });
 
-test('PostToolUse notes, UserPromptSubmit context and blocks, Stop never blocks', async (t) => {
+test('PostToolUse notes, UserPromptSubmit context and blocks, Stop never blocks', posixShell, async (t) => {
   const root = folder(t);
   const post = await hookSet(root, [{ event: 'PostToolUse', matcher: 'write_file', command: 'cat > post.json; echo "lint: 2 warnings"', timeout: 10 }])
     .run('PostToolUse', { ...WRITE, ok: true, output: 'Created a.txt (1 bytes).' });

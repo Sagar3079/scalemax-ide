@@ -53,7 +53,7 @@ ScaleMax IDE is an Electron + vanilla-JS desktop prototype (no build step, no ru
 - `npm test` — **15 provider/workspace unit tests** (`node --test`).
 - A hermetic **Electron smoke test** (`build/smoke-check.cjs`, runs via `SCALEMAX_SMOKE=1`) that boots the real app, exercises the provider IPC against a local stub **and** a live ScaleMax key (from env, never committed), the composer send flow, and a real workspace round-trip (select → list → read → write → read) in a temp folder. It now isolates `userData` so it never touches real state.
 - Verified the packaged `.app` launches and `lib/` ships in the asar.
-- `dist/ScaleMax-IDE-<version>-arm64.dmg` / `-mac.zip` (ad-hoc signed, not notarized; Gatekeeper will warn on other Macs).
+- `dist/ScaleMax-IDE-<version>-arm64.dmg` / `-mac.zip` (ad-hoc signed, not notarized; Gatekeeper will warn on other Macs) and, built on Windows or in CI, `ScaleMax-IDE-Setup-<version>-x64.exe` (unsigned; SmartScreen warns).
 
 ---
 

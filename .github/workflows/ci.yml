@@ -39,6 +39,8 @@ jobs:
       - name: Unit tests
         run: node --test --test-reporter=spec "test/*.test.cjs" "test/*.test.mjs"
       - name: Smoke check (the real app)
+        # Runs after failing unit tests too, so both results show.
+        if: success() || failure()
         run: node build/ci-smoke.cjs
 
   build:

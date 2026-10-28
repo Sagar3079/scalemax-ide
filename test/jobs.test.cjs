@@ -194,7 +194,7 @@ test('inside the sandbox: a command can signal what it started, and nothing else
   }
 });
 
-test('a background job runs, is read from offsets, waits, and ends with its code', async (t) => {
+test('a background job runs, is read from offsets, waits, and ends with its code', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const root = folder(t);
   const jobs = manager(t);
   const job = jobs.start({ root, command: 'echo first; sleep 0.3; echo second; exit 3' });
@@ -280,7 +280,7 @@ test('a terminal command reports its process group once, before the command runs
   assert.match(shellArgv('x', { platform: 'darwin', tty: true })[3], /print -r -- \$\$ >&3; \} 2>\/dev\/null; exec 3>&-; .*eval "\$1"/);
 });
 
-test('a job ends when its command ends, even if it left a program behind', async (t) => {
+test('a job ends when its command ends, even if it left a program behind', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const root = folder(t);
   const jobs = manager(t);
   const job = jobs.start({ root, command: 'sleep 30 & echo started' });

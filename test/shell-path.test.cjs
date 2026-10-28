@@ -4,6 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { applyShellPath, readShellPath, readShellEnvironment, mergePaths, DARWIN_FALLBACK, DEFAULT_LANG } = require('../lib/shell-path.cjs');
+// PATH lists here are joined with ":" (path.delimiter); Windows joins them with ";" and never reads a
+// login shell, so those tests are for macOS and Linux.
+const posixPath = { skip: process.platform === 'win32' && 'PATH lists joined with ":"' };
 
 function fakeSpawn(stdout, { error = null, never = false } = {}) {
   const calls = [];
@@ -23,11 +26,11 @@ function fakeSpawn(stdout, { error = null, never = false } = {}) {
   return { spawnImpl, calls };
 }
 
-test('mergePaths keeps the first copy of every absolute folder', () => {
+test('mergePaths keeps the first copy of every absolute folder', posixPath, () => {
   assert.equal(mergePaths('/a:/b', ['/b', '/c', 'relative', ''], '/a:/d'), '/a:/b:/c:/d');
 });
 
-test('the login shell PATH is read between markers, ignoring startup noise', async () => {
+test('the login shell PATH is read between markers, ignoring startup noise', posixPath, async () => {
   const { spawnImpl, calls } = fakeSpawn('Welcome to zsh!\n__SCALEMAX_PATH__/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin:relative__SCALEMAX_PATH__');
   assert.equal(await readShellPath({ shell: '/bin/zsh', spawnImpl, platform: 'darwin' }), '/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin');
   assert.equal(calls[0].command, '/bin/zsh');
@@ -44,7 +47,7 @@ test('failures and timeouts give null; Windows is not asked', async () => {
   assert.equal(windows.calls.length, 0);
 });
 
-test('applyShellPath puts the shell folders first, then the inherited ones, then the macOS fallback', async () => {
+test('applyShellPath puts the shell folders first, then the inherited ones, then the macOS fallback', posixPath, async () => {
   const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' };
   const result = await applyShellPath({ env, platform: 'darwin', read: async () => '/Users/me/.nvm/versions/node/v22/bin:/opt/homebrew/bin:/usr/bin' });
   assert.equal(result, '/Users/me/.nvm/versions/node/v22/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/sbin:/usr/local/bin');
