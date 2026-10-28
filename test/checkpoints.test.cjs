@@ -10,8 +10,8 @@ const { createCheckpoints } = require('../lib/checkpoints.cjs');
 
 // A project with two files, an open workspace session on it, and a checkpoint store.
 async function setup(t, { now } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-project-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-project-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-store-')));
   t.after(() => {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(store, { recursive: true, force: true });
@@ -218,8 +218,8 @@ test('two sessions never both change the same version of a file', async (t) => {
 });
 
 test('a session ended while a new file was being written still reports and records it', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-store-')));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); });
   let release;
   const held = new Promise((resolve) => { release = resolve; });

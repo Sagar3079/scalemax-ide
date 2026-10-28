@@ -23,7 +23,7 @@ const TEMP = fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir();
 // Hook commands here are POSIX shell; on Windows hooks run through cmd.exe, so those tests skip.
 const posixShell = { skip: process.platform === 'win32' && 'hook commands written for a POSIX shell' };
 function folder(t, prefix = 'sm-hooks-') {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(TEMP, prefix)));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(TEMP, prefix)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }

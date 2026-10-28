@@ -61,7 +61,7 @@ test('Working works the computer, Coding stays in the project', () => {
 
 // A project folder with the three built-in sources wired the way main does it.
 async function setup(t) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-modes-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-modes-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const root = path.join(base, 'demo');
   fs.mkdirSync(root);

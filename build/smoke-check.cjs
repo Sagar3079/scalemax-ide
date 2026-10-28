@@ -479,7 +479,8 @@ async function run(win) {
   const specsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-specs-'));
   const planDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-plan-'));
   try {
-    e2e = await win.webContents.executeJavaScript(`(async () => {
+    // Inside a try in the page, so a failure reports its stack: line N of it is line 482 + N here.
+    e2e = await win.webContents.executeJavaScript(`(async () => { try { return await (async () => {
       const api = window.scalemaxAPI;
       const setValue = (selector, value) => {
         const node = document.querySelector(selector);
@@ -1305,7 +1306,11 @@ async function run(win) {
         oauthNoLoopbackRefused: Boolean(oauthNoLoopback && !oauthNoLoopback.ok && /HTTPS redirects/.test(oauthNoLoopback.error.message)),
         oauthForgotten: Boolean(oauthForgot && oauthForgot.ok && oauthForgot.data.clientForgotten === true),
       };
-    })()`);
+    })(); } catch (error) { return { e2eFailedAt: String((error && error.stack) || error) }; } })()`);
+    if (e2e && e2e.e2eFailedAt) {
+      errors.push(`e2e failed: ${e2e.e2eFailedAt.slice(0, 800)}`);
+      e2e = null;
+    }
   } catch (error) {
     errors.push(`e2e failed: ${error.message}`);
   }

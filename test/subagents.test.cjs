@@ -436,8 +436,8 @@ test('an address in a subagent\'s answer is its own writing, not a given one, fo
 });
 
 test('what a subagent changes is recorded with the reply\'s changes', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-project-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-project-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-store-')));
   t.after(() => {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(store, { recursive: true, force: true });

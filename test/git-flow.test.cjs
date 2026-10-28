@@ -19,7 +19,7 @@ const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 
 // Throwaway folders under /private/tmp (the canonical path: /tmp is a link on macOS).
 function folder(t, prefix) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join('/private/tmp', prefix)));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join('/private/tmp', prefix)));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

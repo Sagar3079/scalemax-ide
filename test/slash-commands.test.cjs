@@ -14,7 +14,7 @@ const { createWorkspace } = require('../lib/workspace.cjs');
 
 const TEMP = fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir();
 function folder(t, prefix = 'sm-slash-') {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(TEMP, prefix)));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(TEMP, prefix)));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }

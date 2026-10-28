@@ -115,8 +115,8 @@ const envelope = async (run) => {
 // A project with format-date.js, a workspace session on it (the bridge and the replies share it),
 // a checkpoint store, a task, and the file open in the editor.
 async function setup(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-inline-project-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-inline-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-inline-project-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-inline-store-')));
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, FILE), BEFORE);
   const ws = createWorkspace({ approve: async () => true });

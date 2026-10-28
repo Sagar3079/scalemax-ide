@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { otherKeys, keyLabel } from '../src/shortcuts.mjs';
 
 const require = createRequire(import.meta.url);
-const { shellArgv, commandLine, platformEnvironment, windowsProgram } = require('../lib/commands.cjs');
+const { shellArgv, commandLine, platformEnvironment, windowsProgram, windowsKillTree } = require('../lib/commands.cjs');
 
 test('a command line goes to cmd.exe in quotes, spawned verbatim so its own quotes survive', () => {
   assert.deepEqual(shellArgv('echo "a b" & dir', { platform: 'win32' }), ['C:\\Windows\\System32\\cmd.exe', '/d', '/s', '/c', '"echo "a b" & dir"']);
@@ -50,4 +50,16 @@ test('hints written with Mac keys read as Ctrl, Shift and Enter elsewhere', () =
   assert.equal(otherKeys('↩ open · ⇧↩ new line'), 'Enter open · Shift+Enter new line');
   assert.equal(otherKeys('No keys here.'), 'No keys here.');
   assert.equal(keyLabel({ mod: true, shift: true, key: 'O' }, { mac: false }), 'Ctrl+Shift+O');
+});
+
+test('stopping a command on Windows ends everything it started, through taskkill /T', () => {
+  const calls = [];
+  const spawnImpl = (file, args, options) => { calls.push({ file, args, options }); return { on() {} }; };
+  assert.equal(windowsKillTree(4242, { spawnImpl }), true);
+  assert.deepEqual(calls, [{ file: 'C:\\Windows\\System32\\taskkill.exe', args: ['/pid', '4242', '/T', '/F'], options: { stdio: 'ignore', windowsHide: true } }]);
+  // No process, or a spawn that fails: nothing happens and nothing is thrown.
+  assert.equal(windowsKillTree(undefined, { spawnImpl }), false);
+  assert.equal(windowsKillTree(0, { spawnImpl }), false);
+  assert.equal(windowsKillTree(7, { spawnImpl: () => { throw new Error('ENOENT'); } }), false);
+  assert.equal(calls.length, 1);
 });

@@ -16,7 +16,7 @@ const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function folder(t, prefix = 'sm-jobs-') {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   return root;
 }
 function manager(t) {
@@ -427,6 +427,9 @@ test('with the sandbox on, the tools say so and outside-sandbox jobs always ask 
   assert.equal(open.parameters.properties.sandbox, undefined);
   assert.equal(plain.resolve('workspace_run').alwaysAsk({ sandbox: false }), '');
   for (const definition of boxed.definitions()) assert.ok(definition.function.description.length <= 1024, definition.function.name);
+  // Ended before the folder is removed: Windows keeps a folder busy while a process works in it.
+  jobs.stop(outsideJob.id);
+  await until(() => jobs.list().every((job) => job.status !== 'running'));
 });
 
 test('on a computer without the sandbox (Windows) every command asks, whatever the setting', async (t) => {

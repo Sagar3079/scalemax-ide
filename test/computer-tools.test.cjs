@@ -11,7 +11,7 @@ const { createComputerTools } = require('../lib/computer-tools.cjs');
 // A real project folder (canonical path: /tmp and /var are symlinks on macOS) and a shell that
 // only records what it was asked to open.
 async function openTools(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-computer-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-computer-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = createWorkspace({ approve: async () => true });
   t.after(() => workspace.dispose());

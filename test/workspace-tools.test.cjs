@@ -11,7 +11,7 @@ const { createToolLoop } = require('../lib/tool-loop.cjs');
 
 // A real project folder on disk (canonical path: /tmp and /var are symlinks on macOS).
 function project(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-ws-tools-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-ws-tools-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'src'));
   fs.mkdirSync(path.join(root, 'node_modules', 'dep'), { recursive: true });
@@ -227,7 +227,7 @@ for (const [permission, decision, created, approvals] of [
 }
 
 test('an empty folder is reported as empty, by name', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-empty-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-empty-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = createWorkspace({ approve: async () => true });
   t.after(() => workspace.dispose());

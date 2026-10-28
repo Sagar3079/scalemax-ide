@@ -10,7 +10,7 @@ const {
 } = require('../lib/specs.cjs');
 
 function project(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-specs-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-specs-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
