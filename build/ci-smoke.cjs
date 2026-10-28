@@ -48,6 +48,8 @@ if (require.main === module) {
     const total = Object.keys(result.checks || {}).length;
     console.log(`\n[ci-smoke] ${total - failed.length}/${total} checks passed${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
     if (result.errors?.length) console.log(`[ci-smoke] page errors: ${JSON.stringify(result.errors).slice(0, 2000)}`);
+    // What the end-to-end flow saw, to tell why a check failed on a machine no one can open.
+    if (failed.length && result.e2e) console.log(`[ci-smoke] e2e values: ${JSON.stringify(result.e2e).slice(0, 12000)}`);
     process.exit(result.ok === true && failed.length === 0 ? 0 : 1);
   });
 }

@@ -18,9 +18,9 @@ async function openTools(t) {
   await workspace.select(root);
   const opened = [];
   const shell = {
-    openPath: async (value) => { opened.push(['open', path.relative(root, value)]); return ''; },
+    openPath: async (value) => { opened.push(['open', path.relative(root, value).split(path.sep).join('/')]); return ''; },
     openExternal: async (value) => { opened.push(['external', value]); },
-    showItemInFolder: (value) => { opened.push(['reveal', path.relative(root, value)]); },
+    showItemInFolder: (value) => { opened.push(['reveal', path.relative(root, value).split(path.sep).join('/')]); },
   };
   const tools = createComputerTools({ getWorkspace: () => workspace, clipboard: { readText: () => '', writeText: () => {} }, shell });
   return { root, tools, opened };

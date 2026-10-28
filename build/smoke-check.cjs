@@ -913,7 +913,8 @@ async function run(win) {
         ? Array.from(document.querySelectorAll('#specs-doc .specs-task')).map((row) =>
           (row.querySelector('input').checked ? 'x' : '-') + row.querySelector('.specs-task-text').textContent).join('|')
         : 'unexpected task rows';
-      document.querySelectorAll('#specs-doc .specs-task input')[1].click();
+      // Optional: without the rows the spec checks fail on their own instead of ending the run.
+      document.querySelectorAll('#specs-doc .specs-task input')[1]?.click();
       const specProgressAfter = await until(() => (document.querySelector('#specs-progress')?.textContent || '') === '2/3 tasks done', 6000)
         ? '2/3 tasks done' : (document.querySelector('#specs-progress')?.textContent || '');
       // "Work on the open tasks" seeds the message box instead of acting behind the model's back,
