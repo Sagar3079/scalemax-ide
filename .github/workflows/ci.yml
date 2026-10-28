@@ -1,0 +1,112 @@
+# Tests and builds ScaleMax IDE on macOS and Windows.
+# - Every push to main, pull request and manual run: unit tests and the end-to-end smoke check on
+#   both systems, then the macOS .dmg/.zip and the Windows installer .exe, kept as run artifacts.
+#   The Windows installer is installed silently and the installed app is started once.
+# - A tag v*: the same, then the files are attached to that version's GitHub release (a draft
+#   pre-release is made when there is none yet, to be written up and published by hand).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: node --test --test-reporter=spec "test/*.test.cjs" "test/*.test.mjs"
+      - name: Smoke check (the real app)
+        run: node build/ci-smoke.cjs
+
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: --mac
+          - os: windows-latest
+            target: --win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the commit count
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: node build/build.cjs ${{ matrix.target }}
+      - name: Install and start the Windows app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'ScaleMax IDE.exe' | Select-Object -First 1
+          if (-not $app) { throw 'The installer did not install ScaleMax IDE.exe' }
+          Write-Host "Installed: $($app.FullName)"
+          node build/ci-launch.cjs $app.FullName
+      - name: Start the macOS app
+        if: runner.os == 'macOS'
+        run: node build/ci-launch.cjs "dist/mac-arm64/ScaleMax IDE.app/Contents/MacOS/ScaleMax IDE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scalemax-ide-${{ runner.os }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Attach to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l files
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+              --title "ScaleMax IDE ${TAG#v}" --notes "Release notes to come."
+          fi
+          gh release upload "$TAG" files/* --repo "$GITHUB_REPOSITORY" --clobber

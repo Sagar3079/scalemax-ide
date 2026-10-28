@@ -59,7 +59,7 @@ export const MCP_PRESETS = Object.freeze([
 export const PRESET_GROUPS = Object.freeze([
   ['signin', 'Sign in with your account', 'Opens the service in your browser. No app registration or API key needed.'],
   ['public', 'Public: just a URL', 'Free public servers; nothing to sign in to.'],
-  ['local', 'Runs on this Mac', 'Started with npx (Node.js) or uvx (uv). ScaleMax asks before running a command.'],
+  ['local', 'Runs on this computer', 'Started with npx (Node.js) or uvx (uv). ScaleMax asks before running a command.'],
 ]);
 
 /** The command and args of a local preset, with {folder} filled in. */

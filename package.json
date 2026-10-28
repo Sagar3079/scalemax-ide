@@ -1,6 +1,6 @@
 {
   "name": "scalemax-ide",
-  "version": "1.0.0-beta.5",
+  "version": "1.0.0-beta.6",
   "description": "ScaleMax IDE — your AI-powered development workspace",
   "main": "main.js",
   "author": "ScaleMax",
@@ -12,8 +12,9 @@
     "start": "node build/dev-app.cjs --run",
     "icons": "electron build/render-icons.cjs",
     "test": "node --test test/*.test.cjs test/*.test.mjs",
-    "build": "electron-builder --mac -c.buildVersion=$(git rev-list --count HEAD 2>/dev/null || echo 0)",
-    "build:dir": "electron-builder --mac --dir -c.buildVersion=$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+    "build": "node build/build.cjs --mac",
+    "build:dir": "node build/build.cjs --mac --dir",
+    "build:win": "node build/build.cjs --win"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -41,6 +42,25 @@
     "dmg": {
       "artifactName": "ScaleMax-IDE-${version}-${arch}.${ext}"
     },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icons/icon.png",
+      "artifactName": "ScaleMax-IDE-${version}-${arch}-win.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "ScaleMax-IDE-Setup-${version}-${arch}.${ext}",
+      "shortcutName": "ScaleMax IDE",
+      "uninstallDisplayName": "ScaleMax IDE"
+    },
     "files": [
       "main.js",
       "preload.js",
@@ -48,7 +68,8 @@
       "src/**/*",
       "assets/**/*",
       "package.json"
-    ]
+    ],
+    "publish": null
   },
   "allowScripts": {
     "electron@33.4.11": true

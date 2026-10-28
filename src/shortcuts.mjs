@@ -54,6 +54,19 @@ export function shortcutCommand(event, { mac = true, typing = false, inEditor = 
   }
 }
 
+/**
+ * Mac key names in a text as they are written elsewhere: "⌘⇧O" → "Ctrl+Shift+O", "⌘↩" →
+ * "Ctrl+Enter", "↩" → "Enter". The page's hints and tooltips are written for the Mac; the app
+ * rewrites them once on other systems (src/app.js applyPlatform).
+ */
+export function otherKeys(text) {
+  return String(text)
+    .replace(/([⌘⇧]+)(↩|[^\s⌘⇧↩·)]+)?/g, (_all, mods, key = '') => [
+      mods.includes('⌘') ? 'Ctrl' : '', mods.includes('⇧') ? 'Shift' : '', key === '↩' ? 'Enter' : key,
+    ].filter(Boolean).join('+'))
+    .replace(/↩/g, 'Enter');
+}
+
 /** How a key combination is written: "⌘K" on a Mac, "Ctrl+K" elsewhere. */
 export function keyLabel(keys, { mac = true } = {}) {
   const { mod = false, shift = false, key } = keys;

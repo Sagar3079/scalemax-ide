@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, protocol, n
 const { pathToFileURL, fileURLToPath } = require('url');
 const { Readable } = require('stream');
 const { randomUUID } = require('crypto');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,12 +12,14 @@ const { createConnectorStore } = require('./lib/connectors.cjs');
 const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
 const { createLocalSecrets } = require('./lib/local-secrets.cjs');
+const { createUpdater } = require('./lib/updates.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createProgressForwarder } = require('./lib/progress.cjs');
 const { createCheckpoints, validId: validCheckpointId } = require('./lib/checkpoints.cjs');
 const { createJobManager } = require('./lib/jobs.cjs');
 const sandbox = require('./lib/sandbox.cjs');
+const { platformEnvironment } = require('./lib/commands.cjs');
 const { createWorkspaceTools, combineToolSources } = require('./lib/workspace-tools.cjs');
 const { createWebTools } = require('./lib/web-tools.cjs');
 const { createComputerTools } = require('./lib/computer-tools.cjs');
@@ -138,7 +141,10 @@ function createWindow() {
     title: 'ScaleMax',
     // Windows and Linux window icon; macOS uses the bundle / Dock icon.
     icon: ICON_PATH,
-    titleBarStyle: 'hiddenInset',
+    // macOS draws its traffic lights over the page's title bar. Elsewhere a hidden title bar would
+    // take the minimize, maximize and close buttons with it, so the window keeps the system's own
+    // frame, and its menu bar shows when Alt is pressed.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : { autoHideMenuBar: true }),
     backgroundColor: '#fafafa',
     show: false,
     webPreferences: {
@@ -341,6 +347,7 @@ const jobs = createJobManager({
   environment: () => {
     const env = { HOME: os.homedir(), PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin' };
     for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR']) if (typeof process.env[key] === 'string') env[key] = process.env[key];
+    Object.assign(env, platformEnvironment());
     return env;
   },
   onUpdate: notifyJobs,
@@ -353,6 +360,8 @@ function commandPolicy() {
   let settings = {};
   try { settings = stateStore.get('settings') || {}; } catch { /* defaults */ }
   return {
+    // False on a computer without the sandbox (Windows): there every command asks first.
+    available: sandbox.available(),
     sandbox: sandbox.available() && settings.sandbox !== false,
     network: settings.sandboxNetwork !== false,
     appData: app.getPath('userData'),
@@ -917,6 +926,58 @@ ipcMain.handle('app:get-version', async () => app.getVersion());
 ipcMain.handle('app:quit', async (event) => {
   if (trustedSender(event)) app.quit();
 });
+
+// ---------------------------------------------------------------------------
+// Updates (lib/updates.cjs): newer releases on GitHub, checked 20 seconds after launch and then
+// every six hours while Preferences > "Check for updates automatically" is on. Update now
+// installs one on Windows and opens its .dmg on macOS.
+// ---------------------------------------------------------------------------
+const UPDATE_FIRST_CHECK_MS = 20_000;
+const UPDATE_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+// Development only, never in the packaged app: another release list, or another current version,
+// to try Update now against.
+const UPDATE_TEST = app.isPackaged ? {} : {
+  ...(process.env.SCALEMAX_UPDATE_FEED ? { feedUrl: process.env.SCALEMAX_UPDATE_FEED } : {}),
+  ...(process.env.SCALEMAX_UPDATE_CURRENT ? { current: process.env.SCALEMAX_UPDATE_CURRENT } : {}),
+};
+const updater = createUpdater({
+  current: app.getVersion(),
+  dir: path.join(app.getPath('userData'), 'updates'),
+  openPath: (file) => shell.openPath(file),
+  spawnImpl: spawn,
+  quit: () => app.quit(),
+  onChange: (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updates:changed', state);
+  },
+  ...UPDATE_TEST,
+});
+const UPDATES_FALLBACK = { code: 'UPDATE_ERROR', message: 'The update could not be checked or installed.' };
+const updateChannels = {
+  'updates:get': () => updater.get(),
+  'updates:check': () => updater.check(),
+  'updates:install': () => updater.install(),
+  'updates:open-page': async () => {
+    // Only a page lib/updates.cjs accepted (this repository's releases on github.com).
+    const page = updater.get().release?.page;
+    if (page) await shell.openExternal(page);
+    return Boolean(page);
+  },
+};
+for (const [channel, run] of Object.entries(updateChannels)) {
+  ipcMain.handle(channel, wrap(run, UPDATES_FALLBACK));
+}
+
+function scheduleUpdateChecks() {
+  // The smoke run never goes online, and development only with a test feed or version.
+  if (process.env.SCALEMAX_SMOKE === '1' || (!app.isPackaged && !Object.keys(UPDATE_TEST).length)) return;
+  const run = () => {
+    let settings = {};
+    try { settings = stateStore.get('settings') || {}; } catch { /* defaults */ }
+    if (settings.checkUpdates !== false) updater.check().catch(() => {});
+  };
+  setTimeout(run, UPDATE_FIRST_CHECK_MS).unref?.();
+  setInterval(run, UPDATE_CHECK_EVERY_MS).unref?.();
+}
 
 // Provider, connector, OAuth client and MCP records are reserved: they are only
 // reachable through the provider:*/connector:*/mcp:* channels, which return
@@ -2048,6 +2109,7 @@ app.whenReady().then(() => {
   guardPermissions();
 
   createWindow();
+  scheduleUpdateChecks();
 
   if (process.env.SCALEMAX_SMOKE === '1') {
     // Development-only renderer/IPC verification; see build/smoke-check.cjs.

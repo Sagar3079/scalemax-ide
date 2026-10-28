@@ -19,10 +19,11 @@ import { bindSlashUi, runSlashCommand } from './slash-ui.js';
 import { bindHooksUi, reviewProjectHooks } from './hooks-ui.js';
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
+import { bindUpdatesUi } from './updates-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
 import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
-import { shortcutCommand, isCommand, shortcutList } from './shortcuts.mjs';
+import { shortcutCommand, isCommand, shortcutList, otherKeys } from './shortcuts.mjs';
 import { normalizeWorktree, unsharedChangeIds, worktreeName } from './sessions.mjs';
 import { renderMarkdown, bindCopy } from './markdown.js';
 import { bindTerminal } from './terminal.js';
@@ -307,6 +308,7 @@ const app = {
   },
 
   async init() {
+    this.applyPlatform();
     this.renderBrandMarks();
     window.addEventListener('error', (event) => this.showGlobalError(event.message || 'Unexpected error'));
     window.addEventListener('unhandledrejection', (event) =>
@@ -327,6 +329,7 @@ const app = {
     bindMediaUi(this);
     bindChangesUi(this);
     bindJobsUi(this);
+    bindUpdatesUi(this);
     bindSpecsUi(this);
     bindGitFlowUi(this);
     bindSessionsUi(this);
@@ -2026,6 +2029,26 @@ const app = {
     const platform = window.scalemaxAPI?.getPlatform?.();
     if (platform && platform !== 'browser') return platform === 'darwin';
     return /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '');
+  },
+
+  // The page as this computer writes it. Off a Mac the title bar leaves no room for the traffic
+  // lights (styles.css), and the hints and tooltips written with Mac keys (⌘S, ↩) say Ctrl+S
+  // and Enter. Text drawn later builds its key names with src/shortcuts.mjs keyLabel.
+  applyPlatform() {
+    const mac = this.isMac();
+    document.documentElement.dataset.platform = mac ? 'mac' : 'other';
+    if (mac) return;
+    const MAC_KEYS = /[⌘⇧↩]/;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (MAC_KEYS.test(node.nodeValue)) node.nodeValue = otherKeys(node.nodeValue);
+    }
+    for (const element of document.querySelectorAll('[title], [placeholder], [aria-label]')) {
+      for (const name of ['title', 'placeholder', 'aria-label']) {
+        const value = element.getAttribute(name);
+        if (value && MAC_KEYS.test(value)) element.setAttribute(name, otherKeys(value));
+      }
+    }
   },
 
   bindShortcuts() {

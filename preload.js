@@ -15,6 +15,24 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     quit: () => ipcRenderer.invoke('app:quit')
   },
 
+  /**
+   * Updates (lib/updates.cjs): a newer release on GitHub, and Update now, which installs it on
+   * Windows and opens its .dmg on macOS. State: { status, current, release, progress, error }.
+   */
+  updates: {
+    get: () => ipcRenderer.invoke('updates:get'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    /** Opens the release's page on GitHub in the browser. */
+    openPage: () => ipcRenderer.invoke('updates:open-page'),
+    onChanged: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('updates:changed', listener);
+      return () => ipcRenderer.removeListener('updates:changed', listener);
+    }
+  },
+
   store: {
     /** @param {string} key @returns {Promise<any>} */
     get: (key) => ipcRenderer.invoke('store:get', key),

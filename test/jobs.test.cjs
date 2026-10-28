@@ -429,6 +429,18 @@ test('with the sandbox on, the tools say so and outside-sandbox jobs always ask 
   for (const definition of boxed.definitions()) assert.ok(definition.function.description.length <= 1024, definition.function.name);
 });
 
+test('on a computer without the sandbox (Windows) every command asks, whatever the setting', async (t) => {
+  const policy = { available: false, sandbox: false, network: true, appData: '/private/tmp/sm-no-such-appdata' };
+  const { tools: bare } = await tools(t, { policy });
+  const target = bare.resolve('workspace_run');
+  assert.equal(target.alwaysAsk({ command: 'dir' }), 'no-sandbox');
+  assert.equal(target.alwaysAsk({ command: 'dir', sandbox: false }), 'no-sandbox');
+  assert.equal(target.alwaysAsk('not arguments'), '');
+  // Switched off by the user on a Mac (the sandbox exists): their choice stands, as before.
+  const { tools: off } = await tools(t, { policy: { ...policy, available: true } });
+  assert.equal(off.resolve('workspace_run').alwaysAsk({ command: 'ls' }), '');
+});
+
 test('a sandboxed command that is refused tells the model what the sandbox allows', macSandbox, async (t) => {
   const appData = folder(t, 'sm-sbx-tool-appdata-');
   const { tools: tool, root } = await tools(t, { policy: { sandbox: true, network: true, appData } });
