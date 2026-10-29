@@ -659,6 +659,7 @@ The user asked for a Mac `.dmg`, a PC `.exe` and an Update now button for later 
    - **Why:** `multiUser.nsh` reads the per-user Programs folder that `SHGetKnownFolderPath` returns with `*$2(&w${NSIS_MAX_STRLEN} .s)`, and `System.dll` copies that whole fixed size out of a buffer sized for the path, past the end of the heap block. It runs only when no earlier install is recorded (`HKCU\Software\{APP_GUID}` `InstallLocation`), so first installs crash and updates don't.
    - **Fix:** electron-builder 26.12 copies it with `lstrcpynW` (electron-builder#9769). This branch moves electron-builder from ^25.0.0 to ^26.18.0 (lockfile only here; the build config needed no changes) and adds `.github/workflows/installer-check.yml`, 25 first installs of the new build against 25 of the beta 6 installer.
    - **Proof (PR #9):** the beta 6 installer crashed on 9 of 25 first installs, every time at `System.dll`+0x1581, most within 0.5 s. The 26.18.0 build installed 25 of 25. CI passes with 26.18.0 on both systems: unit tests (890 on macOS; 835, with 55 skipped, on Windows), smoke 103/103 and 101/101, and both apps build, install and start.
+3. **1.0.0-beta.7** (`release/1.0.0-beta.7`) is the release that ships this fix. The installer check's baseline stays `v1.0.0-beta.6`, the last release built with the bug.
 
 ### Suggested next session
 
