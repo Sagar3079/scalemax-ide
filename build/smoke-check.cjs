@@ -918,6 +918,10 @@ async function run(win) {
       document.querySelector('#specs-open').click();
       const specDialogOpen = await until(() => Boolean(document.querySelector('#specs-dialog')?.open)
         && document.querySelectorAll('#specs-list .specs-item').length > 0, 5000);
+      // The list shows before the chosen spec's documents have loaded: wait for its tabs too.
+      await until(() => document.querySelectorAll('#specs-tabs .specs-tab').length === 3
+        && Boolean(document.querySelector('#specs-progress')?.textContent)
+        && (document.querySelector('#specs-doc .specs-markdown')?.textContent || '').includes('I can work offline'), 8000);
       const specListed = Array.from(document.querySelectorAll('#specs-list .specs-item-name')).map((node) => node.textContent).join(',');
       const specTabLabels = Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).map((node) => node.textContent).join(',');
       const specTabsMissing = document.querySelectorAll('#specs-tabs .specs-tab.is-missing').length;

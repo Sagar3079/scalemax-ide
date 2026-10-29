@@ -71,13 +71,23 @@ jobs:
         shell: pwsh
         run: |
           $installer = Get-ChildItem dist -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
-          $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
-          Write-Host "Installer exit code: $($run.ExitCode)"
-          # The one-click installer can hand the copying to a child process: wait for the app.
           $app = $null
-          for ($i = 0; $i -lt 60 -and -not $app; $i++) {
-            $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'ScaleMax IDE.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $app) { Start-Sleep -Seconds 1 }
+          for ($attempt = 1; $attempt -le 2 -and -not $app; $attempt++) {
+            $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+            Write-Host "Installer exit code: $($run.ExitCode)"
+            if ($run.ExitCode -ne 0) {
+              # It has crashed now and then on these machines (0xC0000005) without installing:
+              # show what Windows logged about it, then run it once more.
+              Write-Host "::warning::The installer exited with code $($run.ExitCode) (attempt $attempt)"
+              Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001 } -MaxEvents 4 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "$($_.TimeCreated) $($_.Message)" }
+              continue
+            }
+            # The one-click installer can hand the copying to a child process: wait for the app.
+            for ($i = 0; $i -lt 60 -and -not $app; $i++) {
+              $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'ScaleMax IDE.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if (-not $app) { Start-Sleep -Seconds 1 }
+            }
           }
           if (-not $app) { throw 'The installer did not install ScaleMax IDE.exe' }
           Write-Host "Installed: $($app.FullName)"
