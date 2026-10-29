@@ -76,8 +76,9 @@ jobs:
             $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
             Write-Host "Installer exit code: $($run.ExitCode)"
             if ($run.ExitCode -ne 0) {
-              # It has crashed now and then on these machines (0xC0000005) without installing:
-              # show what Windows logged about it, then run it once more.
+              # Installers built with electron-builder before 26.12 crashed now and then on a
+              # first install (0xC0000005, electron-builder#9769). That should no longer happen:
+              # show what Windows logged, then run it once more.
               Write-Host "::warning::The installer exited with code $($run.ExitCode) (attempt $attempt)"
               Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001 } -MaxEvents 4 -ErrorAction SilentlyContinue |
                 ForEach-Object { Write-Host "$($_.TimeCreated) $($_.Message)" }

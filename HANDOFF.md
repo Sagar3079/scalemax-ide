@@ -8,7 +8,7 @@ Complete context for an AI or engineer taking over this project. Everything belo
 
 **ScaleMax IDE** — a native macOS Electron app: a local-first AI development workspace. Chat-first task model, provider-key authentication (ScaleMax API, OpenAI-compatible), an IDE-style Workspace tab (CodeMirror 6 editor with inline review of a reply's edits, file tree, Git, terminal), subagents (`agent_task`), slash commands and hooks, a Git commit/push/PR flow with per-task worktrees, rewind/fork of conversations, MCP servers (tools, resources, prompts), an Experts · Skills · Connectors catalog (custom experts/skills, OAuth or token connectors), automations fired by the main process, light/dark themes.
 
-- **Stack**: Electron 33.4.11, electron-builder 25.1.8, vanilla ES modules — **no build step, no runtime dependencies**, no TypeScript, no bundler in the app. The one generated source file is `src/vendor/codemirror.js` (CodeMirror 6, ~1 MB, committed), produced by `node build/vendor-codemirror.cjs`, which installs pinned versions in a temp folder and bundles them with esbuild; `package.json` is untouched.
+- **Stack**: Electron 33.4.11, electron-builder 26.18.0, vanilla ES modules — **no build step, no runtime dependencies**, no TypeScript, no bundler in the app. The one generated source file is `src/vendor/codemirror.js` (CodeMirror 6, ~1 MB, committed), produced by `node build/vendor-codemirror.cjs`, which installs pinned versions in a temp folder and bundles them with esbuild; `package.json` is untouched.
 - **Repository**: https://github.com/Sagar3079/scalemax-ide
 - **macOS-only** build target (dmg + zip, arm64), unsigned.
 
@@ -407,7 +407,7 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 - **Editor**: no minimap, no language server (no go-to-definition or diagnostics), no split view; files over the workspace's 1 MiB read limit still don't open.
 - **Pictures are verified against the stub only.** Every ScaleMax chat model this key can use refuses pictures (HTTP 400 `image_input_unsupported`, checked 2026-10-01), so a real model reading a picture has not been observed; the refusal path is verified live.
 - **Windows (since 1.0.0-beta.6) is checked by CI only.** No one has used it on a real PC yet.
-  - **What CI covers:** on `windows-latest` it runs the unit tests and the smoke check, builds the NSIS installer, installs it silently and starts the installed app.
+  - **What CI covers:** on `windows-latest` it runs the unit tests and the smoke check, builds the NSIS installer, installs it silently and starts the installed app. When the build changes, `installer-check.yml` installs it 25 times as a first install (`build/ci-install-loop.ps1`).
   - **Not tried on Windows:** a live provider, Git flows, MCP servers (the `.cmd` launching is unit-tested only), automations with the window closed, the uninstaller and an Update now install.
   - **Security:** there is no sandbox there, so every command asks (`'no-sandbox'`). The installer is unsigned, so SmartScreen warns; a code-signing service (Azure Trusted Signing) would stop that.
   - **Missing there:** the GitHub CLI auto-install is macOS-only, and there's no terminal (tty) mode.
@@ -650,6 +650,14 @@ The user asked for a Mac `.dmg`, a PC `.exe` and an Update now button for later 
    - unit tests: all pass, on Node 20 here and Node 22 in CI. 71 tests in oauth, provider and subagents used to be cancelled before Node 24: when an unref'd retry or timeout timer was all that was left, the test runner took the event loop as done. Each of those files now keeps a timer running until its tests end.
    - smoke: 103/103.
    - CI runs the whole suite on Node 22.
+
+### 2026-10-29 — beta 6 released; the Windows installer's first-install crash (`fix/installer-first-install-crash`)
+
+1. **Released 1.0.0-beta.6** from `main` (PR #7, then PR #8, which made the Windows smoke check wait for the spec dialog's documents and lets CI's install step run a crashed installer once more). CI built the `.dmg`, `.zip` and `.exe` from the `v1.0.0-beta.6` tag and attached them to the release.
+2. **The installer crash:** the beta 6 installer quit within about 2 s, without installing, in 2 of 14 CI installs (exit -1073741819, 0xC0000005).
+   - **Where:** Windows logged the fault in the installer's own `System.dll` at offset 0x1581. In NSIS 3.04's `System.dll` (the build electron-builder 25.1.8 bundles, same timestamp) that is the read in the plugin's byte-copy loop.
+   - **Why:** `multiUser.nsh` reads the per-user Programs folder that `SHGetKnownFolderPath` returns with `*$2(&w${NSIS_MAX_STRLEN} .s)`, and `System.dll` copies that whole fixed size out of a buffer sized for the path, past the end of the heap block. It runs only when no earlier install is recorded (`HKCU\Software\{APP_GUID}` `InstallLocation`), so first installs crash and updates don't.
+   - **Fix:** electron-builder 26.12 copies it with `lstrcpynW` (electron-builder#9769). This branch moves electron-builder from ^25.0.0 to ^26.18.0 (lockfile only here; the build config needed no changes) and adds `.github/workflows/installer-check.yml`, 25 first installs of the new build against 25 of the beta 6 installer.
 
 ### Suggested next session
 

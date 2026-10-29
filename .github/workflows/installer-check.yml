@@ -1,0 +1,78 @@
+# Installs the Windows installer many times over, each time as a first install, and counts the
+# runs that fail. Installers built with electron-builder before 26.12 crashed now and then on a
+# first install (0xC0000005, electron-builder#9769), which CI's single install rarely shows.
+# - Runs on pull requests that change how the installer is built, and by hand.
+# - This build: fails if any run doesn't install.
+# - The baseline: a release built with the bug, only reported. Its crashes show that the check
+#   can catch this one.
+name: Installer check
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - build/build.cjs
+      - build/after-pack.cjs
+      - build/ci-install-loop.ps1
+      - .github/workflows/installer-check.yml
+  workflow_dispatch:
+    inputs:
+      baseline_tag:
+        description: Release whose installer is the baseline
+        default: v1.0.0-beta.6
+      runs:
+        description: Installs of each installer
+        default: '25'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUNS: ${{ inputs.runs || '25' }}
+  BASELINE_TAG: ${{ inputs.baseline_tag || 'v1.0.0-beta.6' }}
+
+jobs:
+  new-build:
+    name: Fresh installs (this build)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the commit count
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: node build/build.cjs --win
+      - name: Install it again and again
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          ./build/ci-install-loop.ps1 -Installer $installer.FullName -Runs $env:RUNS -Label 'this build' -ExpectClean
+
+  baseline:
+    name: Fresh installs (baseline release)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the baseline installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download $env:BASELINE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'ScaleMax-IDE-Setup-*.exe' --dir baseline
+          Get-ChildItem baseline | Unblock-File
+      - name: Install it again and again
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem baseline -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          ./build/ci-install-loop.ps1 -Installer $installer.FullName -Runs $env:RUNS -Label "baseline $env:BASELINE_TAG"
