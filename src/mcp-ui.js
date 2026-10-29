@@ -521,7 +521,7 @@ async function addPreset(app, preset) {
       }
     }
     const { command, args } = presetCommand(preset, folder);
-    if (!window.confirm(`ScaleMax will run this command on your Mac:\n\n${[command, ...args].join(' ')}\n\nThe first start downloads the package. Continue?`)) return;
+    if (!window.confirm(`ScaleMax will run this command on this computer:\n\n${[command, ...args].join(' ')}\n\nThe first start downloads the package. Continue?`)) return;
     setPresetBusy(preset.id, 'Starting…');
     const saved = await api.save({ name: preset.name, transport: 'stdio', command, args, enabled: true });
     if (!saved?.ok) { app.showToast(saved?.error?.message || 'The server could not be added'); return; }
@@ -717,7 +717,7 @@ async function saveServer(app, event) {
   const existing = input.id ? servers.find((server) => server.id === input.id) : null;
   const commandChanged = input.transport === 'stdio'
     && (!existing || existing.command !== input.command || (existing.args || []).join('\n') !== input.args.join('\n'));
-  if (commandChanged && !window.confirm(`ScaleMax will run this command on your Mac:\n\n${[input.command, ...input.args].join(' ')}\n\nContinue?`)) {
+  if (commandChanged && !window.confirm(`ScaleMax will run this command on this computer:\n\n${[input.command, ...input.args].join(' ')}\n\nContinue?`)) {
     setStatus('Not saved.');
     return;
   }

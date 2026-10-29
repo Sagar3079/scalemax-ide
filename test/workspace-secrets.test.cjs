@@ -15,7 +15,7 @@ const HIDDEN = [
 const SHOWN = ['.env.example', '.env.sample', '.env.template', 'README.md', 'environment.ts', 'account.json'];
 
 test('secret files are neither listed nor readable; templates without values are', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-secrets-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-secrets-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const name of [...HIDDEN, ...SHOWN]) fs.writeFileSync(path.join(root, name), `${name}=value\n`);
   const workspace = createWorkspace({ approve: async () => true });

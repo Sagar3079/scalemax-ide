@@ -1,5 +1,9 @@
 'use strict';
-const test = require('node:test');
+// These tests drive Git with POSIX shell scripts (commit hooks, a gh stub, sh commands) in POSIX
+// folders, so Windows skips them: Git flow on Windows has no tests of its own yet.
+const test = process.platform === 'win32'
+  ? (name, ...rest) => require('node:test')(name, { skip: 'drives Git through POSIX shell scripts' }, rest.at(-1))
+  : require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,7 +19,7 @@ const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 
 // Throwaway folders under /private/tmp (the canonical path: /tmp is a link on macOS).
 function folder(t, prefix) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join('/private/tmp', prefix)));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join('/private/tmp', prefix)));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -609,8 +613,10 @@ test('inside the sandbox: a task worktree in the app data folder works, the main
   const { args } = commandLine('true', { box: { project: made.path, network: true, appData } });
   assert.ok(args.includes(`GITDIR=${path.join(root, '.git')}`));
   // Its own folder works although it is inside the app data folder.
-  assert.equal(run('echo inside > made.txt && cat src/app.js').status, 0);
-  assert.equal(run('git status --porcelain').status, 0);
+  const inside = run('echo inside > made.txt && cat src/app.js');
+  assert.equal(inside.status, 0, inside.stderr);
+  const status = run('git status --porcelain');
+  assert.equal(status.status, 0, status.stderr);
   // The rest of ScaleMax's data, other worktrees included, stays closed.
   assert.notEqual(run(`cat ${JSON.stringify(path.join(appData, 'state.json'))}`).status, 0);
   assert.notEqual(run(`cat ${JSON.stringify(path.join(other, 'file.txt'))}`).status, 0);

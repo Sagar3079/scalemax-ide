@@ -1,6 +1,11 @@
 'use strict';
 
 const test = require('node:test');
+// Retry waits and request timers are unref'd (they must not keep the app open). When one is all
+// that is left, Node 22 and older's test runner takes the event loop as finished and cancels the
+// rest of the file, so a timer keeps it running until the file's tests are done.
+const keepAlive = setInterval(() => {}, 60_000);
+test.after(() => clearInterval(keepAlive));
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');

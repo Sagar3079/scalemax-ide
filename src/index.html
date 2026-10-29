@@ -394,7 +394,7 @@
                     <div id="workspace-empty" class="ws-empty">
                       <svg class="ws-empty-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
                       <h3 id="workspace-empty-title">Open a project folder</h3>
-                      <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this Mac.</p>
+                      <p id="workspace-empty-text">Browse files, edit with tabs, review Git changes and run commands, all on this computer.</p>
                       <button id="workspace-open-empty" class="button primary" type="button">Open folder</button>
                       <p class="ws-empty-keys"><kbd>⌘S</kbd> save · <kbd>⌘F</kbd> find · <kbd>⌘D</kbd> next match · <kbd>⌘/</kbd> comment · <kbd>Esc</kbd> then <kbd>Tab</kbd> leaves the editor</p>
                     </div>
@@ -575,7 +575,7 @@
               <div class="form-group"><label for="catalog-category">Category</label><select id="catalog-category"><option value="all" selected>All</option></select></div>
               <span id="catalog-count" class="status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
-            <p class="notice">Use an expert or install a skill to change how the assistant works in chat. Connect a service to sign in to it from ScaleMax: the sign-in stays encrypted on this Mac, and services that list tools in chat can then be used by the assistant.</p>
+            <p class="notice">Use an expert or install a skill to change how the assistant works in chat. Connect a service to sign in to it from ScaleMax: the sign-in stays encrypted on this computer, and services that list tools in chat can then be used by the assistant.</p>
             <section class="catalog-section" aria-labelledby="experts-title">
               <div class="catalog-heading"><div><h2 id="experts-title">8 roles</h2></div><div class="catalog-heading-actions"><span class="small-label">Prompt context</span><button id="add-expert-btn" class="button secondary compact" type="button" aria-haspopup="dialog" aria-controls="custom-dialog">+ New expert</button></div></div>
               <div id="experts-grid" class="catalog-grid"></div>
@@ -691,12 +691,12 @@
                 </div>
                 <button id="sandbox-network-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="sandbox-network-label" aria-describedby="sandbox-network-desc"><span class="switch-thumb"></span></button>
               </div>
-              <p id="sandbox-unavailable" class="status-text" hidden>The sandbox needs macOS. Here the model's commands run without it.</p>
+              <p id="sandbox-unavailable" class="status-text" hidden>The sandbox needs macOS. Here the model's commands run without one, so ScaleMax asks before every command, whatever the permission mode.</p>
             </section>
             <!-- Hooks of the folder on screen and the user's own (src/hooks-ui.js; main runs them, lib/hooks.cjs). -->
             <section id="hooks-card" class="settings-card" aria-labelledby="hooks-title">
               <h2 id="hooks-title">Hooks</h2>
-              <p class="status-text">Commands you set up in .scalemax/settings.json to run before or after the assistant's tool calls (PreToolUse, PostToolUse), before a message goes out (UserPromptSubmit) and when a reply finishes (Stop). They run on your Mac, outside the sandbox. A project's own hooks run only after you allow them, and a changed set is asked about again.</p>
+              <p class="status-text">Commands you set up in .scalemax/settings.json to run before or after the assistant's tool calls (PreToolUse, PostToolUse), before a message goes out (UserPromptSubmit) and when a reply finishes (Stop). They run on this computer, outside the sandbox. A project's own hooks run only after you allow them, and a changed set is asked about again.</p>
               <div id="hooks-panel" class="hooks-panel"></div>
               <div class="button-row"><button id="hooks-refresh" class="button secondary" type="button">Refresh</button></div>
             </section>
@@ -711,6 +711,24 @@
               <p class="body-copy">API keys are protected separately in an encrypted secret store when available, or kept only for the current session. Messages and explicitly attached files are sent to the provider you configure.</p>
               <div class="button-row"><button id="export-data-btn" class="button secondary" type="button">Export local data</button></div>
             </section>
+            <!-- Updates (src/updates-ui.js, lib/updates.cjs): newer releases from GitHub. -->
+            <section class="settings-card updates-card" aria-labelledby="updates-title">
+              <h2 id="updates-title">Updates</h2>
+              <p id="updates-status" class="status-text" role="status" aria-live="polite">Version information is supplied by the app.</p>
+              <progress id="updates-progress" class="updates-progress" max="1" value="0" aria-label="Download progress" hidden></progress>
+              <div class="button-row">
+                <button id="updates-install" class="button primary" type="button" hidden>Update now</button>
+                <button id="updates-check" class="button secondary" type="button">Check for updates</button>
+                <button id="updates-page" class="button secondary" type="button" hidden>Release notes</button>
+              </div>
+              <div class="preference-row">
+                <div class="form-group preference-text">
+                  <label id="updates-auto-label" for="updates-auto-toggle">Check for updates automatically</label>
+                  <p id="updates-auto-desc" class="status-text">Asks GitHub at launch and every six hours. GitHub sees this computer's address and the version number, nothing else.</p>
+                </div>
+                <button id="updates-auto-toggle" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="updates-auto-label" aria-describedby="updates-auto-desc"><span class="switch-thumb"></span></button>
+              </div>
+            </section>
             <section class="settings-card about-card" aria-labelledby="about-title">
               <span class="brand-mark" aria-hidden="true"><svg focusable="false" viewBox="0 -1 22 22" fill="none"><path d="M11 .9 12.8 2v2.1L11 5.1 9.2 4.1V2L11 .9Z" fill="currentColor"/><path d="M11 5v1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="1.6" y="9.6" width="2.5" height="5.4" rx="1.25" fill="currentColor"/><rect x="17.9" y="9.6" width="2.5" height="5.4" rx="1.25" fill="currentColor"/><path fill="currentColor" fill-rule="evenodd" d="M8.6 6.4h4.8a4.6 4.6 0 0 1 4.6 4.6v3.1a4.6 4.6 0 0 1-4.6 4.6H8.6A4.6 4.6 0 0 1 4 14.1V11a4.6 4.6 0 0 1 4.6-4.6Zm.5 2.6h3.8a3.1 3.1 0 0 1 0 6.2H9.1a3.1 3.1 0 0 1 0-6.2Z"/><rect x="8.2" y="10.4" width="1.9" height="3.2" rx=".95" fill="currentColor"/><rect x="11.9" y="10.4" width="1.9" height="3.2" rx=".95" fill="currentColor"/></svg></span>
               <div><h2 id="about-title">ScaleMax</h2><p class="body-copy">A focused place for local work and provider-powered AI.</p><p id="about-version" class="status-text" role="status" aria-live="polite">Version information is supplied by the app.</p></div>
@@ -723,6 +741,7 @@
     <footer id="statusbar">
       <span id="statusbar-provider" class="statusbar-item" role="status" aria-live="polite" aria-atomic="true">Provider not configured</span>
       <span class="statusbar-spacer"></span>
+      <button id="statusbar-update" class="statusbar-item statusbar-update" type="button" hidden>Update available</button>
       <span id="statusbar-model" class="statusbar-item">No model</span>
     </footer>
   </div>
@@ -860,7 +879,7 @@
         <div class="form-group"><label for="mcp-transport">Transport</label><select id="mcp-transport"><option value="stdio" selected>Local command (stdio)</option><option value="http">Remote URL (Streamable HTTP)</option></select></div>
       </div>
       <div data-mcp-field="stdio">
-        <p class="notice warning-notice">A local server runs this command on your Mac with your user permissions. Only add servers you trust.</p>
+        <p class="notice warning-notice">A local server runs this command on this computer with your user permissions. Only add servers you trust.</p>
         <div class="form-group"><label for="mcp-command">Command</label><input id="mcp-command" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="npx" /></div>
         <div class="form-group"><label for="mcp-args">Arguments <span class="small-label">one per line</span></label><textarea id="mcp-args" rows="3" spellcheck="false" autocapitalize="off" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/Users/you/project"></textarea></div>
         <div class="form-group"><label for="mcp-cwd">Working directory <span class="small-label">optional, absolute path</span></label><input id="mcp-cwd" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" /></div>
@@ -901,7 +920,7 @@
         <p class="body-copy">ScaleMax switches to autonomous mode. Every tool call the model makes runs immediately, without asking you first.</p>
         <ul class="consent-list">
           <li>Connected services can be changed: issues, pages, files, messages, deployments.</li>
-          <li>Local MCP servers run their tools with your Mac user's permissions.</li>
+          <li>Local MCP servers run their tools with your user account's permissions.</li>
           <li>Tool results can contain instructions from third parties, and the model may follow them.</li>
         </ul>
         <p class="body-copy">You can switch back to Manual or Basic at any time.</p>
@@ -1021,7 +1040,7 @@
       <div><span id="hooks-dialog-folder" class="dialog-context">Hooks</span><h2 id="hooks-dialog-title">Allow this project's hooks?</h2></div>
     </div>
     <div class="dialog-body">
-      <p id="hooks-dialog-description" class="body-copy">This folder's .scalemax/settings.json asks ScaleMax to run these commands on your Mac, outside the sandbox, around the assistant's tool calls and replies. Allow them only if you trust this project. They are asked about again whenever they change.</p>
+      <p id="hooks-dialog-description" class="body-copy">This folder's .scalemax/settings.json asks ScaleMax to run these commands on this computer, outside the sandbox, around the assistant's tool calls and replies. Allow them only if you trust this project. They are asked about again whenever they change.</p>
       <ul id="hooks-dialog-list" class="hooks-list"></ul>
       <div class="button-row consent-actions">
         <button id="hooks-dialog-deny" class="button secondary" type="button">Not now</button>

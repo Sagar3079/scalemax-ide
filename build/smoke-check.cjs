@@ -10,6 +10,14 @@ const os = require('node:os');
 const path = require('node:path');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Whether this computer has the command sandbox (macOS); its checks run only there.
+const SANDBOXED = require('../lib/sandbox.cjs').available();
+
+// Windows keeps a folder busy while the app still has it open (EBUSY): cleanup tries a few times
+// and is best effort, so it never ends the check.
+function removeDir(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* best effort */ }
+}
 
 const FAKE_MCP_SERVER = path.join(__dirname, '..', 'test', 'fixtures', 'fake-mcp-server.cjs');
 // The smoke run's app data (main.js): the sandbox keeps the model's commands out of it.
@@ -146,7 +154,7 @@ function stubReply(body) {
     return {
       role: 'assistant',
       content: 'Running it now.',
-      tool_calls: [{ id: 'call_smoke_run', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: 'printf smoke-run-a; sleep 1.2; printf smoke-run-b' }) } }],
+      tool_calls: [{ id: 'call_smoke_run', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: process.platform === 'win32' ? '<nul set /p =smoke-run-a& ping -n 3 127.0.0.1 >nul& <nul set /p =smoke-run-b' : 'printf smoke-run-a; sleep 1.2; printf smoke-run-b' }) } }],
     };
   }
   // Background commands and the sandbox: a command that keeps running and answers what is typed
@@ -156,7 +164,7 @@ function stubReply(body) {
     return {
       role: 'assistant',
       content: 'Starting it in the background.',
-      tool_calls: [{ id: 'call_smoke_job', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: 'echo job-ready; while read line; do echo "job got $line"; done', background: true, wait_seconds: 2 }) } }],
+      tool_calls: [{ id: 'call_smoke_job', type: 'function', function: { name: 'workspace_run', arguments: JSON.stringify({ command: process.platform === 'win32' ? 'echo job-ready& node -e "require(\'readline\').createInterface({ input: process.stdin }).on(\'line\', (line) => console.log(\'job got \' + line))"' : 'echo job-ready; while read line; do echo "job got $line"; done', background: true, wait_seconds: 2 }) } }],
     };
   }
   if (run && typeof last.content === 'string' && (last.content.includes('read app data') || last.content.includes('leave the sandbox'))) {
@@ -461,20 +469,35 @@ async function run(win) {
   }
 
   let e2e = null;
-  const wsToolsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-ws-tools-'));
+  const wsToolsDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-ws-tools-'));
   fs.writeFileSync(path.join(wsToolsDir, 'smoke-note.txt'), 'note');
   // Two more folders for replies that run at the same time.
-  const parDirA = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-a-'));
-  const parDirB = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-par-b-'));
+  const parDirA = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-par-a-'));
+  const parDirB = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-par-b-'));
   fs.writeFileSync(path.join(parDirB, 'b-note.txt'), 'line one\nline two\n');
   // A folder for background commands and the sandbox.
-  const jobsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-jobs-'));
+  const jobsDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-jobs-'));
   // A folder for feature specs, and an untouched one for Plan permission.
-  const specsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-specs-'));
-  const planDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-plan-'));
+  const specsDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-specs-'));
+  const planDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-plan-'));
   try {
-    e2e = await win.webContents.executeJavaScript(`(async () => {
+    // Inside a try in the page, so a failure reports its stack: its line N is the Nth line from
+    // the next one.
+    e2e = await win.webContents.executeJavaScript(`(async () => { try { return await (async () => {
       const api = window.scalemaxAPI;
+      // Without a sandbox (Windows) every command asks. A command prompt no flow answers itself
+      // (on a Mac it would not have asked) is answered after 1.5 s, as a user would, so each flow
+      // goes on as it does there; the flows that test a prompt answer it first.
+      if (${JSON.stringify(!SANDBOXED)}) {
+        let askedAt = 0;
+        setInterval(() => {
+          const asking = document.querySelector('#tool-approval-dialog')?.open
+            && /no sandbox for the model's commands/.test(document.querySelector('#approval-summary')?.textContent || '');
+          if (!asking) { askedAt = 0; return; }
+          if (!askedAt) askedAt = Date.now();
+          else if (Date.now() - askedAt > 1500) { document.querySelector('#approval-once')?.click(); askedAt = 0; }
+        }, 100);
+      }
       const setValue = (selector, value) => {
         const node = document.querySelector(selector);
         node.value = value;
@@ -901,12 +924,19 @@ async function run(win) {
       const specProgressBefore = document.querySelector('#specs-progress')?.textContent || '';
       const specRequirementsShown = (document.querySelector('#specs-doc .specs-markdown')?.textContent || '').includes('I can work offline');
       // The task list has real checkboxes, one already ticked by the model; the user ticks another.
-      Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).find((tab) => tab.dataset.doc === 'tasks')?.click();
-      const specTaskRows = await until(() => document.querySelectorAll('#specs-doc .specs-task').length === 3, 4000)
+      // The Tasks tab is chosen again until its list shows: the dialog may still be loading the
+      // documents when it is first clicked.
+      const tasksTab = () => Array.from(document.querySelectorAll('#specs-tabs .specs-tab')).find((tab) => tab.dataset.doc === 'tasks');
+      const specTaskRows = await until(() => {
+        if (document.querySelectorAll('#specs-doc .specs-task').length === 3) return true;
+        if (tasksTab() && tasksTab().getAttribute('aria-selected') !== 'true') tasksTab().click();
+        return false;
+      }, 8000)
         ? Array.from(document.querySelectorAll('#specs-doc .specs-task')).map((row) =>
           (row.querySelector('input').checked ? 'x' : '-') + row.querySelector('.specs-task-text').textContent).join('|')
         : 'unexpected task rows';
-      document.querySelectorAll('#specs-doc .specs-task input')[1].click();
+      // Optional: without the rows the spec checks fail on their own instead of ending the run.
+      document.querySelectorAll('#specs-doc .specs-task input')[1]?.click();
       const specProgressAfter = await until(() => (document.querySelector('#specs-progress')?.textContent || '') === '2/3 tasks done', 6000)
         ? '2/3 tasks done' : (document.querySelector('#specs-progress')?.textContent || '');
       // "Work on the open tasks" seeds the message box instead of acting behind the model's back,
@@ -1299,7 +1329,11 @@ async function run(win) {
         oauthNoLoopbackRefused: Boolean(oauthNoLoopback && !oauthNoLoopback.ok && /HTTPS redirects/.test(oauthNoLoopback.error.message)),
         oauthForgotten: Boolean(oauthForgot && oauthForgot.ok && oauthForgot.data.clientForgotten === true),
       };
-    })()`);
+    })(); } catch (error) { return { e2eFailedAt: String((error && error.stack) || error) }; } })()`);
+    if (e2e && e2e.e2eFailedAt) {
+      errors.push(`e2e failed: ${e2e.e2eFailedAt.slice(0, 800)}`);
+      e2e = null;
+    }
   } catch (error) {
     errors.push(`e2e failed: ${error.message}`);
   }
@@ -1332,7 +1366,7 @@ async function run(win) {
     try { return fs.readdirSync(path.join(specsDir, '.scalemax', 'specs', 'offline-sync')).sort().join(','); } catch { return null; }
   })();
   const plannedOnDisk = fs.existsSync(path.join(planDir, 'planned.md'));
-  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir, specsDir, planDir]) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of [wsToolsDir, parDirA, parDirB, jobsDir, specsDir, planDir]) removeDir(dir);
   await new Promise((resolve) => server.close(resolve));
 
   // Automation creation must capture the weekday/month inputs and schedule a next run.
@@ -1372,7 +1406,7 @@ async function run(win) {
 
   // Workspace round-trip against a throwaway folder.
   let workspace = null;
-  const wsDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scalemax-ws-'));
+  const wsDir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'scalemax-ws-'));
   fs.writeFileSync(path.join(wsDir, 'hello.txt'), 'hello world');
   try {
     workspace = await win.webContents.executeJavaScript(`(async () => {
@@ -1385,7 +1419,7 @@ async function run(win) {
       const written = await api.workspace.write({ path: 'hello.txt', content: 'updated content', revision: read.data.revision });
       const after = await api.workspace.read('hello.txt');
       const git = await api.workspace.gitStatus();
-      const terminal = await api.workspace.run({ command: 'printf terminal-ok' });
+      const terminal = await api.workspace.run({ command: ${JSON.stringify(process.platform === 'win32' ? 'echo terminal-ok' : 'printf terminal-ok')} });
       const { default: app } = await import('./app.js');
       await app.openWorkspaceAt(${JSON.stringify(wsDir)});
       await app.openFile('hello.txt');
@@ -1407,7 +1441,7 @@ async function run(win) {
   } catch (error) {
     errors.push(`workspace check failed: ${error.message}`);
   }
-  fs.rmSync(wsDir, { recursive: true, force: true });
+  removeDir(wsDir);
 
   // Opt-in live check against the real ScaleMax API. The key is supplied by the
   // environment and never stored in the repository.
@@ -1579,15 +1613,18 @@ async function run(win) {
     // A background command: started by the model (in the sandbox, after the prompt said so), it
     // outlives the reply; the window shows it, its output and what is typed into it, and stops it.
     backgroundJob: Boolean(e2e && /Background command j\d+: echo job-ready/.test(e2e.jobText) && /running for/.test(e2e.jobText)
-      && /in the sandbox/.test(e2e.jobText) && /job-ready/.test(e2e.jobText) && e2e.jobListedCount >= 1
-      && /keeps running in the background/.test(e2e.jobApproval) && /It runs in the sandbox/.test(e2e.jobApproval)),
-    jobsWindow: Boolean(e2e && e2e.jobBar && e2e.jobDialogOutput && /in the sandbox/.test(e2e.jobWhere) && e2e.jobTyped
+      && (!SANDBOXED || /in the sandbox/.test(e2e.jobText)) && /job-ready/.test(e2e.jobText) && e2e.jobListedCount >= 1
+      && /keeps running in the background/.test(e2e.jobApproval) && (SANDBOXED ? /It runs in the sandbox/ : /no sandbox/).test(e2e.jobApproval)),
+    jobsWindow: Boolean(e2e && e2e.jobBar && e2e.jobDialogOutput && (!SANDBOXED || /in the sandbox/.test(e2e.jobWhere)) && e2e.jobTyped
       && e2e.jobStopped && /^Stopped/.test(e2e.jobStateText) && e2e.jobInputOff && e2e.jobBarGone),
     // In the sandbox a command cannot read ScaleMax's data, and the model hears what it allows.
-    sandboxRefusal: Boolean(e2e && /operation not permitted/i.test(e2e.refusalText) && /sandbox: false/.test(e2e.refusalText)),
-    // Leaving the sandbox asks even in Bypass, one call at a time, and then works.
-    unsandboxedAsks: Boolean(e2e && e2e.outsideAsked && e2e.outsideTitle === 'Run this command outside the sandbox?'
-      && /outside the sandbox/.test(e2e.outsideSummary) && e2e.outsideAllHidden && /outside-ok/.test(e2e.outsideText)),
+    // The sandbox is macOS's: elsewhere (Windows) there is none to refuse or to leave.
+    ...(SANDBOXED ? {
+      sandboxRefusal: Boolean(e2e && /operation not permitted/i.test(e2e.refusalText) && /sandbox: false/.test(e2e.refusalText)),
+      // Leaving the sandbox asks even in Bypass, one call at a time, and then works.
+      unsandboxedAsks: Boolean(e2e && e2e.outsideAsked && e2e.outsideTitle === 'Run this command outside the sandbox?'
+        && /outside the sandbox/.test(e2e.outsideSummary) && e2e.outsideAllHidden && /outside-ok/.test(e2e.outsideText)),
+    } : {}),
     // Usage/provider cost persist on a reply; exact /compact never becomes a user/model prompt,
     // and automatic compaction uses the published context limit before a normal send.
     usageAndCompaction: Boolean(e2e && e2e.manualCompacted && e2e.slashNotSaved && /^Stub summary:/.test(e2e.manualSummary)

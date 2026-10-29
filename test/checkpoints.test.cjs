@@ -10,8 +10,8 @@ const { createCheckpoints } = require('../lib/checkpoints.cjs');
 
 // A project with two files, an open workspace session on it, and a checkpoint store.
 async function setup(t, { now } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-project-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-project-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-store-')));
   t.after(() => {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(store, { recursive: true, force: true });
@@ -55,8 +55,8 @@ test('a reply records the first version before and the last after, with line cou
   assert.deepEqual(checkpoints.summary('chat-task-1-100'), summary, 'the same summary is read back from disk');
   // Stored privately, never inside the project.
   const saved = path.join(store, 'chat-task-1-100');
-  assert.equal(fs.statSync(saved).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.join(saved, 'meta.json')).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(saved).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(saved, 'meta.json')).mode & 0o777, 0o600);
   assert.equal(JSON.stringify(summary).includes(root), false, 'the window never gets the absolute folder');
   assert.deepEqual(checkpoints.folderOf('chat-task-1-100'), { path: root, name: path.basename(root) });
 });
@@ -218,8 +218,8 @@ test('two sessions never both change the same version of a file', async (t) => {
 });
 
 test('a session ended while a new file was being written still reports and records it', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-cp-late-store-')));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); });
   let release;
   const held = new Promise((resolve) => { release = resolve; });

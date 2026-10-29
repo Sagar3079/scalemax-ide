@@ -752,7 +752,7 @@ function renderEmptyState(app) {
   setText('#workspace-empty-title', hasRoot ? 'Select a file' : 'Open a project folder');
   setText('#workspace-empty-text', hasRoot
     ? 'Choose a file in the explorer. Files open in tabs and keep unsaved edits while you switch.'
-    : 'Browse files, edit with tabs, review Git changes and run commands, all on this Mac.');
+    : 'Browse files, edit with tabs, review Git changes and run commands, all on this computer.');
   const open = $('#workspace-open-empty');
   if (open) open.hidden = hasRoot;
 }

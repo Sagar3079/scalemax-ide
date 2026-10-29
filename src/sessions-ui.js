@@ -17,9 +17,10 @@ import {
 } from './sessions.mjs';
 import { taskTime, plainPreview, taskTitleParts } from './domain.mjs';
 import { reloadTabs } from './workspace-ui.js';
+import { keyLabel } from './shortcuts.mjs';
 
 const $ = (selector) => document.querySelector(selector);
-const SHORTCUT = '⌘⇧O';
+
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -414,5 +415,5 @@ export function bindSessionsUi(app) {
   $('#export-transcript-btn')?.addEventListener('click', () => void exportTranscript(app));
   // ⌘⇧O (Ctrl+Shift+O elsewhere) opens it from anywhere: src/shortcuts.mjs, run by src/app.js.
   const button = $('#sessions-btn');
-  if (button) button.title = `Recent sessions (${SHORTCUT})`;
+  if (button) button.title = `Recent sessions (${keyLabel({ mod: true, shift: true, key: 'O' }, { mac: app.isMac?.() !== false })})`;
 }

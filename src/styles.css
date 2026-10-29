@@ -542,6 +542,11 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+/* Off a Mac the window has the system's own frame, so no traffic lights sit over the bar. */
+:root[data-platform="other"] #titlebar {
+  padding-left: 12px;
+}
+
 .titlebar-btn {
   width: 28px;
   height: 28px;
@@ -1899,6 +1904,61 @@ input[type="range"] {
 
 .about-card h2 {
   margin-bottom: 4px;
+}
+
+/* Updates: the status line, a thin download bar, the buttons, then the automatic-check switch. */
+.updates-card .button-row {
+  margin-top: 12px;
+}
+
+.updates-card .preference-row {
+  margin-top: 16px;
+  border-top: 1px solid var(--riso-rule);
+}
+
+.updates-progress {
+  display: block;
+  width: 100%;
+  max-width: 400px;
+  height: 4px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 0;
+  background: var(--riso-rule);
+  appearance: none;
+}
+
+.updates-progress[hidden] {
+  display: none;
+}
+
+.updates-progress::-webkit-progress-bar {
+  background: var(--riso-rule);
+}
+
+.updates-progress::-webkit-progress-value {
+  background: var(--riso-blue);
+}
+
+/* The status bar's update notice: a quiet text button in the bar's own type. */
+.statusbar-update {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--riso-blue);
+  cursor: pointer;
+}
+
+.statusbar-update:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.statusbar-update:focus-visible {
+  outline: 2px solid var(--riso-blue);
+  outline-offset: 0;
 }
 
 /* ------------------------------------------------------------------ */

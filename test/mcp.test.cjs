@@ -429,7 +429,7 @@ test('listTools follows nextCursor pagination', async (t) => {
   assert.equal(mcp.list()[0].toolCount, 2);
 });
 
-test('passes the merged environment and extends PATH on macOS only', async (t) => {
+test('passes the merged environment and extends PATH on macOS only', { skip: process.platform === 'win32' && 'spawns as macOS and Linux would' }, async (t) => {
   const darwin = makeManager({ env: { PATH: '/usr/bin:/bin', HOME: '/private/tmp' }, platform: 'darwin' });
   t.after(() => darwin.mcp.closeAll());
   darwin.mcp.save(stdioInput({ env: { FAKE_MCP_ECHO_PREFIX: 'prefix-from-env:' } }));
@@ -502,7 +502,7 @@ test('a stdout line over 4 MiB is dropped: only the request it answered fails, t
   assert.equal(mcp.list()[0].connected, true);
 });
 
-test('closeAll waits for servers that were already evicted, through SIGTERM then SIGKILL', async () => {
+test('closeAll waits for servers that were already evicted, through SIGTERM then SIGKILL', { skip: process.platform === 'win32' && 'POSIX signals' }, async () => {
   const { mcp, pids } = makeManager();
   mcp.save(stdioInput({ env: { FAKE_MCP_STUBBORN: '1' } }));
   await mcp.listTools({ id: 'fake' });
@@ -1275,7 +1275,7 @@ test('the model gets two read-only resource tools, limited to what each server l
 });
 
 test('a server that hangs is left out of the reply after the wait, and is not waited for again', async (t) => {
-  const { mcp } = makeManager({ toolsWaitMs: 300 });
+  const { mcp } = makeManager({ toolsWaitMs: 1000 });
   t.after(() => mcp.closeAll());
   mcp.save(stdioInput());
   mcp.save(stdioInput({ name: 'Stuck', env: { FAKE_MCP_HANG: 'initialize' } }));

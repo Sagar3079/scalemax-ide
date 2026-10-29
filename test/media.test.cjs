@@ -102,7 +102,7 @@ test('images: base64 and URL results are stored, typed by content, and the sourc
   assert.deepEqual(image, { id: 'm-0000000000000000', kind: 'image', mime: 'image/png', model: 'gpt-image-2', source: 'generated' });
   assert.deepEqual(progress, ['starting', 'downloading']);
   assert.deepEqual(fs.readFileSync(media.filePath(image.id)), PNG);
-  assert.equal(fs.statSync(path.join(dir, `${image.id}.png`)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, `${image.id}.png`)).mode & 0o777, 0o600);
 
   const edited = await media.generate({ requestId: 'g2', kind: 'image', model: 'gpt-image-2', prompt: 'make it blue', mode: 'edit', sourceId: image.id });
   const edit = provider.calls.find((call) => call.target === 'images/edits');

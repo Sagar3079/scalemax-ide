@@ -41,7 +41,7 @@ test('@-mentions find files by name: name matches first, then path, then letters
 });
 
 test('the finder walks the open folder through the workspace guards and skips build folders', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-find-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-find-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const file of ['src/app.js', 'src/deep/util.js', 'node_modules/pkg/index.js', 'dist/app.js', '.env', 'README.md']) {
     fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });

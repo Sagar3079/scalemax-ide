@@ -1,0 +1,10 @@
+# Text files keep LF line endings in every checkout, Windows included (tests compare bytes,
+# and the shell scripts in build/ must stay runnable). Binary files are never touched.
+* text=auto eol=lf
+*.png binary
+*.icns binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

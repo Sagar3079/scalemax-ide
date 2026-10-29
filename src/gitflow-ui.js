@@ -1041,7 +1041,7 @@ function renderWorktreeBar(app) {
     menu.setAttribute('aria-label', 'More worktree actions');
     menu.hidden = !menuOpen;
     for (const item of [
-      worktreeAction('Show in Finder', 'reveal', worktree.path),
+      worktreeAction(globalThis.window?.scalemaxAPI?.getPlatform?.() === 'win32' ? 'Show in File Explorer' : 'Show in Finder', 'reveal', worktree.path),
       ...(worktree.base ? [worktreeAction(`Merge into ${worktree.base}`, 'merge', `Merge ${worktree.branch} into ${worktree.base} in "${worktree.mainName}"`)] : []),
       worktreeAction('Remove worktree', 'remove', `Delete this worktree's folder (the branch ${worktree.branch} is kept)`),
     ]) {

@@ -34,12 +34,12 @@ test('keeps one key in a file only this account can read, and reuses it after a 
   const keyFile = tempKeyFile(t);
   const value = createLocalSecrets({ keyFile }).encryptString('token');
   assert.equal(fs.statSync(keyFile).size, 32);
-  assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
   assert.equal(createLocalSecrets({ keyFile }).decryptString(value), 'token');
   // A key file someone opened up is closed again.
   fs.chmodSync(keyFile, 0o644);
   createLocalSecrets({ keyFile }).decryptString(value);
-  assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
 });
 
 test('a value from another key, a changed value or a foreign value is refused', (t) => {

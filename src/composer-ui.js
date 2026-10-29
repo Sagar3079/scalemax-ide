@@ -10,6 +10,8 @@ import {
   modeInfo, modeSummary, normalizeMode,
 } from './domain.mjs';
 
+// Where a file is shown: the Finder on a Mac, File Explorer on Windows.
+const FILE_MANAGER = globalThis.window?.scalemaxAPI?.getPlatform?.() === 'win32' ? 'File Explorer' : 'the Finder';
 const $ = (selector) => document.querySelector(selector);
 const PERMISSION_LABELS = { plan: 'Plan', manual: 'Manual', basic: 'Basic', bypass: 'Bypass all' };
 // What each permission means, in plain words, for the chip's tooltip and description.
@@ -833,6 +835,7 @@ function argumentReader(request) {
 export function approvalTitle(request) {
   if (request.reason === 'unsandboxed-input') return 'Type into this command outside the sandbox?';
   if (request.reason === 'unsandboxed') return 'Run this command outside the sandbox?';
+  if (request.reason === 'no-sandbox') return 'Run this command?';
   if (request.reason === 'egress') return request.host ? `Open an address on ${request.host}?` : 'Open an address?';
   if (request.kind === 'agents') return 'Hand this to a subagent?';
   const args = argumentReader(request);
@@ -866,7 +869,7 @@ export function approvalTitle(request) {
         const target = args.string('path') ? path : text('url');
         return target ? `Open ${target}?` : 'Open something on your computer?';
       }
-      case 'reveal': return path ? `Show ${path} in the Finder?` : 'Show a file in the Finder?';
+      case 'reveal': return path ? `Show ${path} in ${FILE_MANAGER}?` : `Show a file in ${FILE_MANAGER}?`;
       default: break;
     }
   }
@@ -1009,7 +1012,8 @@ export function approvalPreview(request) {
         const timeout = args.flag('timeout_seconds');
         const notes = [
           request.folderName ? `In the folder "${request.folderName}"` : '',
-          request.reason === 'unsandboxed' ? 'Outside the sandbox' : COMMAND_SANDBOX[request.sandbox] || '',
+          request.reason === 'unsandboxed' ? 'Outside the sandbox'
+            : request.reason === 'no-sandbox' ? 'No sandbox on this computer' : COMMAND_SANDBOX[request.sandbox] || '',
           args.flag('background') === true ? 'Keeps running in the background' : '',
           args.flag('tty') === true ? 'In a terminal' : '',
           Number.isFinite(timeout) ? `Time limit ${timeout} s` : '',
@@ -1068,7 +1072,7 @@ const COMPUTER_SUMMARIES = {
   read_clipboard: 'The model wants to read what is on your clipboard. It may hold a password or other private text, so ScaleMax always asks first.',
   write_clipboard: 'The model wants to put text on your clipboard, replacing what is on it now.',
   open: 'The model wants to open something in the app that owns it.',
-  reveal: 'The model wants to show a file of your project in the Finder.',
+  reveal: `The model wants to show a file of your project in ${FILE_MANAGER}.`,
 };
 export function approvalSummary(request) {
   // Handing work to a subagent (lib/subagents.cjs; it asks in Manual): its own calls ask too.
@@ -1081,13 +1085,18 @@ export function approvalSummary(request) {
   }
   if (request.kind === 'workspace') {
     const where = request.folderName ? `the folder "${request.folderName}"` : 'your workspace folder';
+    // No sandbox on this computer (Windows): every command asks, in every permission mode.
+    if (request.reason === 'no-sandbox') {
+      const background = argumentReader(request).flag('background') === true;
+      return `${WORKSPACE_SUMMARIES.run_command(where, { background })} This computer has no sandbox for the model's commands, so it can change any of your files, read your credentials and use the network. ScaleMax asks about every command here, whatever the permission mode.`;
+    }
     if (request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input') {
       const action = request.reason === 'unsandboxed-input' ? 'type into a command' : 'run a command';
       return `The model wants to ${action} in ${where} outside the sandbox. There it can change any of your files, read credential folders such as ~/.ssh and use the network. ScaleMax asks about this every time, whatever the permission mode.`;
     }
     // The hooks settings: commands that run on this Mac outside the sandbox (lib/hooks.cjs).
     if (request.reason === 'hooks-config') {
-      return `The model wants to change .scalemax/settings.json in ${where}, where hooks are set up: commands ScaleMax runs on your Mac, outside the sandbox. ScaleMax asks about this every time, whatever the permission mode, and changed project hooks wait for your approval before they run.`;
+      return `The model wants to change .scalemax/settings.json in ${where}, where hooks are set up: commands ScaleMax runs on this computer, outside the sandbox. ScaleMax asks about this every time, whatever the permission mode, and changed project hooks wait for your approval before they run.`;
     }
     const summary = WORKSPACE_SUMMARIES[request.toolName];
     if (!summary) return `The model wants to read files in ${where}.`;
@@ -1193,7 +1202,7 @@ function renderApproval(request) {
   // time; an address the model made up can be allowed for its site, for the rest of this reply.
   const egress = request.reason === 'egress' && Boolean(request.host);
   const always = Boolean(request.reason) && !egress;
-  const outside = request.reason === 'unsandboxed' || request.reason === 'unsandboxed-input';
+  const outside = ['unsandboxed', 'unsandboxed-input', 'no-sandbox'].includes(request.reason);
   setText('#approval-title', approvalTitle(request));
   setText('#approval-summary', approvalSummary(request));
   const preview = approvalPreview(request);
@@ -1317,7 +1326,7 @@ export function bindApprovals(app) {
       folderName: shownFolderName(app, request),
       // Why it always asks ('unsandboxed', 'egress', or another reason main gives), and how a command runs.
       reason: typeof request.reason === 'string' && request.reason
-        ? (['unsandboxed', 'unsandboxed-input', 'egress', 'private', 'hooks-config'].includes(request.reason) ? request.reason : 'required') : '',
+        ? (['unsandboxed', 'unsandboxed-input', 'no-sandbox', 'egress', 'private', 'hooks-config'].includes(request.reason) ? request.reason : 'required') : '',
       host: typeof request.host === 'string' ? request.host.slice(0, 255) : '',
       claimsReadOnly: request.claimsReadOnly === true,
       sandbox: ['on', 'offline', 'off'].includes(request.sandbox) ? request.sandbox : '',

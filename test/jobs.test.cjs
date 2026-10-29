@@ -15,8 +15,8 @@ const mac = process.platform === 'darwin';
 const macSandbox = { skip: !sandbox.available() && 'needs macOS sandbox-exec' };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function folder(t, prefix = 'sm-jobs-') {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   return root;
 }
 function manager(t) {
@@ -194,7 +194,7 @@ test('inside the sandbox: a command can signal what it started, and nothing else
   }
 });
 
-test('a background job runs, is read from offsets, waits, and ends with its code', async (t) => {
+test('a background job runs, is read from offsets, waits, and ends with its code', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const root = folder(t);
   const jobs = manager(t);
   const job = jobs.start({ root, command: 'echo first; sleep 0.3; echo second; exit 3' });
@@ -280,7 +280,7 @@ test('a terminal command reports its process group once, before the command runs
   assert.match(shellArgv('x', { platform: 'darwin', tty: true })[3], /print -r -- \$\$ >&3; \} 2>\/dev\/null; exec 3>&-; .*eval "\$1"/);
 });
 
-test('a job ends when its command ends, even if it left a program behind', async (t) => {
+test('a job ends when its command ends, even if it left a program behind', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const root = folder(t);
   const jobs = manager(t);
   const job = jobs.start({ root, command: 'sleep 30 & echo started' });
@@ -394,7 +394,7 @@ test('the model starts a background command, reads new output, types into it and
   assert.equal(tool.describeCall('run_command', { command: 'npm run dev', background: true }), 'Started npm run dev in the background');
 });
 
-test('waiting for output returns as soon as it comes; a failing background command reports it', async (t) => {
+test('waiting for output returns as soon as it comes; a failing background command reports it', { skip: !mac && 'POSIX shell commands' }, async (t) => {
   const { tools: tool } = await tools(t);
   const started = await tool.call('run_command', { command: 'sleep 0.5; echo late', background: true, wait_seconds: 0 });
   const id = /Background command (j\d+)/.exec(started.text)[1];
@@ -417,7 +417,7 @@ test('with the sandbox on, the tools say so and outside-sandbox jobs always ask 
   const target = boxed.resolve('workspace_run');
   assert.equal(target.alwaysAsk({ command: 'x', sandbox: false }), 'unsandboxed');
   assert.equal(target.alwaysAsk({ command: 'x' }), '');
-  const outsideJob = jobs.start({ root, command: 'sleep 30' });
+  const outsideJob = jobs.start({ root, command: mac ? 'sleep 30' : 'ping -n 30 127.0.0.1 >nul' });
   const jobInput = boxed.resolve('workspace_job_input');
   assert.equal(jobInput.alwaysAsk({ job: outsideJob.id, text: 'anything' }), 'unsandboxed-input');
   assert.equal(jobInput.alwaysAsk({ job: 'j999', text: 'anything' }), '');
@@ -427,6 +427,21 @@ test('with the sandbox on, the tools say so and outside-sandbox jobs always ask 
   assert.equal(open.parameters.properties.sandbox, undefined);
   assert.equal(plain.resolve('workspace_run').alwaysAsk({ sandbox: false }), '');
   for (const definition of boxed.definitions()) assert.ok(definition.function.description.length <= 1024, definition.function.name);
+  // Ended before the folder is removed: Windows keeps a folder busy while a process works in it.
+  jobs.stop(outsideJob.id);
+  await until(() => jobs.list().every((job) => job.status !== 'running'));
+});
+
+test('on a computer without the sandbox (Windows) every command asks, whatever the setting', async (t) => {
+  const policy = { available: false, sandbox: false, network: true, appData: '/private/tmp/sm-no-such-appdata' };
+  const { tools: bare } = await tools(t, { policy });
+  const target = bare.resolve('workspace_run');
+  assert.equal(target.alwaysAsk({ command: 'dir' }), 'no-sandbox');
+  assert.equal(target.alwaysAsk({ command: 'dir', sandbox: false }), 'no-sandbox');
+  assert.equal(target.alwaysAsk('not arguments'), '');
+  // Switched off by the user on a Mac (the sandbox exists): their choice stands, as before.
+  const { tools: off } = await tools(t, { policy: { ...policy, available: true } });
+  assert.equal(off.resolve('workspace_run').alwaysAsk({ command: 'ls' }), '');
 });
 
 test('a sandboxed command that is refused tells the model what the sandbox allows', macSandbox, async (t) => {

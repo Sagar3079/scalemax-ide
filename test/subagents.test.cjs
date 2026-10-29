@@ -1,6 +1,11 @@
 'use strict';
 
 const test = require('node:test');
+// Retry waits and request timers are unref'd (they must not keep the app open). When one is all
+// that is left, Node 22 and older's test runner takes the event loop as finished and cancels the
+// rest of the file, so a timer keeps it running until the file's tests are done.
+const keepAlive = setInterval(() => {}, 60_000);
+test.after(() => clearInterval(keepAlive));
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -431,8 +436,8 @@ test('an address in a subagent\'s answer is its own writing, not a given one, fo
 });
 
 test('what a subagent changes is recorded with the reply\'s changes', async (t) => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-project-')));
-  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-store-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-project-')));
+  const store = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agents-store-')));
   t.after(() => {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(store, { recursive: true, force: true });
