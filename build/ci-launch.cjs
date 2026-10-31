@@ -11,21 +11,29 @@ const path = require('node:path');
 const PORT = 9339;
 const WAIT_MS = 60_000;
 
-async function pageState() {
+/** Runs `expression` in the app's page (DevTools on PORT): its value, or null without a page. */
+async function evaluate(expression, { awaitPromise = false } = {}) {
   const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
   const page = list.find((entry) => entry.type === 'page' && entry.url.endsWith('index.html'));
   if (!page) return null;
   const socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-  const expression = `({ ready: document.readyState, platform: document.documentElement.dataset.platform || '',
+  try {
+    const reply = await new Promise((resolve, reject) => {
+      socket.onmessage = (message) => resolve(JSON.parse(message.data));
+      socket.onclose = () => reject(new Error('The page closed before it answered'));
+      socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise } }));
+    });
+    return reply.result?.result?.value || null;
+  } finally {
+    socket.close();
+  }
+}
+
+function pageState() {
+  return evaluate(`({ ready: document.readyState, platform: document.documentElement.dataset.platform || '',
     title: document.title, provider: (document.querySelector('#provider-status') || {}).textContent || '',
-    views: document.querySelectorAll('.view').length })`;
-  const reply = await new Promise((resolve) => {
-    socket.onmessage = (message) => resolve(JSON.parse(message.data));
-    socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }));
-  });
-  socket.close();
-  return reply.result?.result?.value || null;
+    views: document.querySelectorAll('.view').length })`);
 }
 
 async function main(executable) {
@@ -55,3 +63,5 @@ async function main(executable) {
 if (require.main === module) {
   main(process.argv[2]).then(() => process.exit(0), (error) => { console.error(`[ci-launch] ${error.message}`); process.exit(1); });
 }
+
+module.exports = { PORT, evaluate, pageState, launch: main };

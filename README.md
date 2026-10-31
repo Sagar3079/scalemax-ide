@@ -182,6 +182,13 @@ Details:
 
 `.github/workflows/installer-check.yml` runs on pull requests that change how the installer is built (`package.json`, the lockfile, `build/build.cjs`), and by hand. On Windows it installs the new installer 25 times, each time as a first install (`build/ci-install-loop.ps1` removes the earlier install and its registry entries), and fails if one run doesn't install. Installers built with electron-builder before 26.12 crashed on some first installs (0xC0000005, electron-builder#9769): 9 of 25 for the beta 6 installer in this check, which a single install often misses. It runs the same loop on the installer of a release built with that bug, as a control.
 
+The same workflow checks updates (`build/ci-update-check.cjs`):
+- **Update now:** it installs the previous published release, starts it and clicks its own Update now, which downloads the newest release from GitHub, checks it and installs it, as it would for a user.
+- **This build:** it updates the newest release to the new installer with Update now's arguments (`/S --updated --force-run`).
+- **What fails it:** the new version not taking the old one's place, the user's files in `%APPDATA%\scalemax-ide` going missing, or the updated app not starting.
+
+After publishing a release, run the workflow by hand to try the real Update now against it.
+
 To release, push a tag such as `v1.0.0-beta.7` that matches `package.json`. CI then attaches both systems' files to that version's GitHub release, making a draft pre-release if there is none. Write the notes and publish it. Update now offers a release once it is published, and only a file whose SHA-256 GitHub lists.
 
 ## Authentication
@@ -205,9 +212,10 @@ The renderer never receives the key — only a `hasKey` flag crosses the bridge.
 scalemax-ide/
 ├── assets/               # icons and font files (shipped in the app)
 ├── .github/workflows/ci.yml # tests and builds on macOS and Windows; attaches release files on a v* tag
-├── .github/workflows/installer-check.yml # 25 first installs of the Windows installer when the build changes
+├── .github/workflows/installer-check.yml # Windows: 25 first installs, and updates from the last releases, when the build changes
 ├── build/                # build.cjs (npm run build / build:win), runtime check, smoke test and its CI runner,
 │                         # ci-launch.cjs (starts a packaged app), ci-install-loop.ps1 (repeated first installs),
+│                         # ci-update-check.cjs (updates an installed release on Windows),
 │                         # icon rendering, ad-hoc signing (after-pack.cjs)
 │   └── vendor-codemirror.cjs # regenerates src/vendor/codemirror.js from pinned versions
 ├── dist/                 # build output (generated)

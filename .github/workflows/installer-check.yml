@@ -5,6 +5,10 @@
 # - This build: fails if any run doesn't install.
 # - The baseline: a release built with the bug, only reported. Its crashes show that the check
 #   can catch this one.
+# - Updates (build/ci-update-check.cjs): the previous release's own Update now installs the newest
+#   release, the way users get it, and the newest release is updated to this build with Update
+#   now's arguments. Both fail if the new version isn't installed, the user's files are gone or
+#   the updated app doesn't start.
 name: Installer check
 
 on:
@@ -15,6 +19,8 @@ on:
       - build/build.cjs
       - build/after-pack.cjs
       - build/ci-install-loop.ps1
+      - build/ci-update-check.cjs
+      - build/ci-launch.cjs
       - .github/workflows/installer-check.yml
   workflow_dispatch:
     inputs:
@@ -52,6 +58,12 @@ jobs:
       - run: npm ci
       - name: Build
         run: node build/build.cjs --win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: dist/ScaleMax-IDE-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 1
       - name: Install it again and again
         shell: pwsh
         run: |
@@ -76,3 +88,65 @@ jobs:
         run: |
           $installer = Get-ChildItem baseline -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
           ./build/ci-install-loop.ps1 -Installer $installer.FullName -Runs $env:RUNS -Label "baseline $env:BASELINE_TAG"
+
+  update-releases:
+    name: Update now (previous release → newest release)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download the previous release's installer
+        id: releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Newest first: the published releases that have a Windows installer.
+          $releases = gh api "repos/$env:GITHUB_REPOSITORY/releases" | ConvertFrom-Json
+          $tags = @($releases | Where-Object { -not $_.draft -and ($_.assets.name -like 'ScaleMax-IDE-Setup-*.exe') } | ForEach-Object tag_name)
+          if ($tags.Count -lt 2) { throw 'This needs two published releases with a Windows installer' }
+          Write-Host "Updating $($tags[1]) to $($tags[0])"
+          gh release download $tags[1] --repo $env:GITHUB_REPOSITORY --pattern 'ScaleMax-IDE-Setup-*.exe' --dir older
+          Get-ChildItem older | Unblock-File
+          "expect=$($tags[0] -replace '^v', '')" >> $env:GITHUB_OUTPUT
+      - name: Update it with its own Update now
+        shell: pwsh
+        env:
+          EXPECT: ${{ steps.releases.outputs.expect }}
+        run: |
+          $older = Get-ChildItem older -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          node build/ci-update-check.cjs --from $older.FullName --expect $env:EXPECT
+
+  update-build:
+    name: Update (newest release → this build)
+    needs: new-build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: new
+      - name: Download the newest release's installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = gh api "repos/$env:GITHUB_REPOSITORY/releases" | ConvertFrom-Json
+          $newest = $releases | Where-Object { -not $_.draft -and ($_.assets.name -like 'ScaleMax-IDE-Setup-*.exe') } | Select-Object -First 1
+          Write-Host "Updating $($newest.tag_name) to this build"
+          gh release download $newest.tag_name --repo $env:GITHUB_REPOSITORY --pattern 'ScaleMax-IDE-Setup-*.exe' --dir older
+          Get-ChildItem older, new | Unblock-File
+      - name: Update it to this build
+        shell: pwsh
+        run: |
+          $older = Get-ChildItem older -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          $new = Get-ChildItem new -Filter 'ScaleMax-IDE-Setup-*.exe' | Select-Object -First 1
+          node build/ci-update-check.cjs --from $older.FullName --to $new.FullName --expect (node -p "require('./package.json').version")
