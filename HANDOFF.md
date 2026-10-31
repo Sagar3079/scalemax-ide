@@ -407,8 +407,8 @@ Never commit it or write it into packaged files. Provider endpoint: discover tri
 - **Editor**: no minimap, no language server (no go-to-definition or diagnostics), no split view; files over the workspace's 1 MiB read limit still don't open.
 - **Pictures are verified against the stub only.** Every ScaleMax chat model this key can use refuses pictures (HTTP 400 `image_input_unsupported`, checked 2026-10-01), so a real model reading a picture has not been observed; the refusal path is verified live.
 - **Windows (since 1.0.0-beta.6) is checked by CI only.** No one has used it on a real PC yet.
-  - **What CI covers:** on `windows-latest` it runs the unit tests and the smoke check, builds the NSIS installer, installs it silently and starts the installed app. When the build changes, `installer-check.yml` installs it 25 times as a first install (`build/ci-install-loop.ps1`).
-  - **Not tried on Windows:** a live provider, Git flows, MCP servers (the `.cmd` launching is unit-tested only), automations with the window closed, the uninstaller and an Update now install.
+  - **What CI covers:** on `windows-latest` it runs the unit tests and the smoke check, builds the NSIS installer, installs it silently and starts the installed app. When the build changes, `installer-check.yml` installs it 25 times as a first install (`build/ci-install-loop.ps1`). It also checks updates (`build/ci-update-check.cjs`): the previous release's own Update now installs the newest release, and the newest release is updated to the new build.
+  - **Not tried on Windows:** a live provider, Git flows, MCP servers (the `.cmd` launching is unit-tested only), automations with the window closed and the uninstaller. Update now installing an update has run in CI only (`installer-check.yml`), never on a real PC.
   - **Security:** there is no sandbox there, so every command asks (`'no-sandbox'`). The installer is unsigned, so SmartScreen warns; a code-signing service (Azure Trusted Signing) would stop that.
   - **Missing there:** the GitHub CLI auto-install is macOS-only, and there's no terminal (tty) mode.
 - **Update now on macOS only opens the .dmg** (`lib/updates.cjs`): Squirrel.Mac needs a Developer ID signature. With one, electron-updater's MacUpdater could install in place. The Windows path runs the NSIS installer with `/S --updated --force-run` and quits.
@@ -660,6 +660,19 @@ The user asked for a Mac `.dmg`, a PC `.exe` and an Update now button for later 
    - **Fix:** electron-builder 26.12 copies it with `lstrcpynW` (electron-builder#9769). This branch moves electron-builder from ^25.0.0 to ^26.18.0 (lockfile only here; the build config needed no changes) and adds `.github/workflows/installer-check.yml`, 25 first installs of the new build against 25 of the beta 6 installer.
    - **Proof (PR #9):** the beta 6 installer crashed on 9 of 25 first installs, every time at `System.dll`+0x1581, most within 0.5 s. The 26.18.0 build installed 25 of 25. CI passes with 26.18.0 on both systems: unit tests (890 on macOS; 835, with 55 skipped, on Windows), smoke 103/103 and 101/101, and both apps build, install and start.
 3. **1.0.0-beta.7** (`release/1.0.0-beta.7`) is the release that ships this fix. The installer check's baseline stays `v1.0.0-beta.6`, the last release built with the bug.
+
+### 2026-10-31 — beta 7 released; a Windows update check (`ci/windows-update-check`)
+
+1. **Released 1.0.0-beta.7** from `main` (PR #10, the version only). CI built the files from the `v1.0.0-beta.7` tag. Its first macOS run failed one smoke check, `projectNotesCreated`, and passed on a re-run.
+   - **Why:** the check took the still-streaming reply bubble (`.live-reply`) for the finished one and read the notices too early. PR #11 waits for a bubble that isn't `.live-reply`.
+2. **Update check:** `build/ci-update-check.cjs` installs an older release on Windows, starts it on its real profile and updates it. It then checks the Uninstall entry's version, that `ScaleMax IDE.exe` changed, that a file in `%APPDATA%\scalemax-ide` survived, and that the updated app starts. `installer-check.yml` runs it two ways:
+   - **Update now itself:** the previous release's own `updates.check()` and `updates.install()` (GitHub, download, SHA-256, `/S --updated --force-run`, quit).
+   - **This build:** the newest release updated to the new build with those same arguments.
+   - `ci-launch.cjs` now exports its DevTools helper for this.
+3. **Results (PR #12):**
+   - beta 6 updated itself to beta 7 through its own Update now. The installer had started beta 7 about 14 s after beta 6 quit.
+   - beta 7 updated to the PR build (1.0.0.106).
+   - Both runs kept the user's files, and the updated app loaded.
 
 ### Suggested next session
 
