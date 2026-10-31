@@ -534,9 +534,11 @@ async function run(win) {
       document.querySelector('#send-btn').click();
       // Wait for the reply bubble (up to 15 s: the first message in a folder writes its notes and
       // reads Git, and the first git start of a run can take seconds) instead of a fixed delay.
-      const answered = () => [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].some((node) => node.textContent === 'pong');
-      for (let i = 0; i < 150 && !answered(); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-      const replies = [...document.querySelectorAll('#chat-messages .chat-bubble.assistant .msg-text')].map((node) => node.textContent);
+      // Only the finished reply counts: the streaming one shows "pong" before main's result, with
+      // the notes notice, arrives.
+      const finishedTexts = () => [...document.querySelectorAll('#chat-messages .chat-bubble.assistant:not(.live-reply) .msg-text')].map((node) => node.textContent);
+      for (let i = 0; i < 150 && !finishedTexts().includes('pong'); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      const replies = finishedTexts();
       // The first message binds the task to the folder: notes created, chip locked, task listed under the folder.
       const uiNotice = [...document.querySelectorAll('#chat-messages .msg-notice')].map((node) => node.textContent).join(' ');
       const uiTask = app.tasks.find((task) => task.id === app.currentTaskId);
