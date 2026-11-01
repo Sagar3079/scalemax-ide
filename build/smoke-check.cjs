@@ -1569,17 +1569,24 @@ async function run(win) {
       const fromSearch = await until(() => dialog.open, 2000);
       dialog.close();
       // /bug with words: the dialog opens with them in its box, and nothing goes to the model.
+      // Sent with Enter, as the @-mention flow does: Enter calls handleSend whether or not Send
+      // is enabled, so this does not depend on which folder and model the run has left open.
+      const { default: app } = await import('./app.js');
+      const chatTask = app.currentTask();
+      const messagesBefore = chatTask.messages.length;
       const chat = document.querySelector('#chat-input');
       chat.value = '/bug Typed after the slash command.';
       chat.dispatchEvent(new Event('input', { bubbles: true }));
-      const sendReady = await until(() => !document.querySelector('#send-btn').disabled, 2000);
-      document.querySelector('#send-btn').click();
+      chat.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       const fromSlash = await until(() => dialog.open, 2000);
       const slashText = input.value;
       const chatCleared = chat.value === '';
+      // A message that was sent after all is added after a few awaits in handleSend: give it time.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const noMessage = chatTask.messages.length === messagesBefore;
       dialog.close();
       return { info: info && info.ok ? info.data : null, cardShown, cardText, opened, shortDisabled, refusedShown, refusedText, textKept, longEnabled, count, toasted, closed,
-        found, fromSearch, sendReady, fromSlash, slashText, chatCleared };
+        found, fromSearch, fromSlash, slashText, chatCleared, noMessage };
     })()`);
   } catch (error) {
     errors.push(`report check failed: ${error.message}`);
@@ -1592,8 +1599,8 @@ async function run(win) {
       && /^Something not working\? Tell the developer\. ScaleMax sends your message, the app's version and your system \(.+\), nothing else: no files, chats or keys\. Up to 3 reports a day\.$/.test(report.cardText)
       && report.refusedShown && /^You've sent 3 reports today\. You can send another (tomorrow )?after .+\.$/.test(report.refusedText) && report.textKept
       && report.opened && report.shortDisabled && report.longEnabled && report.count === '28 / 2,000' && report.toasted && report.closed
-      && report.found && report.fromSearch && report.sendReady && report.fromSlash
-      && report.slashText === 'Typed after the slash command.' && report.chatCleared),
+      && report.found && report.fromSearch && report.fromSlash
+      && report.slashText === 'Typed after the slash command.' && report.chatCleared && report.noMessage),
     reservedKeysHidden: probe.reservedHidden,
     providerMethods: probe.providerMethods.length === 16,
     mediaApi: probe.mediaMethods.length === 7 && probe.contextControls === true,
