@@ -864,3 +864,13 @@ test('a fork\'s "(fork)" comes off the end of its title, to be shown before it',
   assert.deepEqual(taskTitleParts('(fork)'), { title: '(fork)', fork: false }, 'a title that is only the mark stays as it is');
   assert.deepEqual(taskTitleParts(undefined), { title: '', fork: false });
 });
+
+test('search lists an app action by its words, only when one is passed in', () => {
+  const action = { id: 'report-bug', title: 'Report a bug', description: 'Tell the developer about a problem', keywords: ['bug', 'report', 'feedback', 'problem'] };
+  for (const query of ['bug', 'Feedback', 'problem', 'report']) {
+    assert.deepEqual(searchItems(query, [], { actions: [action] }).filter((item) => item.kind === 'action'),
+      [{ kind: 'action', id: 'report-bug', title: 'Report a bug', description: 'Tell the developer about a problem' }], query);
+  }
+  assert.equal(searchItems('bug', []).some((item) => item.kind === 'action'), false);
+  assert.equal(searchItems('zzz-nothing-matches', [], { actions: [action] }).length, 0);
+});

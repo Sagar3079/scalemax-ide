@@ -1558,7 +1558,28 @@ async function run(win) {
       const longEnabled = !send.disabled;
       send.click();
       const toasted = await until(() => /^Report sent\\. Thank you\\. You can send 2 more today\\.$/.test(document.querySelector('#toast')?.textContent || ''), 4000);
-      return { info: info && info.ok ? info.data : null, cardShown, cardText, opened, shortDisabled, refusedShown, refusedText, textKept, longEnabled, count, toasted, closed: !dialog.open };
+      const closed = !dialog.open;
+      // Search: "bug" lists Report a bug, which opens the dialog.
+      document.querySelector('#search-btn').click();
+      const search = document.querySelector('#search-input');
+      search.value = 'bug';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      const found = await until(() => Boolean(document.querySelector('.search-result[data-resource-kind="action"]')), 2000);
+      document.querySelector('.search-result[data-resource-kind="action"]')?.click();
+      const fromSearch = await until(() => dialog.open, 2000);
+      dialog.close();
+      // /bug with words: the dialog opens with them in its box, and nothing goes to the model.
+      const chat = document.querySelector('#chat-input');
+      chat.value = '/bug Typed after the slash command.';
+      chat.dispatchEvent(new Event('input', { bubbles: true }));
+      const sendReady = await until(() => !document.querySelector('#send-btn').disabled, 2000);
+      document.querySelector('#send-btn').click();
+      const fromSlash = await until(() => dialog.open, 2000);
+      const slashText = input.value;
+      const chatCleared = chat.value === '';
+      dialog.close();
+      return { info: info && info.ok ? info.data : null, cardShown, cardText, opened, shortDisabled, refusedShown, refusedText, textKept, longEnabled, count, toasted, closed,
+        found, fromSearch, sendReady, fromSlash, slashText, chatCleared };
     })()`);
   } catch (error) {
     errors.push(`report check failed: ${error.message}`);
@@ -1570,7 +1591,9 @@ async function run(win) {
     bugReport: Boolean(report && report.info && report.info.available === true && report.cardShown
       && /^Something not working\? Tell the developer\. ScaleMax sends your message, the app's version and your system \(.+\), nothing else: no files, chats or keys\. Up to 3 reports a day\.$/.test(report.cardText)
       && report.refusedShown && /^You've sent 3 reports today\. You can send another (tomorrow )?after .+\.$/.test(report.refusedText) && report.textKept
-      && report.opened && report.shortDisabled && report.longEnabled && report.count === '28 / 2,000' && report.toasted && report.closed),
+      && report.opened && report.shortDisabled && report.longEnabled && report.count === '28 / 2,000' && report.toasted && report.closed
+      && report.found && report.fromSearch && report.sendReady && report.fromSlash
+      && report.slashText === 'Typed after the slash command.' && report.chatCleared),
     reservedKeysHidden: probe.reservedHidden,
     providerMethods: probe.providerMethods.length === 16,
     mediaApi: probe.mediaMethods.length === 7 && probe.contextControls === true,
