@@ -105,3 +105,14 @@ test('without a relay URL reports are off and nothing is sent', async () => {
   assert.equal(calls.length, 0);
   assert.ok(REPORT_URL === '' || /^https:\/\/[^/]+\/report$/.test(REPORT_URL), 'the relay URL is https and ends in /report');
 });
+
+test('a local failure to save the install ID is an error, not a network problem', async () => {
+  let fetched = 0;
+  const failing = {
+    readAll: () => ({}),
+    update: () => { throw new Error('State could not be saved.'); },
+  };
+  const { made } = reporter({ store: failing, fetchImpl: async () => { fetched += 1; return answer(200, { ok: true, remaining: 2, resetAt: null }); } });
+  await assert.rejects(made.send('A message that is long enough.'), /State could not be saved/);
+  assert.equal(fetched, 0, 'nothing is sent when the install ID could not be kept');
+});
