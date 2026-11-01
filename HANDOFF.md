@@ -679,13 +679,14 @@ The user asked for a Mac `.dmg`, a PC `.exe` and an Update now button for later 
 1. **Built:** Report a bug in Preferences & about, `/bug` and a search entry (`src/report-ui.js`). Main posts the message, the version and the system (`lib/bug-report.cjs`) to the relay in `relay/`, a Cloudflare Worker that forwards it to the developer's Telegram.
    - **Limits:** 3 per install, 10 per network address and 100 in total, each over a rolling 24 hours. One SQLite Durable Object counts them and reserves a report before sending it.
    - The bot token, chat ID and address salt exist only as Worker secrets.
-   - **A failure inside main** (for example the install ID can't be saved) shows "The report could not be sent.", not the connection line "The report wasn't sent. Check your connection and try again.". The page never shows main's error text, which can hold a file path.
+   - **A failure inside main** (for example the install ID can't be saved) shows "The report could not be sent." instead of the connection line, "The report wasn't sent. Check your connection and try again." The page never shows main's error text, which can hold a file path.
 2. **Off until the relay is deployed:** while `REPORT_URL` is empty, the card, `/bug` and the search entry don't show. The smoke run switches reports on with a stub in main, which also refuses messages containing "smoke-limit", and checks them as `bugReport`.
 3. **Still to do:**
-   - run the Worker bundle check, `npx wrangler@4 deploy --dry-run` in `relay/` (no login needed). It hasn't been run: the VPS was unreachable on 2026-11-01. The CI smoke run is also the first run of `bugReport`;
+   - run the Worker bundle check on the VPS (`ssh cpu`), not on this Mac: `npx wrangler@4 deploy --dry-run` in `relay/` (no login needed). It hasn't been run: the VPS was unreachable on 2026-11-01. The CI smoke run is also the first run of `bugReport`;
    - deploy the relay (`relay/README.md`);
    - a PR sets `REPORT_URL`;
    - in the packaged app, send one real report, then a 4th from the same install within 24 hours to see the limit message;
+   - the beta 8 release notes must say what a report sends: the message, the app's version and the system, nothing else;
    - release 1.0.0-beta.8.
 
 ### Suggested next session

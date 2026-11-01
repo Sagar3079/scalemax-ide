@@ -60,7 +60,7 @@ ScaleMax IDE checks GitHub for a newer version when it starts and every six hour
 
 **Report a bug** in **Preferences & about** (or `/bug` in the message box, or "bug" in search) sends the developer a short message about a problem.
 - **What's sent:** your message, the app's version and your system (for example macOS 15.1, arm64). No name, files, chats, settings or keys. A random ID, made at your first report, tells your reports apart without saying who you are.
-- **Where it goes:** to a small Cloudflare Worker (`relay/`), which forwards it to the developer's Telegram. The Worker keeps network addresses only as salted hashes, and forgets every count after 24 hours.
+- **Where it goes:** to a small Cloudflare Worker (`relay/`), which forwards it to the developer's Telegram. The Worker keeps network addresses only as salted hashes, and deletes counts older than 24 hours when the next report arrives.
 - **Limits:** 3 reports per install in 24 hours, 10 per network address and 100 in total.
 - A build whose `REPORT_URL` in `lib/bug-report.cjs` is empty has no Report a bug. Setting up the relay: `relay/README.md`.
 

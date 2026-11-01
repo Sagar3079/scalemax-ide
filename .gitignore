@@ -6,3 +6,5 @@ out/
 scalemax-state.json
 .cache/
 .npm-cache/
+relay/.wrangler/
+relay/.dev.vars
