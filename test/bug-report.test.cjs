@@ -82,6 +82,10 @@ test("the relay's refusals come back with their code and time", async () => {
     [502, { ok: false, code: 'TELEGRAM' }, { sent: false, code: 'TELEGRAM', resetAt: null }],
     [400, { ok: false, code: 'INVALID' }, { sent: false, code: 'INVALID', resetAt: null }],
     [500, { ok: false, code: 'SOMETHING_ELSE' }, { sent: false, code: 'NETWORK', resetAt: null }],
+    // The relay's own failures are not the person's to fix: they read as no connection (relay/README.md).
+    [503, { ok: false, code: 'RELAY_ERROR' }, { sent: false, code: 'NETWORK', resetAt: null }],
+    [503, { ok: false, code: 'MISCONFIGURED' }, { sent: false, code: 'NETWORK', resetAt: null }],
+    [415, { ok: false, code: 'UNSUPPORTED_TYPE' }, { sent: false, code: 'NETWORK', resetAt: null }],
   ]) {
     const { made } = reporter({ fetchImpl: async () => answer(status, body) });
     assert.deepEqual(await made.send(MESSAGE), expected, body.code);

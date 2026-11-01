@@ -3,7 +3,7 @@
 A Cloudflare Worker that takes bug reports from ScaleMax IDE (`lib/bug-report.cjs`) and forwards
 each one to your Telegram. It holds the bot token, so the app never does. It allows 3 reports per
 install, 10 per network address and 100 in total, each over a rolling 24 hours (`src/logic.mjs`).
-It keeps addresses only as salted hashes, and forgets every count after 24 hours.
+It keeps addresses only as salted hashes, and deletes counts older than 24 hours when the next report arrives.
 
 It is not part of the app: `package.json`'s `build.files` leaves this folder out.
 
@@ -18,7 +18,8 @@ It is not part of the app: `package.json`'s `build.files` leaves this folder out
    cd relay
    npx --yes wrangler@4 login
    ```
-4. **Add the secrets.** Each command asks for the value. The salt can be any long random string.
+4. **Add the secrets.** Each command asks for the value. The salt can be any long random string
+   (16 characters or more). While one is missing, the Worker answers 503 `MISCONFIGURED`.
    ```bash
    npx --yes wrangler@4 secret put TELEGRAM_BOT_TOKEN
    npx --yes wrangler@4 secret put TELEGRAM_CHAT_ID
@@ -47,5 +48,8 @@ It is not part of the app: `package.json`'s `build.files` leaves this folder out
 | 200 | `{ ok: true, remaining, resetAt }` | sent |
 | 400 | `{ ok: false, code: "INVALID" }` | a field is missing or wrong |
 | 413 | `{ ok: false, code: "TOO_LARGE" }` | the body is over 16 KB |
+| 415 | `{ ok: false, code: "UNSUPPORTED_TYPE" }` | the request isn't `application/json` |
 | 429 | `{ ok: false, code: "LIMIT" \| "NETWORK_LIMIT" \| "BUSY", resetAt }` | a limit was reached |
 | 502 | `{ ok: false, code: "TELEGRAM" }` | Telegram didn't take it (the report isn't counted) |
+| 503 | `{ ok: false, code: "MISCONFIGURED" }` | a secret is missing; see step 4 |
+| 503 | `{ ok: false, code: "RELAY_ERROR" }` | the Worker failed inside (the app says to try again) |

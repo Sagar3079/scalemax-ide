@@ -3,7 +3,7 @@
 // are secrets (README.md). One Limiter Durable Object counts every report, so the limits hold for
 // reports that arrive together.
 import { DurableObject } from 'cloudflare:workers';
-import { validateReport, decide, formatMessage, hashAddress, WINDOW_MS, MAX_BODY_BYTES } from './logic.mjs';
+import { validateReport, decide, formatMessage, hashAddress, networkKey, missingSecrets, WINDOW_MS, MAX_BODY_BYTES } from './logic.mjs';
 
 const TELEGRAM_TIMEOUT_MS = 10_000;
 
@@ -65,6 +65,13 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname !== '/report') return json(404, { ok: false, code: 'NOT_FOUND' });
     if (request.method !== 'POST') return json(405, { ok: false, code: 'METHOD' }, { allow: 'POST' });
+    // Only the app's JSON: a web page can post text/plain to any address without asking first.
+    if ((request.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+      return json(415, { ok: false, code: 'UNSUPPORTED_TYPE' });
+    }
+    // A secret that was never set would fail quietly (a salt of "undefined"): refuse instead. The
+    // answer names nothing; README.md step 4 sets them.
+    if (missingSecrets(env).length) return json(503, { ok: false, code: 'MISCONFIGURED' });
     if (Number(request.headers.get('content-length') || 0) > MAX_BODY_BYTES) return json(413, { ok: false, code: 'TOO_LARGE' });
     const text = await request.text();
     if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return json(413, { ok: false, code: 'TOO_LARGE' });
@@ -72,9 +79,14 @@ export default {
     try { body = JSON.parse(text); } catch { /* answered as INVALID below */ }
     const checked = validateReport(body);
     if (!checked.ok) return json(400, { ok: false, code: 'INVALID' });
-    const address = await hashAddress(env.IP_SALT, request.headers.get('cf-connecting-ip') || 'unknown');
-    const limiter = env.LIMITER.get(env.LIMITER.idFromName('global'));
-    const { status, body: answer } = await limiter.submit(checked.report, address);
-    return json(status, answer);
+    const address = await hashAddress(env.IP_SALT, networkKey(request.headers.get('cf-connecting-ip') || 'unknown'));
+    // A throw from the Durable Object would be Cloudflare's own HTML 500: answer in the contract.
+    try {
+      const limiter = env.LIMITER.get(env.LIMITER.idFromName('global'));
+      const { status, body: answer } = await limiter.submit(checked.report, address);
+      return json(status, answer);
+    } catch {
+      return json(503, { ok: false, code: 'RELAY_ERROR' });
+    }
   },
 };
