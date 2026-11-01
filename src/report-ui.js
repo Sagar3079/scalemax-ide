@@ -24,7 +24,7 @@ export function canSend(text) {
 export function laterText(resetAt, now = new Date(), locale = undefined) {
   const at = new Date(resetAt);
   // ICU puts a narrow no-break space before AM/PM; the sentence reads the same with a space.
-  const time = at.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }).replace(/ /g, ' ');
+  const time = at.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }).replace(/\u202f/g, ' ');
   return at.toDateString() === now.toDateString() ? `after ${time}` : `tomorrow after ${time}`;
 }
 
@@ -46,6 +46,17 @@ export function outcomeText(outcome, now = new Date(), locale = undefined) {
     case 'INVALID': return 'Write at least 10 characters, and at most 2,000.';
     default: return "The report wasn't sent. Check your connection and try again.";
   }
+}
+
+/**
+ * What report.send() answered, as an outcome for outcomeText: main's data when it sent or refused,
+ * REPORT_ERROR when main itself failed (it could not read or keep the install ID: not a connection
+ * problem, and its message, which can hold a file path, is never shown), else no connection.
+ */
+export function outcomeFromResult(result) {
+  if (result?.ok === true && result.data && typeof result.data === 'object' && !Array.isArray(result.data)) return result.data;
+  if (result?.ok === false) return { sent: false, code: 'REPORT_ERROR' };
+  return { sent: false, code: 'NETWORK' };
 }
 
 /** "macOS 15.1, arm64" from main's "macOS 15.1 (arm64)", for the card's sentence. */
@@ -78,6 +89,9 @@ function renderForm() {
     send.textContent = state.sending ? 'Sending…' : 'Send report';
   }
   if (input) input.disabled = state.sending;
+  // Cancel would not stop the request: the answer belongs in the dialog the person is looking at.
+  const cancel = $('#report-cancel');
+  if (cancel) cancel.disabled = state.sending;
 }
 
 function renderCard() {
@@ -89,7 +103,10 @@ function renderCard() {
   }
 }
 
-/** Opens the dialog with `text` already in the box (/bug some words). Reports off: says so instead. */
+/**
+ * Opens the dialog. `text` (/bug some words) replaces what is in the box; without it the box keeps
+ * what the person had typed. Reports off: says so instead.
+ */
 export function openReportDialog(text = '') {
   if (!reportAvailable()) {
     state.app?.showToast?.(outcomeText({ sent: false, code: 'UNAVAILABLE' }));
@@ -98,7 +115,7 @@ export function openReportDialog(text = '') {
   const dialog = $('#report-dialog');
   const input = $('#report-message');
   if (!dialog || !input) return;
-  if (!state.sending) input.value = String(text || '').slice(0, MAX_LENGTH);
+  if (typeof text === 'string' && text && !state.sending) input.value = text.slice(0, MAX_LENGTH);
   setError('');
   renderForm();
   if (!dialog.open) dialog.showModal();
@@ -111,14 +128,12 @@ async function send() {
   state.sending = true;
   setError('');
   renderForm();
-  let outcome = { sent: false, code: 'NETWORK' };
+  let outcome;
   try {
-    const result = await window.scalemaxAPI?.report?.send?.(input.value);
-    if (result?.ok && result.data) outcome = result.data;
-    // Main itself failed (it could not read or keep the install ID): not a connection problem,
-    // and its message (which can hold a file path) is never shown.
-    else if (result && result.ok === false) outcome = { sent: false, code: 'REPORT_ERROR' };
-  } catch { /* no answer: the line below says so */ }
+    outcome = outcomeFromResult(await window.scalemaxAPI?.report?.send?.(input.value));
+  } catch {
+    outcome = { sent: false, code: 'NETWORK' };
+  }
   state.sending = false;
   renderForm();
   if (outcome.sent) {
@@ -140,6 +155,8 @@ export function bindReportUi(app) {
   $('#report-message')?.addEventListener('input', () => renderForm());
   $('#report-send')?.addEventListener('click', () => send());
   $('#report-cancel')?.addEventListener('click', () => $('#report-dialog')?.close());
+  // Escape while a report is sent would close the dialog on an answer nobody sees: wait for it.
+  $('#report-dialog')?.addEventListener('cancel', (event) => { if (state.sending) event.preventDefault(); });
   renderCard();
   window.scalemaxAPI?.report?.get?.().then((result) => {
     if (!result?.ok) return;
