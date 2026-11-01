@@ -1521,8 +1521,56 @@ async function run(win) {
     }
   }
 
+  // Report a bug: the card shows (main answers from a stub in the smoke run), the dialog opens,
+  // Send report waits for 10 characters, a refused send keeps the text and says why, and a sent
+  // one closes it with the thank-you toast.
+  let report = null;
+  try {
+    report = await win.webContents.executeJavaScript(`(async () => {
+      const until = async (test, ms) => {
+        const end = Date.now() + ms;
+        while (Date.now() < end) { if (test()) return true; await new Promise((resolve) => setTimeout(resolve, 50)); }
+        return Boolean(test());
+      };
+      const info = await window.scalemaxAPI.report.get();
+      const card = document.querySelector('#report-card');
+      const cardShown = await until(() => !card.hidden, 3000);
+      const cardText = document.querySelector('#report-desc').textContent;
+      document.querySelector('#report-open').click();
+      const dialog = document.querySelector('#report-dialog');
+      const opened = dialog.open;
+      const input = document.querySelector('#report-message');
+      const send = document.querySelector('#report-send');
+      input.value = 'short';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const shortDisabled = send.disabled;
+      // Main's stub refuses a message with "smoke-limit" in it, as the relay refuses a 4th report.
+      const kept = 'smoke-limit: this text stays in the box.';
+      input.value = kept;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      send.click();
+      const refusedShown = await until(() => !document.querySelector('#report-error').hidden, 4000);
+      const refusedText = document.querySelector('#report-error').textContent;
+      const textKept = input.value === kept && dialog.open;
+      input.value = 'The smoke check found a bug.';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const count = document.querySelector('#report-count').textContent;
+      const longEnabled = !send.disabled;
+      send.click();
+      const toasted = await until(() => /^Report sent\\. Thank you\\. You can send 2 more today\\.$/.test(document.querySelector('#toast')?.textContent || ''), 4000);
+      return { info: info && info.ok ? info.data : null, cardShown, cardText, opened, shortDisabled, refusedShown, refusedText, textKept, longEnabled, count, toasted, closed: !dialog.open };
+    })()`);
+  } catch (error) {
+    errors.push(`report check failed: ${error.message}`);
+  }
+
   const checks = probe ? {
     hasBridge: probe.hasBridge,
+    // Report a bug: card, dialog and a send through main's stub (src/report-ui.js, lib/bug-report.cjs).
+    bugReport: Boolean(report && report.info && report.info.available === true && report.cardShown
+      && /^Something not working\? Tell the developer\. ScaleMax sends your message, the app's version and your system \(.+\), nothing else: no files, chats or keys\. Up to 3 reports a day\.$/.test(report.cardText)
+      && report.refusedShown && /^You've sent 3 reports today\. You can send another (tomorrow )?after .+\.$/.test(report.refusedText) && report.textKept
+      && report.opened && report.shortDisabled && report.longEnabled && report.count === '28 / 2,000' && report.toasted && report.closed),
     reservedKeysHidden: probe.reservedHidden,
     providerMethods: probe.providerMethods.length === 16,
     mediaApi: probe.mediaMethods.length === 7 && probe.contextControls === true,
@@ -1747,7 +1795,7 @@ async function run(win) {
   } : { probeFailed: false };
 
   const ok = probe !== null && Object.values(checks).every(Boolean);
-  console.log('SMOKE_RESULT ' + JSON.stringify({ ok, checks, probe, e2e, automation, workspace, live, errors, logs }, null, 2));
+  console.log('SMOKE_RESULT ' + JSON.stringify({ ok, checks, probe, e2e, automation, workspace, live, report, errors, logs }, null, 2));
   // The smoke run owns its throwaway userData directory; never leave it behind.
   try {
     fs.rmSync(path.join(os.tmpdir(), 'scalemax-smoke-' + process.pid), { recursive: true, force: true });

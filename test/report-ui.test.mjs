@@ -36,10 +36,11 @@ test('a limit says when the next report can go', () => {
 });
 
 test('anything else asks to try again; a build without reports says so', () => {
-  for (const code of ['NETWORK', 'TELEGRAM', 'REPORT_ERROR', 'INVALID_ANSWER', undefined]) assert.equal(outcomeText({ sent: false, code }), RETRY, String(code));
+  for (const code of ['NETWORK', 'TELEGRAM', 'INVALID_ANSWER', undefined]) assert.equal(outcomeText({ sent: false, code }), RETRY, String(code));
   assert.equal(outcomeText(null), RETRY);
   assert.equal(outcomeText({ sent: false, code: 'INVALID' }), 'Write at least 10 characters, and at most 2,000.');
   assert.equal(outcomeText({ sent: false, code: 'UNAVAILABLE' }), "Bug reports aren't available in this version.");
+  assert.equal(outcomeText({ sent: false, code: 'REPORT_ERROR' }), 'The report could not be sent.');
 });
 
 test("the card names this computer's system; search finds Report a bug by its words", () => {

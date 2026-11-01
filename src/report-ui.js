@@ -42,6 +42,7 @@ export function outcomeText(outcome, now = new Date(), locale = undefined) {
     case 'NETWORK_LIMIT': return until('Too many reports came from your network today.');
     case 'BUSY': return 'Reports are paused for today. Please try again tomorrow.';
     case 'UNAVAILABLE': return "Bug reports aren't available in this version.";
+    case 'REPORT_ERROR': return 'The report could not be sent.';
     case 'INVALID': return 'Write at least 10 characters, and at most 2,000.';
     default: return "The report wasn't sent. Check your connection and try again.";
   }
@@ -50,4 +51,99 @@ export function outcomeText(outcome, now = new Date(), locale = undefined) {
 /** "macOS 15.1, arm64" from main's "macOS 15.1 (arm64)", for the card's sentence. */
 export function systemText(osLabel) {
   return String(osLabel || '').replace(' (', ', ').replace(/\)$/, '');
+}
+
+const $ = (selector) => document.querySelector(selector);
+const state = { app: null, info: { available: false, osLabel: '' }, bound: false, sending: false };
+
+/** Whether this build sends reports (main's REPORT_URL is set). */
+export function reportAvailable() {
+  return state.info.available === true;
+}
+
+function setError(text) {
+  const node = $('#report-error');
+  if (!node) return;
+  node.textContent = text;
+  node.hidden = !text;
+}
+
+function renderForm() {
+  const input = $('#report-message');
+  const count = $('#report-count');
+  if (count) count.textContent = `${(input?.value.length || 0).toLocaleString('en-US')} / 2,000`;
+  const send = $('#report-send');
+  if (send) {
+    send.disabled = state.sending || !canSend(input?.value);
+    send.textContent = state.sending ? 'Sending…' : 'Send report';
+  }
+  if (input) input.disabled = state.sending;
+}
+
+function renderCard() {
+  const card = $('#report-card');
+  if (card) card.hidden = !reportAvailable();
+  const description = $('#report-desc');
+  if (description && state.info.osLabel) {
+    description.textContent = `Something not working? Tell the developer. ScaleMax sends your message, the app's version and your system (${systemText(state.info.osLabel)}), nothing else: no files, chats or keys. Up to 3 reports a day.`;
+  }
+}
+
+/** Opens the dialog with `text` already in the box (/bug some words). Reports off: says so instead. */
+export function openReportDialog(text = '') {
+  if (!reportAvailable()) {
+    state.app?.showToast?.(outcomeText({ sent: false, code: 'UNAVAILABLE' }));
+    return;
+  }
+  const dialog = $('#report-dialog');
+  const input = $('#report-message');
+  if (!dialog || !input) return;
+  if (!state.sending) input.value = String(text || '').slice(0, MAX_LENGTH);
+  setError('');
+  renderForm();
+  if (!dialog.open) dialog.showModal();
+  input.focus();
+}
+
+async function send() {
+  const input = $('#report-message');
+  if (!input || state.sending || !canSend(input.value)) return;
+  state.sending = true;
+  setError('');
+  renderForm();
+  let outcome = { sent: false, code: 'NETWORK' };
+  try {
+    const result = await window.scalemaxAPI?.report?.send?.(input.value);
+    if (result?.ok && result.data) outcome = result.data;
+    // Main itself failed (it could not read or keep the install ID): not a connection problem,
+    // and its message (which can hold a file path) is never shown.
+    else if (result && result.ok === false) outcome = { sent: false, code: 'REPORT_ERROR' };
+  } catch { /* no answer: the line below says so */ }
+  state.sending = false;
+  renderForm();
+  if (outcome.sent) {
+    input.value = '';
+    $('#report-dialog')?.close();
+    state.app?.showToast?.(outcomeText(outcome));
+    return;
+  }
+  // The text stays in the box, so nothing typed is lost.
+  setError(outcomeText(outcome));
+  input.focus();
+}
+
+export function bindReportUi(app) {
+  state.app = app;
+  if (state.bound) return;
+  state.bound = true;
+  $('#report-open')?.addEventListener('click', () => openReportDialog());
+  $('#report-message')?.addEventListener('input', () => renderForm());
+  $('#report-send')?.addEventListener('click', () => send());
+  $('#report-cancel')?.addEventListener('click', () => $('#report-dialog')?.close());
+  renderCard();
+  window.scalemaxAPI?.report?.get?.().then((result) => {
+    if (!result?.ok) return;
+    state.info = { available: result.data?.available === true, osLabel: String(result.data?.osLabel || '') };
+    renderCard();
+  }).catch(() => {});
 }

@@ -20,6 +20,7 @@ import { bindHooksUi, reviewProjectHooks } from './hooks-ui.js';
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { bindUpdatesUi } from './updates-ui.js';
+import { bindReportUi } from './report-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
 import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
@@ -330,6 +331,7 @@ const app = {
     bindChangesUi(this);
     bindJobsUi(this);
     bindUpdatesUi(this);
+    bindReportUi(this);
     bindSpecsUi(this);
     bindGitFlowUi(this);
     bindSessionsUi(this);

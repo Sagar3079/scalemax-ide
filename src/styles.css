@@ -1916,6 +1916,28 @@ input[type="range"] {
   border-top: 1px solid var(--riso-rule);
 }
 
+/* Report a bug (src/report-ui.js): the dialog's box, its count and what went wrong. */
+.report-dialog textarea {
+  display: block;
+  width: 100%;
+  min-height: 132px;
+  margin-top: 8px;
+  resize: vertical;
+}
+
+.report-count {
+  margin: 4px 0 0;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.report-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sm-error-foreground);
+}
+
 .updates-progress {
   display: block;
   width: 100%;
