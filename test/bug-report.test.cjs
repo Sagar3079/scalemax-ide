@@ -95,7 +95,12 @@ test("the relay's refusals come back with their code and time", async () => {
 });
 
 test('no answer in time, or no network, is NETWORK', async () => {
-  const hanging = (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+  // A real request holds its socket open until the abort. AbortSignal.timeout's timer doesn't keep
+  // the process alive, so this one holds a timer instead, or Node 20 and 22 exit before the abort.
+  const hanging = (_url, { signal }) => new Promise((_resolve, reject) => {
+    const socket = setInterval(() => {}, 1000);
+    signal.addEventListener('abort', () => { clearInterval(socket); reject(signal.reason); });
+  });
   const slow = reporter({ fetchImpl: hanging, timeoutMs: 20 });
   assert.deepEqual(await slow.made.send(MESSAGE), { sent: false, code: 'NETWORK' });
   const offline = reporter({ fetchImpl: async () => { throw new TypeError('fetch failed'); } });
