@@ -33,6 +33,15 @@ contextBridge.exposeInMainWorld('scalemaxAPI', {
     }
   },
 
+  /**
+   * Bug reports (lib/bug-report.cjs): the message, with the app's version and the system, to the
+   * developer. get() → { available, osLabel }; send(message) → { sent, remaining?, resetAt?, code? }.
+   */
+  report: {
+    get: () => ipcRenderer.invoke('report:get'),
+    send: (message) => ipcRenderer.invoke('report:send', message)
+  },
+
   store: {
     /** @param {string} key @returns {Promise<any>} */
     get: (key) => ipcRenderer.invoke('store:get', key),

@@ -1,0 +1,14 @@
+# The bug-report relay (README.md). Its secrets are set with `npx wrangler secret put`, never here:
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, IP_SALT.
+name = "scalemax-bug-relay"
+main = "src/worker.mjs"
+compatibility_date = "2025-10-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Limiter"]

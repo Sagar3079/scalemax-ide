@@ -1537,7 +1537,7 @@ export function plainPreview(text) {
 }
 
 // Custom experts and skills are optional; invalid records are skipped.
-export function searchItems(query, tasks, { experts = [], skills = [] } = {}) {
+export function searchItems(query, tasks, { experts = [], skills = [], actions = [] } = {}) {
   if (typeof query !== 'string' || !query.trim()) return [];
   const needle = query.trim().toLowerCase();
   const result = [];
@@ -1548,6 +1548,12 @@ export function searchItems(query, tasks, { experts = [], skills = [] } = {}) {
       kind: 'task', id: task.id, title: task.title,
       description: boundedText(message?.text ?? task.messages.at(-1)?.text, MAX_TITLE),
     });
+    if (result.length === 100) return result;
+  }
+  // The app's own actions (src/report-ui.js REPORT_ACTION), found by their words.
+  for (const action of actions) {
+    if (![action.title, action.description, ...(action.keywords || [])].some((text) => String(text).toLowerCase().includes(needle))) continue;
+    result.push({ kind: 'action', id: action.id, title: action.title, description: action.description });
     if (result.length === 100) return result;
   }
   const customExperts = normalizeCustomList(experts, validateCustomExpert);

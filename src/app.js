@@ -20,6 +20,7 @@ import { bindHooksUi, reviewProjectHooks } from './hooks-ui.js';
 import { renderChangesCard, bindChangesUi } from './changes-ui.js';
 import { bindJobsUi, renderJobsBar, renderCommandSettings } from './jobs-ui.js';
 import { bindUpdatesUi } from './updates-ui.js';
+import { bindReportUi, openReportDialog, reportAvailable, REPORT_ACTION } from './report-ui.js';
 import { bindSpecsUi, renderSpecsChip, renderPlanCard } from './specs-ui.js';
 import { bindGitFlowUi, renderGitFlow, refreshGitHeader, wantsWorktree, prepareWorktree } from './gitflow-ui.js';
 import { bindSessionsUi, renderMessageActions, openSessions } from './sessions-ui.js';
@@ -330,6 +331,7 @@ const app = {
     bindChangesUi(this);
     bindJobsUi(this);
     bindUpdatesUi(this);
+    bindReportUi(this);
     bindSpecsUi(this);
     bindGitFlowUi(this);
     bindSessionsUi(this);
@@ -2957,7 +2959,7 @@ const app = {
     // Taken before any wait: "/init" from the folder menu swaps the draft and the attachment
     // around this call (src/composer-ui.js).
     const attachment = internal ? null : this.attachment;
-    // Slash commands (src/slash-ui.js): /clear, /plan, /model, /mode, /cost and /help act here and
+    // Slash commands (src/slash-ui.js): /bug, /clear, /plan, /model, /mode, /cost and /help act here and
     // are never sent; a custom command is sent as the prompt main expanded it into, naming the
     // command so main applies its front matter. /compact, /init and /review go on as typed.
     if (!internal && !command) {
@@ -4224,7 +4226,9 @@ const app = {
     if (!list) return;
     const input = $('#search-input');
     const query = (input?.value || '').trim();
-    const results = searchItems(query, this.tasks, { experts: this.customExperts, skills: this.customSkills });
+    const results = searchItems(query, this.tasks, {
+      experts: this.customExperts, skills: this.customSkills, actions: reportAvailable() ? [REPORT_ACTION] : [],
+    });
     this.searchActive = Math.min(Math.max(0, this.searchActive || 0), Math.max(0, results.length - 1));
     list.replaceChildren(...results.map((result, index) => {
       const row = element('div', 'search-result');
@@ -4272,6 +4276,11 @@ const app = {
     }
     if (!row.dataset.resourceKind) return;
     this.toggleSearch(false);
+    // The app's own actions (src/report-ui.js): Report a bug opens its dialog.
+    if (row.dataset.resourceKind === 'action') {
+      if (row.dataset.resourceId === REPORT_ACTION.id) openReportDialog();
+      return;
+    }
     openResourceDetail(this, row.dataset.resourceKind, row.dataset.resourceId);
   },
 

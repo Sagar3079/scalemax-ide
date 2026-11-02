@@ -56,6 +56,14 @@ ScaleMax IDE checks GitHub for a newer version when it starts and every six hour
 - **Integrity:** a download is used only if its size and SHA-256 checksum match what GitHub publishes for that release file.
 - **Privacy:** GitHub sees your computer's address and the app's version number, nothing else. To stop the automatic checks, turn off **Check for updates automatically** in the same place.
 
+### Bug reports
+
+**Report a bug** in **Preferences & about** (or `/bug` in the message box, or "bug" in search) sends the developer a short message about a problem.
+- **What's sent:** your message, the app's version and your system (for example macOS 15.1, arm64). No name, files, chats, settings or keys. A random ID, made at your first report, tells your reports apart without saying who you are.
+- **Where it goes:** to a small Cloudflare Worker (`relay/`), which forwards it to the developer's Telegram. The Worker keeps network addresses only as salted hashes, and deletes counts older than 24 hours when the next report arrives.
+- **Limits:** 3 reports per install in 24 hours, 10 per network address and 100 in total.
+- A build whose `REPORT_URL` in `lib/bug-report.cjs` is empty has no Report a bug. Setting up the relay: `relay/README.md`.
+
 ## Features
 
 - **API-key provider connection** — connect the ScaleMax endpoint (or any OpenAI-compatible endpoint) with an `sm_live_` key; the key is encrypted at rest (without the macOS keychain) and never crosses the renderer bridge
@@ -65,7 +73,7 @@ ScaleMax IDE checks GitHub for a newer version when it starts and every six hour
 - **A worktree per task** — a new, empty task in a Git repository can work in its own checkout (`<app data>/worktrees/<repo>-<task>` on a `scalemax/<name>` branch), so its changes stay out of your main checkout until you merge them. Its header offers Show in Finder, Commit, Merge into the base branch (in your main checkout, which must be clean and on that branch; a conflicting merge is undone), Create PR and Remove (the branch is kept)
 - **Rewind, fork and export conversations** — under any of your messages, **Rewind to here** puts that message back in the message box and can undo the later replies' file changes (newest first, never over newer edits, with a list of what stayed); **Fork from here** copies the conversation before that message into a new task in the same folder, with the message waiting in the message box. **Recent sessions** (⌘⇧O) searches your tasks, and **Export transcript** saves a task as Markdown
 - **Subagents, like Claude Code's Task tool** — in Working and Coding mode the assistant can hand a self-contained piece of work to a subagent with its own fresh conversation. An "explore" subagent only reads; a "general" one can do what the reply can, under the same permission, approvals (labelled "Subagent: …") and sandbox. Up to three run side by side, each shows as a collapsible group in the reply with its own steps, its file changes land in the reply's changes card and its tokens in the reply's cost, and Stop ends them all
-- **Slash commands** — type `/` at the start of a message for a command menu: `/clear`, `/compact`, `/cost`, `/help`, `/init`, `/mode working|coding`, `/model`, `/plan` and `/review [focus]` (a read-only review of the folder's uncommitted changes, run in Plan permission), plus your own commands written as Markdown files (see Customization)
+- **Slash commands** — type `/` at the start of a message for a command menu: `/bug [what went wrong]` (opens Report a bug, when this version has it), `/clear`, `/compact`, `/cost`, `/help`, `/init`, `/mode working|coding`, `/model`, `/plan` and `/review [focus]` (a read-only review of the folder's uncommitted changes, run in Plan permission), plus your own commands written as Markdown files (see Customization)
 - **Hooks, like Claude Code's** — run your own shell commands before or after a tool call, when you send a message, or when a reply ends: block a call, allow it without a prompt, add a note or extra context. A project's hooks run only after you allow exactly that set, and any change asks again; Preferences → Hooks switches each one on or off (see Customization)
 - **Long-running commands without losing the reply** — the assistant can run a dev server, watcher or long build in the background, then read its output, type into it or stop it. A bar above the composer shows what is running; **Show** opens a jobs dialog with live output and controls. Background commands stay with their project, are stopped when ScaleMax quits and never need `&`
 - **Tokens and cost you can see** — every reply shows the tokens it used and what it cost with your provider's published prices, and the chat header keeps a running total for the task. When a provider does not report usage or prices, ScaleMax says so instead of showing a made-up `$0.00`
@@ -220,6 +228,7 @@ scalemax-ide/
 │   └── vendor-codemirror.cjs # regenerates src/vendor/codemirror.js from pinned versions
 ├── dist/                 # build output (generated)
 ├── docs/screenshots/     # the screenshots in this README (not shipped in the app)
+├── relay/                # the bug-report relay, a Cloudflare Worker (not shipped in the app)
 ├── lib/
 │   ├── provider.cjs      # OpenAI-compatible provider client (keys, models, chat, tool calls)
 │   ├── subagents.cjs     # agent_task: subagents with their own tool loop inside a reply
@@ -239,6 +248,7 @@ scalemax-ide/
 │   ├── metrics.cjs       # token usage and USD cost accounting for replies and compaction
 │   ├── commands.cjs      # cross-platform shell, macOS terminal wrapper, Windows environment and .cmd launching, cleaned output
 │   ├── updates.cjs       # newer releases on GitHub, checked downloads, Update now
+│   ├── bug-report.cjs    # bug reports: the message, version and system to the relay
 │   ├── local-secrets.cjs # encryption for saved keys and tokens without the keychain
 │   ├── jobs.cjs          # main-level background commands: output, input, stop and process groups
 │   ├── sandbox.cjs       # macOS Seatbelt policy for commands the model runs
@@ -274,6 +284,7 @@ scalemax-ide/
 │   ├── changes-ui.js     # the changes card under a reply and the review dialog + changes.css
 │   ├── jobs-ui.js        # background commands bar/dialog and command sandbox preferences + jobs.css
 │   ├── updates-ui.js     # Preferences > Updates (Update now) and the status bar notice
+│   ├── report-ui.js      # Report a bug: the card, its dialog, /bug and the search entry
 │   ├── specs-ui.js       # specs chip/dialog and the "Run this plan" card + specs.css
 │   ├── media-ui.js       # image/video generation options, results in chat, download
 │   ├── mcp-presets.js    # one-step MCP servers (sign-in, public URL, local)

@@ -13,6 +13,7 @@ const { createWorkspace } = require('./lib/workspace.cjs');
 const { createStore } = require('./lib/state.cjs');
 const { createLocalSecrets } = require('./lib/local-secrets.cjs');
 const { createUpdater } = require('./lib/updates.cjs');
+const { createReporter } = require('./lib/bug-report.cjs');
 const { createMcpManager } = require('./lib/mcp.cjs');
 const { createToolLoop } = require('./lib/tool-loop.cjs');
 const { createProgressForwarder } = require('./lib/progress.cjs');
@@ -988,6 +989,25 @@ function scheduleUpdateChecks() {
   setTimeout(run, UPDATE_FIRST_CHECK_MS).unref?.();
   setInterval(run, UPDATE_CHECK_EVERY_MS).unref?.();
 }
+
+// ---------------------------------------------------------------------------
+// Bug reports (lib/bug-report.cjs): the message, the version and the system, to the developer's
+// Telegram through the relay in relay/. The smoke run answers from a stub and never goes online.
+// ---------------------------------------------------------------------------
+const REPORT_SMOKE = process.env.SCALEMAX_SMOKE === '1' ? {
+  url: 'https://smoke.invalid/report',
+  // A message with "smoke-limit" in it is refused the way the relay refuses a 4th report.
+  fetchImpl: async (_url, init) => {
+    const limited = JSON.parse(init.body).message.includes('smoke-limit');
+    const resetAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    return new Response(JSON.stringify(limited ? { ok: false, code: 'LIMIT', resetAt } : { ok: true, remaining: 2, resetAt }),
+      { status: limited ? 429 : 200, headers: { 'content-type': 'application/json' } });
+  },
+} : {};
+const reporter = createReporter({ version: app.getVersion(), store: stateStore, ...REPORT_SMOKE });
+const REPORT_FALLBACK = { code: 'REPORT_ERROR', message: 'The report could not be sent.' };
+ipcMain.handle('report:get', wrap(() => reporter.get(), REPORT_FALLBACK));
+ipcMain.handle('report:send', wrap((_event, message) => reporter.send(message), REPORT_FALLBACK));
 
 // Provider, connector, OAuth client and MCP records are reserved: they are only
 // reachable through the provider:*/connector:*/mcp:* channels, which return
