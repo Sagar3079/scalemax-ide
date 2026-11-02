@@ -711,6 +711,12 @@
               <p class="body-copy">API keys are protected separately in an encrypted secret store when available, or kept only for the current session. Messages and explicitly attached files are sent to the provider you configure.</p>
               <div class="button-row"><button id="export-data-btn" class="button secondary" type="button">Export local data</button></div>
             </section>
+            <!-- Bug reports (src/report-ui.js, lib/bug-report.cjs): to the developer through relay/. Shown once main says reports are on. -->
+            <section id="report-card" class="settings-card report-card" aria-labelledby="report-title" hidden>
+              <h2 id="report-title">Report a bug</h2>
+              <p id="report-desc" class="status-text">Something not working? Tell the developer.</p>
+              <div class="button-row"><button id="report-open" class="button secondary" type="button">Report a bug…</button></div>
+            </section>
             <!-- Updates (src/updates-ui.js, lib/updates.cjs): newer releases from GitHub. -->
             <section class="settings-card updates-card" aria-labelledby="updates-title">
               <h2 id="updates-title">Updates</h2>
@@ -1166,6 +1172,24 @@
       <div class="button-row consent-actions">
         <button id="confirm-cancel" class="button secondary" type="button">Cancel</button>
         <button id="confirm-accept" class="button danger" type="button">OK</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- A bug report (src/report-ui.js): the message only; main adds the version and the system. -->
+  <dialog id="report-dialog" class="consent-dialog report-dialog" aria-labelledby="report-dialog-title" aria-describedby="report-dialog-desc">
+    <div class="dialog-header">
+      <div><h2 id="report-dialog-title">Report a bug</h2></div>
+    </div>
+    <div class="dialog-body">
+      <p id="report-dialog-desc" class="body-copy">The developer gets your message, the app's version and your system. Nothing else.</p>
+      <label for="report-message" class="commit-label">What went wrong?</label>
+      <textarea id="report-message" rows="6" maxlength="2000" placeholder="What you did, what you expected, what happened" spellcheck="true"></textarea>
+      <p id="report-count" class="commit-hint report-count">0 / 2,000</p>
+      <p id="report-error" class="report-error" role="alert" hidden></p>
+      <div class="button-row consent-actions">
+        <button id="report-cancel" class="button secondary" type="button">Cancel</button>
+        <button id="report-send" class="button primary" type="button" disabled>Send report</button>
       </div>
     </div>
   </dialog>

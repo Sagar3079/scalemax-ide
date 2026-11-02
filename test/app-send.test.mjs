@@ -42,6 +42,7 @@ const { openFileInTab, saveActiveTab, resetTabs } = await import('../src/workspa
 const realUpdateSendEnabled = app.updateSendEnabled;
 const realRenderReplyState = app.renderReplyState;
 const { renderPlanCard } = await import('../src/specs-ui.js');
+const { bindReportUi, reportAvailable } = await import('../src/report-ui.js');
 
 const input = nodes['#chat-input'];
 const ROOT = '/Users/you/project';
@@ -314,6 +315,19 @@ test('slash commands: the app\'s own act and send nothing; a custom command send
   assert.equal(await app.handleSend(), false);
   assert.equal(input.value, '/big x');
   assert.match(toasts.at(-1), /512 KiB/);
+});
+
+test('with reports off (the shipped state), /bug sends nothing to the model and says so', async () => {
+  const { task, sent, toasts } = setup();
+  // The page binds the report dialog at start; this bridge has no `report`, so reports stay off.
+  bindReportUi(app);
+  assert.equal(reportAvailable(), false);
+  input.value = '/bug the editor froze when I pressed Undo';
+  assert.equal(await app.handleSend(), false);
+  assert.equal(sent.length, 0, 'nothing reaches the model');
+  assert.equal(task.messages.length, 0, 'no message was added to the task');
+  assert.deepEqual(toasts, ["Bug reports aren't available in this version."]);
+  assert.equal(input.value, '', 'an app command empties the box like a sent message');
 });
 
 test('@ names a folder, a web page or a background command: main resolves them; files go along as before', async () => {

@@ -3,7 +3,7 @@
  * commands (arrow keys, Enter or Tab to pick, Escape to close), each with what it does and where it
  * comes from: ScaleMax's own (BUILTIN_COMMANDS) and the custom ones main reads from the task
  * folder's and the user's .scalemax/commands (lib/slash-commands.cjs; the window only gets their
- * names and descriptions). On send, runSlashCommand() runs the app's own commands here (/clear,
+ * names and descriptions). On send, runSlashCommand() runs the app's own commands here (/bug, /clear,
  * /plan, /model, /mode, /cost, /help: never sent to the model), or asks main for the prompt a
  * custom command becomes. /compact and /init keep their own paths in src/app.js, and /review goes
  * to main as typed (main reviews the folder's changes read-only).
@@ -11,6 +11,7 @@
  */
 import { taskMetrics, taskMetricsLabel, MODE_IDS, modeInfo } from './domain.mjs';
 import { setPermission, setMode } from './composer-ui.js';
+import { openReportDialog, reportAvailable } from './report-ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -20,6 +21,7 @@ const $ = (selector) => document.querySelector(selector);
  * so a custom command can never take one of them.
  */
 export const BUILTIN_COMMANDS = Object.freeze([
+  { name: 'bug', description: 'Report a bug to the developer', argumentHint: '[what went wrong]', run: true },
   { name: 'clear', description: 'Start a fresh task in the same folder', argumentHint: '', run: true },
   { name: 'compact', description: 'Summarize older turns to make room in the context', argumentHint: '', run: true },
   { name: 'cost', description: 'Show the tokens and cost of this task so far', argumentHint: '', run: true },
@@ -122,7 +124,8 @@ async function commandList(app) {
     const result = await window.scalemaxAPI?.slash?.list?.({ folder: folder || undefined });
     if (result?.ok && Array.isArray(result.data?.commands)) custom = result.data.commands;
   } catch { /* the app's own commands still work */ }
-  const commands = mergeCommands(custom);
+  // /bug only while this build sends reports (src/report-ui.js).
+  const commands = mergeCommands(custom).filter((command) => command.name !== 'bug' || reportAvailable());
   state.cache = { folder, at: now, commands };
   return commands;
 }
@@ -157,6 +160,11 @@ export async function runSlashCommand(app, text) {
     return { handled: true };
   };
   switch (key) {
+    case 'bug':
+      // Opens Report a bug with the words after /bug in its box; never sent to the model.
+      handled();
+      openReportDialog(parsed.args);
+      return { handled: true };
     case 'clear': {
       const folder = app.currentTask?.()?.folder || app.rootFolder?.() || null;
       handled();
